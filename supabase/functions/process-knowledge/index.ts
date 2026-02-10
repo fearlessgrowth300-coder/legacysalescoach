@@ -81,10 +81,54 @@ serve(async (req) => {
         content = pdfData.choices?.[0]?.message?.content || "";
       }
     } else if (url) {
-      // Check if it's a YouTube URL
+      // Check URL type
       const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
+      const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
 
-      if (isYouTube) {
+      if (isInstagram) {
+        // Instagram URL - scrape page content
+        try {
+          const res = await fetch(url, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Accept": "text/html,application/xhtml+xml",
+              "Accept-Language": "en-US,en;q=0.9",
+            },
+            signal: AbortSignal.timeout(15000),
+          });
+          if (res.ok) {
+            const html = await res.text();
+            // Extract meta content, alt text, and any JSON-LD data
+            const metaDesc = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]*)"/)?.[1] || "";
+            const metaTitle = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/)?.[1] || "";
+            const altTexts = [...html.matchAll(/alt="([^"]{10,})"/g)].map(m => m[1]).join("\n");
+            const jsonLdMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+            let jsonLdText = "";
+            if (jsonLdMatch) {
+              try {
+                const ld = JSON.parse(jsonLdMatch[1]);
+                jsonLdText = JSON.stringify(ld, null, 2).substring(0, 3000);
+              } catch { /* ignore */ }
+            }
+            // Strip HTML for remaining text
+            const bodyText = html
+              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+              .replace(/<[^>]+>/g, " ")
+              .replace(/\s+/g, " ")
+              .trim()
+              .substring(0, 5000);
+
+            content = `Instagram Content from: ${url}\n\nTitle: ${metaTitle}\nDescription: ${metaDesc}\n\nImage descriptions:\n${altTexts}\n\nStructured data:\n${jsonLdText}\n\nPage text:\n${bodyText}`.substring(0, 15000);
+          }
+        } catch (e) {
+          console.error("Instagram fetch error:", e);
+        }
+
+        if (!content || content.length < 50) {
+          content = `Instagram URL: ${url}. Please analyze this Instagram profile/post based on the URL and extract any sales-relevant knowledge.`;
+        }
+      } else if (isYouTube) {
         // Extract video ID
         let videoId = "";
         try {
