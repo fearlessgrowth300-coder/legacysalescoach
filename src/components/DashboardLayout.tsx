@@ -22,7 +22,7 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MessageSquare, Brain, Briefcase, BarChart3, LogOut, PanelLeft, Sparkles, Moon, Sun } from "lucide-react";
 import { CSSProperties, ReactNode, useEffect, useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation, Navigate } from "react-router-dom";
 import { Button } from "./ui/button";
 
 const menuItems = [
@@ -46,24 +46,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   }
 
   if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-background">
-        <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
-          <div className="flex flex-col items-center gap-6">
-            <div className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center">
-              <MessageSquare className="h-8 w-8 text-primary" />
-            </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-center">Sign in to continue</h1>
-            <p className="text-sm text-muted-foreground text-center max-w-sm">
-              Access your Sales Reply Coach dashboard to analyze conversations and get AI-powered suggestions.
-            </p>
-          </div>
-          <Button onClick={() => navigate("/login")} size="lg" className="w-full">
-            Sign in
-          </Button>
-        </div>
-      </div>
-    );
+    return <Navigate to="/login" replace />;
   }
 
   return (
