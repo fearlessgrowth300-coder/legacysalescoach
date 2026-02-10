@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { itemId, url, type } = await req.json();
+    const { itemId, url, type, filePath } = await req.json();
     
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -27,34 +27,180 @@ serve(async (req) => {
       });
     }
 
-    // Fetch URL content
     let content = "";
-    try {
-      const res = await fetch(url, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; SalesCoachBot/1.0)" },
-        signal: AbortSignal.timeout(15000),
-      });
-      if (res.ok) {
-        const html = await res.text();
-        content = html
-          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-          .replace(/<[^>]+>/g, " ")
-          .replace(/&nbsp;/g, " ")
-          .replace(/\s+/g, " ")
-          .trim()
-          .substring(0, 15000);
+
+    if (type === "pdf" && filePath) {
+      // Download PDF from storage and extract text
+      const { data: fileData, error: fileError } = await supabase.storage
+        .from("knowledge-files")
+        .download(filePath);
+      
+      if (fileError || !fileData) {
+        console.error("File download error:", fileError);
+        await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+        return new Response(JSON.stringify({ error: "Could not download file" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
-    } catch (e) {
-      console.error("Fetch error:", e);
+
+      // Extract text from PDF using AI vision
+      const arrayBuffer = await fileData.arrayBuffer();
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+
+      const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+      if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+      const pdfExtractResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Extract ALL text content from this PDF document. Return the full text content, preserving important structure. Do not summarize." },
+                { type: "image_url", image_url: { url: `data:application/pdf;base64,${base64}` } },
+              ],
+            },
+          ],
+          temperature: 0.1,
+        }),
+      });
+
+      if (pdfExtractResponse.ok) {
+        const pdfData = await pdfExtractResponse.json();
+        content = pdfData.choices?.[0]?.message?.content || "";
+      }
+    } else if (url) {
+      // Check if it's a YouTube URL
+      const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
+
+      if (isYouTube) {
+        // Extract video ID
+        let videoId = "";
+        try {
+          const urlObj = new URL(url);
+          if (url.includes("youtu.be")) {
+            videoId = urlObj.pathname.slice(1);
+          } else {
+            videoId = urlObj.searchParams.get("v") || "";
+          }
+        } catch { /* ignore */ }
+
+        if (videoId) {
+          // Use AI to analyze YouTube video via its publicly available info
+          // First try to get the transcript via an unofficial API
+          try {
+            const transcriptRes = await fetch(
+              `https://www.youtube.com/watch?v=${videoId}`,
+              {
+                headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+                signal: AbortSignal.timeout(15000),
+              }
+            );
+            if (transcriptRes.ok) {
+              const html = await transcriptRes.text();
+              // Try to extract captions/transcript data from the page
+              const captionMatch = html.match(/"captions":\s*(\{[^}]*"playerCaptionsTracklistRenderer"[^}]*\})/);
+              
+              // Extract video title and description from meta tags
+              const titleMatch = html.match(/<meta name="title" content="([^"]*)"/) || html.match(/<title>([^<]*)<\/title>/);
+              const descMatch = html.match(/<meta name="description" content="([^"]*)"/);
+              const title = titleMatch?.[1] || "";
+              const description = descMatch?.[1] || "";
+
+              // Get initial data JSON for more content
+              const initialDataMatch = html.match(/var ytInitialData = ({.*?});<\/script>/s);
+              let additionalContent = "";
+              if (initialDataMatch) {
+                try {
+                  const ytData = JSON.parse(initialDataMatch[1]);
+                  // Extract any available text content
+                  const str = JSON.stringify(ytData);
+                  const textParts = str.match(/"text":"([^"]{20,})"/g);
+                  if (textParts) {
+                    additionalContent = textParts
+                      .map(p => p.replace(/"text":"/, "").replace(/"$/, ""))
+                      .join(" ")
+                      .substring(0, 5000);
+                  }
+                } catch { /* ignore */ }
+              }
+
+              // Try to get transcript via timedtext API
+              const captionsUrlMatch = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/);
+              if (captionsUrlMatch) {
+                try {
+                  const captionUrl = captionsUrlMatch[1].replace(/\\u0026/g, "&");
+                  const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
+                  if (captionRes.ok) {
+                    const captionXml = await captionRes.text();
+                    const transcriptText = captionXml
+                      .replace(/<[^>]+>/g, " ")
+                      .replace(/&amp;/g, "&")
+                      .replace(/&lt;/g, "<")
+                      .replace(/&gt;/g, ">")
+                      .replace(/&#39;/g, "'")
+                      .replace(/&quot;/g, '"')
+                      .replace(/\s+/g, " ")
+                      .trim();
+                    if (transcriptText.length > 100) {
+                      content = `Video Title: ${title}\n\nTranscript:\n${transcriptText.substring(0, 15000)}`;
+                    }
+                  }
+                } catch (e) {
+                  console.error("Transcript fetch error:", e);
+                }
+              }
+
+              // Fallback: use title + description + extracted text
+              if (!content || content.length < 100) {
+                content = `YouTube Video: ${title}\n\nDescription: ${description}\n\n${additionalContent}`.substring(0, 15000);
+              }
+            }
+          } catch (e) {
+            console.error("YouTube fetch error:", e);
+          }
+        }
+
+        // Final fallback: ask AI to analyze based on whatever we have
+        if (!content || content.length < 50) {
+          content = `YouTube video URL: ${url}. Please analyze this video based on the URL and any knowledge you have about it.`;
+        }
+      } else {
+        // Regular URL - fetch and extract text
+        try {
+          const res = await fetch(url, {
+            headers: { "User-Agent": "Mozilla/5.0 (compatible; SalesCoachBot/1.0)" },
+            signal: AbortSignal.timeout(15000),
+          });
+          if (res.ok) {
+            const html = await res.text();
+            content = html
+              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+              .replace(/<[^>]+>/g, " ")
+              .replace(/&nbsp;/g, " ")
+              .replace(/\s+/g, " ")
+              .trim()
+              .substring(0, 15000);
+          }
+        } catch (e) {
+          console.error("Fetch error:", e);
+        }
+      }
     }
 
-    if (!content || content.length < 50) {
+    if (!content || content.length < 20) {
       await supabase
         .from("knowledge_base_items")
         .update({ status: "error" })
         .eq("id", itemId);
-      return new Response(JSON.stringify({ error: "Could not fetch content" }), {
+      return new Response(JSON.stringify({ error: "Could not extract content" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -99,7 +245,8 @@ Categorize each insight into one of these categories:
 - general: General sales wisdom
 
 Return JSON array of objects with: { "category": "...", "content": "...", "triggerPhrases": "..." }
-Extract 5-15 chunks. Each chunk should be a standalone, actionable insight.`
+Extract 5-15 chunks. Each chunk should be a standalone, actionable insight.
+Also include a "summary" field in each chunk that is a 1-sentence summary of what was learned.`
           },
           { role: "user", content: `Extract sales knowledge from:\n\n${content}` }
         ],

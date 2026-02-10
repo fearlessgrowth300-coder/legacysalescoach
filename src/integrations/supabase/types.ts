@@ -65,6 +65,7 @@ export type Database = {
         Row: {
           brain_type: string
           created_at: string
+          file_path: string | null
           id: string
           status: string
           title: string
@@ -76,6 +77,7 @@ export type Database = {
         Insert: {
           brain_type?: string
           created_at?: string
+          file_path?: string | null
           id?: string
           status?: string
           title: string
@@ -87,6 +89,7 @@ export type Database = {
         Update: {
           brain_type?: string
           created_at?: string
+          file_path?: string | null
           id?: string
           status?: string
           title?: string

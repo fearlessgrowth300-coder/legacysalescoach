@@ -7,14 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  MessageSquare, Plus, Send, Image, User, Sparkles,
-  ThumbsUp, ThumbsDown, Copy, Check, AlertTriangle,
-  Heart, Briefcase, MoreVertical, Trash2, Target, Upload
+  MessageSquare, Plus, Send, User, Sparkles,
+  Copy, Check, AlertTriangle,
+  Heart, Briefcase, MoreVertical, Trash2, Camera, Loader2, Image
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
@@ -34,14 +33,15 @@ export default function Chats() {
   const [newProspectName, setNewProspectName] = useState("");
   const [newProspectIg, setNewProspectIg] = useState("");
   const [messageInput, setMessageInput] = useState("");
-  const [inputMode, setInputMode] = useState<"text" | "screenshot">("text");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [pushyWarning, setPushyWarning] = useState<string | null>(null);
   const [currentThreadType, setCurrentThreadType] = useState<"friend" | "expert">("friend");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isOcrProcessing, setIsOcrProcessing] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const screenshotInputRef = useRef<HTMLInputElement>(null);
 
   // Get active workspace
   const { data: workspaces } = useQuery({
@@ -119,11 +119,40 @@ export default function Chats() {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const handleScreenshotUpload = async (file: File) => {
+    if (!selectedProspectId || !user) return;
+    setIsOcrProcessing(true);
+
+    try {
+      const filePath = `${user.id}/${Date.now()}-${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from("chat-screenshots")
+        .upload(filePath, file);
+      if (uploadError) throw uploadError;
+
+      const { data, error } = await supabase.functions.invoke("ocr-screenshot", {
+        body: { filePath },
+      });
+      if (error) throw error;
+
+      if (data?.text) {
+        setMessageInput(data.text);
+        toast.success("Text extracted from screenshot!");
+      } else {
+        toast.error("Could not extract text from screenshot");
+      }
+    } catch (e: any) {
+      console.error("OCR error:", e);
+      toast.error("Failed to process screenshot");
+    } finally {
+      setIsOcrProcessing(false);
+    }
+  };
+
   const handleSendInbound = async () => {
     if (!messageInput.trim() || !selectedProspectId) return;
     setIsAnalyzing(true);
 
-    // Save the inbound message
     await supabase.from("chat_messages").insert({
       user_id: user!.id,
       prospect_id: selectedProspectId,
@@ -132,7 +161,6 @@ export default function Chats() {
       thread_type: currentThreadType,
     });
 
-    // Get AI suggestions via edge function
     try {
       const { data, error } = await supabase.functions.invoke("chat-suggest", {
         body: {
@@ -396,18 +424,45 @@ export default function Chats() {
 
             {/* Input Area */}
             <div className="p-4 border-t">
+              <input
+                ref={screenshotInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleScreenshotUpload(file);
+                  e.target.value = "";
+                }}
+              />
               <div className="flex gap-2">
-                <Textarea
-                  value={messageInput}
-                  onChange={(e) => setMessageInput(e.target.value)}
-                  placeholder="Paste the prospect's message here..."
-                  className="min-h-[80px]"
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendInbound(); } }}
-                />
+                <div className="flex-1 relative">
+                  <Textarea
+                    value={messageInput}
+                    onChange={(e) => setMessageInput(e.target.value)}
+                    placeholder={isOcrProcessing ? "Extracting text from screenshot..." : "Paste the prospect's message here..."}
+                    className="min-h-[80px] pr-12"
+                    disabled={isOcrProcessing}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendInbound(); } }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-2 top-2 h-8 w-8"
+                    onClick={() => screenshotInputRef.current?.click()}
+                    disabled={isOcrProcessing}
+                    title="Upload screenshot for OCR"
+                  >
+                    {isOcrProcessing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4 text-muted-foreground" />}
+                  </Button>
+                </div>
                 <Button onClick={handleSendInbound} disabled={!messageInput.trim() || isAnalyzing} className="self-end">
                   {isAnalyzing ? <Sparkles className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </Button>
               </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                <Camera className="h-3 w-3 inline mr-1" />Upload a screenshot to extract text via OCR
+              </p>
             </div>
           </>
         )}

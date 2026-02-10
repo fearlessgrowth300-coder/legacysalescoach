@@ -20,8 +20,8 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { MessageSquare, Brain, Briefcase, BarChart3, LogOut, PanelLeft, Sparkles } from "lucide-react";
-import { CSSProperties, ReactNode } from "react";
+import { MessageSquare, Brain, Briefcase, BarChart3, LogOut, PanelLeft, Sparkles, Moon, Sun } from "lucide-react";
+import { CSSProperties, ReactNode, useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "./ui/button";
 
@@ -82,6 +82,25 @@ function DashboardLayoutContent({ children }: { children: ReactNode }) {
   const isMobile = useIsMobile();
   const activeMenuItem = menuItems.find((item) => location.pathname.startsWith(item.path));
 
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window !== "undefined") {
+      return document.documentElement.classList.contains("dark") ||
+        localStorage.getItem("theme") === "dark" ||
+        (!localStorage.getItem("theme") && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (isDark) {
+      document.documentElement.classList.add("dark");
+      localStorage.setItem("theme", "dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+      localStorage.setItem("theme", "light");
+    }
+  }, [isDark]);
+
   const handleLogout = async () => {
     await logout();
     navigate("/login");
@@ -129,7 +148,16 @@ function DashboardLayoutContent({ children }: { children: ReactNode }) {
           </SidebarMenu>
         </SidebarContent>
 
-        <SidebarFooter className="p-3">
+        <SidebarFooter className="p-3 space-y-2">
+          {/* Dark mode toggle */}
+          <button
+            onClick={() => setIsDark(!isDark)}
+            className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center"
+          >
+            {isDark ? <Sun className="h-4 w-4 shrink-0" /> : <Moon className="h-4 w-4 shrink-0" />}
+            <span className="text-sm group-data-[collapsible=icon]:hidden">{isDark ? "Light Mode" : "Dark Mode"}</span>
+          </button>
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center">
