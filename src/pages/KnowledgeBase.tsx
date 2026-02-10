@@ -1,15 +1,17 @@
 import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import {
   Brain, FileText, Plus, Trash2, Loader2, CheckCircle2, AlertCircle,
-  Link as LinkIcon, Globe, Youtube, Sparkles, Heart, Briefcase, Upload
+  Link as LinkIcon, Globe, Youtube, Sparkles, Heart, Briefcase, Upload, Instagram, ListPlus
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -20,6 +22,7 @@ export default function KnowledgeBase() {
   const queryClient = useQueryClient();
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [pdfDialogOpen, setPdfDialogOpen] = useState(false);
+  const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [urlTitle, setUrlTitle] = useState("");
   const [urlValue, setUrlValue] = useState("");
   const [brainType, setBrainType] = useState<"friend" | "expert" | "both">("both");
@@ -27,6 +30,10 @@ export default function KnowledgeBase() {
   const [pdfBrainType, setPdfBrainType] = useState<"friend" | "expert" | "both">("both");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [batchUrls, setBatchUrls] = useState("");
+  const [batchBrainType, setBatchBrainType] = useState<"friend" | "expert" | "both">("both");
+  const [batchProcessing, setBatchProcessing] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
 
   const { data: items } = useQuery({
     queryKey: ["kb-items"],
@@ -38,7 +45,6 @@ export default function KnowledgeBase() {
     enabled: !!user,
   });
 
-  // Fetch knowledge chunks to show what was learned
   const { data: chunks } = useQuery({
     queryKey: ["kb-chunks"],
     queryFn: async () => {
@@ -61,7 +67,6 @@ export default function KnowledgeBase() {
       }).select().single();
       if (error) throw error;
 
-      // Trigger processing - don't await (let it process in background)
       supabase.functions.invoke("process-knowledge", {
         body: { itemId: data.id, url: urlValue, type: "url" },
       }).then(() => {
@@ -77,7 +82,6 @@ export default function KnowledgeBase() {
       setUrlTitle("");
       setUrlValue("");
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      // Poll for status updates
       startPolling();
     },
     onError: (e: any) => toast.error(e.message),
@@ -131,6 +135,62 @@ export default function KnowledgeBase() {
     setTimeout(() => clearInterval(interval), 60000);
   };
 
+  const handleBatchImport = async () => {
+    const urls = batchUrls
+      .split("\n")
+      .map((u) => u.trim())
+      .filter((u) => u.length > 0 && (u.startsWith("http://") || u.startsWith("https://")));
+
+    if (urls.length === 0) {
+      toast.error("No valid URLs found");
+      return;
+    }
+
+    setBatchProcessing(true);
+    setBatchProgress({ current: 0, total: urls.length });
+
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      const title = url.includes("youtube.com") || url.includes("youtu.be")
+        ? `YouTube Video ${i + 1}`
+        : url.includes("instagram.com")
+        ? `Instagram ${i + 1}`
+        : `URL ${i + 1}`;
+
+      try {
+        const { data, error } = await supabase.from("knowledge_base_items").insert({
+          user_id: user!.id,
+          title,
+          type: "url",
+          url,
+          brain_type: batchBrainType,
+          status: "processing",
+        }).select().single();
+
+        if (!error && data) {
+          supabase.functions.invoke("process-knowledge", {
+            body: { itemId: data.id, url, type: "url" },
+          }).then(() => {
+            queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+            queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+          }).catch(console.error);
+        }
+      } catch (e) {
+        console.error(`Failed to add ${url}:`, e);
+      }
+
+      setBatchProgress({ current: i + 1, total: urls.length });
+      if (i < urls.length - 1) await new Promise((r) => setTimeout(r, 500));
+    }
+
+    toast.success(`${urls.length} URLs queued for processing!`);
+    setBatchDialogOpen(false);
+    setBatchUrls("");
+    setBatchProcessing(false);
+    queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+    startPolling();
+  };
+
   const deleteItem = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase.from("knowledge_base_items").delete().eq("id", id);
@@ -153,6 +213,7 @@ export default function KnowledgeBase() {
     if (item.type === "pdf") return <FileText className="h-5 w-5 text-red-600" />;
     if (!item.url) return <FileText className="h-5 w-5 text-primary" />;
     if (item.url.includes("youtube.com") || item.url.includes("youtu.be")) return <Youtube className="h-5 w-5 text-red-500" />;
+    if (item.url.includes("instagram.com") || item.url.includes("instagr.am")) return <Instagram className="h-5 w-5 text-pink-500" />;
     return <Globe className="h-5 w-5 text-primary" />;
   };
 
@@ -168,6 +229,55 @@ export default function KnowledgeBase() {
           <p className="text-muted-foreground">Upload sales training content to make your AI smarter</p>
         </div>
         <div className="flex gap-2">
+          {/* Batch Import Dialog */}
+          <Dialog open={batchDialogOpen} onOpenChange={setBatchDialogOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline"><ListPlus className="h-4 w-4 mr-2" />Batch Import</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Batch Import URLs</DialogTitle>
+                <DialogDescription>Paste multiple YouTube, Instagram, or web URLs (one per line) to process them all at once</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div>
+                  <Label>URLs (one per line) *</Label>
+                  <Textarea
+                    value={batchUrls}
+                    onChange={(e) => setBatchUrls(e.target.value)}
+                    placeholder={"https://youtube.com/watch?v=abc123\nhttps://youtube.com/watch?v=def456\nhttps://instagram.com/p/xyz789"}
+                    rows={6}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {batchUrls.split("\n").filter((u) => u.trim().startsWith("http")).length} valid URLs detected
+                  </p>
+                </div>
+                <div>
+                  <Label>Brain Mode</Label>
+                  <Select value={batchBrainType} onValueChange={(v: "friend" | "expert" | "both") => setBatchBrainType(v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="both"><div className="flex items-center gap-2"><Sparkles className="h-4 w-4" />Both Modes</div></SelectItem>
+                      <SelectItem value="friend"><div className="flex items-center gap-2"><Heart className="h-4 w-4 text-pink-500" />Friend Only</div></SelectItem>
+                      <SelectItem value="expert"><div className="flex items-center gap-2"><Briefcase className="h-4 w-4 text-blue-500" />Expert Only</div></SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {batchProcessing && (
+                  <div>
+                    <p className="text-sm text-muted-foreground mb-2">Processing {batchProgress.current}/{batchProgress.total}...</p>
+                    <Progress value={(batchProgress.current / batchProgress.total) * 100} />
+                  </div>
+                )}
+              </div>
+              <DialogFooter>
+                <Button onClick={handleBatchImport} disabled={batchProcessing || !batchUrls.trim()}>
+                  {batchProcessing ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Processing...</> : "Import All"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
           {/* PDF Upload Dialog */}
           <Dialog open={pdfDialogOpen} onOpenChange={setPdfDialogOpen}>
             <DialogTrigger asChild>
@@ -244,7 +354,7 @@ export default function KnowledgeBase() {
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Add URL Content</DialogTitle>
-                <DialogDescription>Add a YouTube video, article, or webpage to your knowledge base</DialogDescription>
+                <DialogDescription>Add a YouTube video, Instagram post, article, or webpage to your knowledge base</DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div>
@@ -253,7 +363,7 @@ export default function KnowledgeBase() {
                 </div>
                 <div>
                   <Label>URL *</Label>
-                  <Input value={urlValue} onChange={(e) => setUrlValue(e.target.value)} placeholder="https://youtube.com/watch?v=..." />
+                  <Input value={urlValue} onChange={(e) => setUrlValue(e.target.value)} placeholder="https://youtube.com/watch?v=... or https://instagram.com/p/..." />
                 </div>
                 <div>
                   <Label>Brain Mode</Label>
@@ -285,6 +395,7 @@ export default function KnowledgeBase() {
             <p className="text-muted-foreground mb-4">Add sales training content to make your AI smarter and more helpful</p>
             <div className="flex gap-2 justify-center">
               <Button variant="outline" onClick={() => setPdfDialogOpen(true)}><Upload className="h-4 w-4 mr-2" />Upload PDF</Button>
+              <Button variant="outline" onClick={() => setBatchDialogOpen(true)}><ListPlus className="h-4 w-4 mr-2" />Batch Import</Button>
               <Button onClick={() => setUrlDialogOpen(true)}><Plus className="h-4 w-4 mr-2" />Add URL</Button>
             </div>
           </CardContent>
@@ -315,7 +426,6 @@ export default function KnowledgeBase() {
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
                   </div>
-                  {/* Show what was learned */}
                   {item.status === "ready" && itemChunks.length > 0 && (
                     <div className="mt-3 pt-3 border-t">
                       <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">

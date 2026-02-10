@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Plus, Briefcase, Heart, Check, Trash2, Target, Loader2 } from "lucide-react";
+import { Plus, Briefcase, Heart, Check, Trash2, Target, Loader2, Search } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -35,6 +35,7 @@ export default function Workspaces() {
   });
 
   const activeWorkspace = workspaces?.find((w) => w.is_active);
+  const [analyzingId, setAnalyzingId] = useState<string | null>(null);
 
   const createWorkspace = useMutation({
     mutationFn: async () => {
@@ -56,7 +57,7 @@ export default function Workspaces() {
       setName(""); setNicheDescription(""); setInstagramUrl(""); setTiktokUrl(""); setStoreUrl("");
       queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (e: any) => toast.error(e.message || "Failed to create workspace"),
   });
 
   const setActive = useMutation({
@@ -69,6 +70,7 @@ export default function Workspaces() {
       toast.success("Workspace activated!");
       queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
+    onError: (e: any) => toast.error(e.message || "Failed to activate workspace"),
   });
 
   const deleteWorkspace = useMutation({
@@ -80,7 +82,24 @@ export default function Workspaces() {
       toast.success("Workspace deleted");
       queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
+    onError: (e: any) => toast.error(e.message || "Failed to delete workspace"),
   });
+
+  const analyzeProfile = async (workspaceId: string) => {
+    setAnalyzingId(workspaceId);
+    try {
+      const { data, error } = await supabase.functions.invoke("analyze-profile", {
+        body: { workspaceId },
+      });
+      if (error) throw error;
+      toast.success("Profile analyzed successfully!");
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    } catch (e: any) {
+      toast.error(e.message || "Failed to analyze profile");
+    } finally {
+      setAnalyzingId(null);
+    }
+  };
 
   return (
     <div className="container py-8 max-w-4xl">
@@ -159,6 +178,15 @@ export default function Workspaces() {
                     <CardDescription className="mt-1">{workspace.niche_description || "No description"}</CardDescription>
                   </div>
                   <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => analyzeProfile(workspace.id)}
+                      disabled={analyzingId === workspace.id}
+                    >
+                      {analyzingId === workspace.id ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Search className="h-4 w-4 mr-1" />}
+                      Analyze
+                    </Button>
                     {!workspace.is_active && (
                       <Button variant="outline" size="sm" onClick={() => setActive.mutate(workspace.id)}>
                         <Check className="h-4 w-4 mr-1" />Set Active
