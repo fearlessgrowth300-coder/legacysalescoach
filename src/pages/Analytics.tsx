@@ -1,10 +1,20 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Users, Trophy, Brain, Zap, Heart, Briefcase, Target, TrendingUp, BarChart3 } from "lucide-react";
+import { Users, Trophy, Brain, Zap, Heart, Briefcase, Target, TrendingUp, BarChart3, MessageSquare, Lightbulb } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
+
+const PATTERN_LABELS: Record<string, string> = {
+  situation: "Situation Questions",
+  problem: "Problem Questions",
+  implication: "Implication Questions",
+  need_payoff: "Need-Payoff Questions",
+  emotional_trigger: "Emotional Triggers",
+  closing: "Closing",
+  general: "General",
+};
 
 export default function Analytics() {
   const { user } = useAuth();
@@ -40,6 +50,19 @@ export default function Analytics() {
     enabled: !!user,
   });
 
+  const { data: analytics } = useQuery({
+    queryKey: ["conversation-analytics", activeWorkspace?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("conversation_analytics")
+        .select("*")
+        .eq("workspace_id", activeWorkspace!.id);
+      if (error) throw error;
+      return data as any[];
+    },
+    enabled: !!activeWorkspace?.id,
+  });
+
   if (!activeWorkspace) {
     return (
       <div className="container py-8 max-w-4xl">
@@ -63,6 +86,41 @@ export default function Analytics() {
   const expertMode = prospects?.filter((p) => p.reply_mode === "expert") || [];
   const totalInsights = chunks?.length || 0;
   const fromConversations = chunks?.filter((c) => c.source_type === "conversation").length || 0;
+
+  // Compute pattern win rates from analytics
+  const wonAnalytics = (analytics || []).filter((a) => a.outcome === "won");
+  const allAnalytics = (analytics || []).filter((a) => a.outcome === "won" || a.outcome === "lost");
+
+  const patternWins: Record<string, { wins: number; total: number }> = {};
+  allAnalytics.forEach((a) => {
+    const isWon = a.outcome === "won";
+    (a.questioning_patterns_used || []).forEach((p: string) => {
+      if (!patternWins[p]) patternWins[p] = { wins: 0, total: 0 };
+      patternWins[p].total += 1;
+      if (isWon) patternWins[p].wins += 1;
+    });
+  });
+
+  const patternStats = Object.entries(patternWins)
+    .map(([pattern, { wins, total }]) => ({
+      pattern,
+      label: PATTERN_LABELS[pattern] || pattern,
+      wins,
+      total,
+      winRate: total > 0 ? Math.round((wins / total) * 100) : 0,
+    }))
+    .sort((a, b) => b.winRate - a.winRate);
+
+  // Average messages for won vs lost
+  const avgMsgsWon = wonAnalytics.length > 0
+    ? Math.round(wonAnalytics.reduce((s, a) => s + (a.messages_count || 0), 0) / wonAnalytics.length)
+    : 0;
+  const lostAnalytics = (analytics || []).filter((a) => a.outcome === "lost");
+  const avgMsgsLost = lostAnalytics.length > 0
+    ? Math.round(lostAnalytics.reduce((s, a) => s + (a.messages_count || 0), 0) / lostAnalytics.length)
+    : 0;
+
+  const totalConversationsTracked = analytics?.length || 0;
 
   return (
     <div className="container py-8 max-w-5xl space-y-8">
@@ -93,6 +151,53 @@ export default function Analytics() {
           <p className="text-sm text-muted-foreground mt-2">{won} won out of {won + lost} closed conversations</p>
         </CardContent>
       </Card>
+
+      {/* Conversation Patterns Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Lightbulb className="h-5 w-5 text-amber-500" />Questioning Pattern Win Rates</CardTitle>
+          <CardDescription>Which questioning patterns lead to the most wins ({totalConversationsTracked} conversations tracked)</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {patternStats.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">No pattern data yet. Start conversations and the AI will track which patterns lead to wins.</p>
+          ) : (
+            <div className="space-y-4">
+              {patternStats.map((p) => (
+                <div key={p.pattern} className="space-y-1">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium">{p.label}</span>
+                    <span className="text-muted-foreground">{p.wins}/{p.total} wins · {p.winRate}%</span>
+                  </div>
+                  <Progress value={p.winRate} className="h-2" />
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Conversation Length Insights */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg"><MessageSquare className="h-5 w-5 text-primary" />Avg Messages to Win</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold">{avgMsgsWon || "—"}</p>
+            <p className="text-sm text-muted-foreground mt-1">messages per won conversation</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg"><MessageSquare className="h-5 w-5 text-destructive" />Avg Messages to Loss</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold">{avgMsgsLost || "—"}</p>
+            <p className="text-sm text-muted-foreground mt-1">messages per lost conversation</p>
+          </CardContent>
+        </Card>
+      </div>
 
       <div className="grid md:grid-cols-2 gap-4">
         <Card>

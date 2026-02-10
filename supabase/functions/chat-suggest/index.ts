@@ -157,6 +157,59 @@ serve(async (req) => {
       .order("created_at", { ascending: true })
       .limit(20);
 
+    // ===== TONALITY LEARNING =====
+    // Aggregate detected tones from past messages for this prospect
+    const toneHistory = (history || [])
+      .filter((m: any) => m.detected_tone && m.detected_tone !== "neutral")
+      .map((m: any) => m.detected_tone);
+    
+    const toneCounts: Record<string, number> = {};
+    toneHistory.forEach((tone: string) => {
+      toneCounts[tone] = (toneCounts[tone] || 0) + 1;
+    });
+    const dominantTones = Object.entries(toneCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([tone, count]) => `${tone} (${count}x)`);
+
+    const tonalitySection = dominantTones.length > 0
+      ? `\nTONALITY ANALYSIS (from past messages):
+The prospect's detected tone patterns: ${dominantTones.join(", ")}.
+ADAPT your communication style to mirror and complement these tones. If they're enthusiastic, match their energy. If they're skeptical, be more grounded and evidence-based. If they're anxious, be reassuring and steady.`
+      : "";
+
+    // ===== WINNING PATTERNS FROM PAST CONVERSATIONS =====
+    const { data: winningAnalytics } = await supabase
+      .from("conversation_analytics")
+      .select("questioning_patterns_used, key_insights, tone_progression")
+      .eq("user_id", user.id)
+      .eq("workspace_id", prospect.workspace_id)
+      .eq("outcome", "won");
+
+    let winningPatternsSection = "";
+    if (winningAnalytics && winningAnalytics.length > 0) {
+      const patternCounts: Record<string, number> = {};
+      winningAnalytics.forEach((a: any) => {
+        (a.questioning_patterns_used || []).forEach((p: string) => {
+          patternCounts[p] = (patternCounts[p] || 0) + 1;
+        });
+      });
+      const topPatterns = Object.entries(patternCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([pattern, count]) => `${pattern} (led to ${count} wins)`);
+
+      const insights = winningAnalytics
+        .filter((a: any) => a.key_insights)
+        .map((a: any) => a.key_insights)
+        .slice(0, 3);
+
+      winningPatternsSection = `\nPROVEN WINNING PATTERNS (from past successful conversations):
+Top patterns: ${topPatterns.join(", ")}
+${insights.length > 0 ? `Key insights from wins:\n${insights.map((i: string) => `- ${i}`).join("\n")}` : ""}
+Use these proven approaches when appropriate for THIS prospect.`;
+    }
+
     // Get relevant knowledge chunks
     const { data: knowledge } = await supabase
       .from("knowledge_chunks")
@@ -166,10 +219,10 @@ serve(async (req) => {
       .order("relevance_score", { ascending: false })
       .limit(10);
 
-    const knowledgeContext = knowledge?.map((k) => `[${k.category}]: ${k.content}`).join("\n") || "";
+    const knowledgeContext = knowledge?.map((k: any) => `[${k.category}]: ${k.content}`).join("\n") || "";
     
     const conversationHistory = history
-      ?.map((m) => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content}`)
+      ?.map((m: any) => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content}`)
       .join("\n") || "";
 
     const systemPrompt = threadType === "expert" ? EXPERT_MODE_INSTRUCTIONS : FRIEND_MODE_INSTRUCTIONS;
@@ -191,6 +244,8 @@ serve(async (req) => {
           {
             role: "system",
             content: `${systemPrompt}
+${tonalitySection}
+${winningPatternsSection}
 
 YOUR KNOWLEDGE BASE:
 ${knowledgeContext}
@@ -202,6 +257,7 @@ PREVIOUS CONVERSATION:
 ${conversationHistory}
 
 TASK: The prospect just sent the following message. Generate 3 reply suggestions.
+Also detect which questioning pattern this conversation is currently in (situation, problem, implication, need_payoff, emotional_trigger, closing, or general).
 Return valid JSON with this structure:
 {
   "suggestions": [
@@ -210,7 +266,8 @@ Return valid JSON with this structure:
     {"id": 3, "type": "softer", "text": "...", "whyThisWorks": "..."}
   ],
   "pushyWarning": null or "warning text if the user is being too pushy",
-  "detectedTone": "the tone of the prospect's message"
+  "detectedTone": "the tone of the prospect's message",
+  "questioningPattern": "the current questioning pattern stage"
 }`
           },
           { role: "user", content: message }
@@ -240,7 +297,6 @@ Return valid JSON with this structure:
     // Parse JSON from response
     let parsed;
     try {
-      // Try to extract JSON from the response
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
     } catch {
@@ -250,7 +306,67 @@ Return valid JSON with this structure:
         ],
         pushyWarning: null,
         detectedTone: "neutral",
+        questioningPattern: "general",
       };
+    }
+
+    // ===== SAVE TONALITY & PATTERN DATA =====
+    // Update the inbound message with detected tone (fire & forget)
+    if (parsed.detectedTone) {
+      const latestInbound = (history || [])
+        .filter((m: any) => m.direction === "inbound")
+        .pop();
+      if (latestInbound) {
+        supabase
+          .from("chat_messages")
+          .update({ detected_tone: parsed.detectedTone })
+          .eq("id", latestInbound.id)
+          .then(() => {});
+      }
+    }
+
+    // Update or create conversation_analytics record
+    const detectedPattern = parsed.questioningPattern || "general";
+    const { data: existingAnalytics } = await supabase
+      .from("conversation_analytics")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("prospect_id", prospectId)
+      .maybeSingle();
+
+    if (existingAnalytics) {
+      const patterns = existingAnalytics.questioning_patterns_used || [];
+      if (!patterns.includes(detectedPattern)) {
+        patterns.push(detectedPattern);
+      }
+      const tones = existingAnalytics.tone_progression || [];
+      if (parsed.detectedTone) {
+        tones.push(parsed.detectedTone);
+      }
+      supabase
+        .from("conversation_analytics")
+        .update({
+          questioning_patterns_used: patterns,
+          tone_progression: tones,
+          messages_count: (existingAnalytics.messages_count || 0) + 1,
+          ai_suggestions_used: (existingAnalytics.ai_suggestions_used || 0) + 1,
+        })
+        .eq("id", existingAnalytics.id)
+        .then(() => {});
+    } else {
+      supabase
+        .from("conversation_analytics")
+        .insert({
+          user_id: user.id,
+          prospect_id: prospectId,
+          workspace_id: prospect.workspace_id,
+          questioning_patterns_used: [detectedPattern],
+          tone_progression: parsed.detectedTone ? [parsed.detectedTone] : [],
+          messages_count: 1,
+          ai_suggestions_used: 1,
+          outcome: prospect.outcome || "active",
+        })
+        .then(() => {});
     }
 
     return new Response(JSON.stringify(parsed), {
