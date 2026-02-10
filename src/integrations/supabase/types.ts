@@ -61,6 +61,69 @@ export type Database = {
           },
         ]
       }
+      conversation_analytics: {
+        Row: {
+          ai_suggestions_used: number
+          avg_response_time_mins: number | null
+          created_at: string
+          id: string
+          key_insights: string | null
+          messages_count: number
+          outcome: string
+          prospect_id: string | null
+          questioning_patterns_used: string[] | null
+          tone_progression: string[] | null
+          updated_at: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          ai_suggestions_used?: number
+          avg_response_time_mins?: number | null
+          created_at?: string
+          id?: string
+          key_insights?: string | null
+          messages_count?: number
+          outcome?: string
+          prospect_id?: string | null
+          questioning_patterns_used?: string[] | null
+          tone_progression?: string[] | null
+          updated_at?: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          ai_suggestions_used?: number
+          avg_response_time_mins?: number | null
+          created_at?: string
+          id?: string
+          key_insights?: string | null
+          messages_count?: number
+          outcome?: string
+          prospect_id?: string | null
+          questioning_patterns_used?: string[] | null
+          tone_progression?: string[] | null
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_analytics_prospect_id_fkey"
+            columns: ["prospect_id"]
+            isOneToOne: false
+            referencedRelation: "prospects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_analytics_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       knowledge_base_items: {
         Row: {
           brain_type: string

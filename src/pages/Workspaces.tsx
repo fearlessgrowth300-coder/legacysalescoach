@@ -39,17 +39,21 @@ export default function Workspaces() {
 
   const createWorkspace = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from("workspaces").insert({
-        user_id: user!.id,
-        name,
-        niche_description: nicheDescription || null,
-        instagram_url: instagramUrl || null,
-        tiktok_url: tiktokUrl || null,
-        store_url: storeUrl || null,
-        default_reply_mode: defaultReplyMode,
-        is_active: !workspaces?.length,
-      });
-      if (error) throw error;
+      try {
+        const { error } = await supabase.from("workspaces").insert({
+          user_id: user!.id,
+          name,
+          niche_description: nicheDescription || null,
+          instagram_url: instagramUrl || null,
+          tiktok_url: tiktokUrl || null,
+          store_url: storeUrl || null,
+          default_reply_mode: defaultReplyMode,
+          is_active: !workspaces?.length,
+        });
+        if (error) throw error;
+      } catch (e: any) {
+        throw new Error(e.message || "Failed to create workspace");
+      }
     },
     onSuccess: () => {
       toast.success("Workspace created!");
@@ -62,9 +66,13 @@ export default function Workspaces() {
 
   const setActive = useMutation({
     mutationFn: async (id: string) => {
-      await supabase.from("workspaces").update({ is_active: false }).eq("user_id", user!.id);
-      const { error } = await supabase.from("workspaces").update({ is_active: true }).eq("id", id);
-      if (error) throw error;
+      try {
+        await supabase.from("workspaces").update({ is_active: false }).eq("user_id", user!.id);
+        const { error } = await supabase.from("workspaces").update({ is_active: true }).eq("id", id);
+        if (error) throw error;
+      } catch (e: any) {
+        throw new Error(e.message || "Failed to activate workspace");
+      }
     },
     onSuccess: () => {
       toast.success("Workspace activated!");
@@ -75,8 +83,12 @@ export default function Workspaces() {
 
   const deleteWorkspace = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("workspaces").delete().eq("id", id);
-      if (error) throw error;
+      try {
+        const { error } = await supabase.from("workspaces").delete().eq("id", id);
+        if (error) throw error;
+      } catch (e: any) {
+        throw new Error(e.message || "Failed to delete workspace");
+      }
     },
     onSuccess: () => {
       toast.success("Workspace deleted");
