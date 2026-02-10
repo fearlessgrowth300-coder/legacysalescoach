@@ -31,17 +31,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async (_event, session) => {
         setSession(session);
         if (session?.user) {
-          // Fetch profile for name
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("name, email")
-            .eq("user_id", session.user.id)
-            .maybeSingle();
-          
-          setUser({
-            ...session.user,
-            name: profile?.name || session.user.user_metadata?.name || "",
-          });
+          try {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("name, email")
+              .eq("user_id", session.user.id)
+              .maybeSingle();
+            setUser({
+              ...session.user,
+              name: profile?.name || session.user.user_metadata?.name || "",
+            });
+          } catch {
+            setUser(session.user);
+          }
         } else {
           setUser(null);
         }
@@ -52,19 +54,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
       if (session?.user) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("name, email")
-          .eq("user_id", session.user.id)
-          .maybeSingle();
-        
-        setUser({
-          ...session.user,
-          name: profile?.name || session.user.user_metadata?.name || "",
-        });
+        try {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("name, email")
+            .eq("user_id", session.user.id)
+            .maybeSingle();
+          setUser({
+            ...session.user,
+            name: profile?.name || session.user.user_metadata?.name || "",
+          });
+        } catch {
+          setUser(session.user);
+        }
       }
       setLoading(false);
-    });
+    }).catch(() => setLoading(false));
 
     return () => subscription.unsubscribe();
   }, []);
