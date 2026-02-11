@@ -11,7 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import {
-  Brain, FileText, Plus, Trash2, Loader2, CheckCircle2, AlertCircle,
+  Brain, FileText, Plus, Trash2, Loader2, CheckCircle2, AlertCircle, RefreshCw,
   Link as LinkIcon, Globe, Youtube, Sparkles, Heart, Briefcase, Upload, Instagram, ListPlus, Eye, ArrowRight
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -278,6 +278,34 @@ export default function KnowledgeBase() {
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
       queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
     },
+  });
+
+  const retryItem = useMutation({
+    mutationFn: async (item: any) => {
+      // Reset status to processing
+      await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", item.id);
+      
+      // Re-invoke processing
+      const body: any = { itemId: item.id, type: item.type };
+      if (item.type === "pdf" && item.file_path) {
+        body.filePath = item.file_path;
+      } else if (item.url) {
+        body.url = item.url;
+      }
+
+      const result = await supabase.functions.invoke("process-knowledge", { body });
+      if (result.error || result.data?.error) {
+        throw new Error(result.data?.error || result.error?.message || "Processing failed");
+      }
+      return result;
+    },
+    onSuccess: () => {
+      toast.success("Retrying processing...");
+      queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+      startPolling();
+    },
+    onError: (e: any) => toast.error(e.message),
   });
 
   const getStatusIcon = (status: string) => {
@@ -715,7 +743,23 @@ export default function KnowledgeBase() {
                     </div>
                   )}
                   {item.status === "error" && (
-                    <p className="text-xs text-destructive mt-2">Failed to process. Try again or use a different URL.</p>
+                    <div className="mt-3 pt-3 border-t flex items-center justify-between">
+                      <p className="text-xs text-destructive">Failed to process. Try again or use a different URL.</p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => retryItem.mutate(item)}
+                        disabled={retryItem.isPending}
+                        className="shrink-0 ml-2"
+                      >
+                        {retryItem.isPending ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-3 w-3 mr-1" />
+                        )}
+                        Retry
+                      </Button>
+                    </div>
                   )}
                 </CardContent>
               </Card>
