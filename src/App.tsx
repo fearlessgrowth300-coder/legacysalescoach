@@ -15,6 +15,7 @@ import Workspaces from "./pages/Workspaces";
 import Analytics from "./pages/Analytics";
 import BrainStats from "./pages/BrainStats";
 import DashboardLayout from "./components/DashboardLayout";
+import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -51,6 +52,7 @@ const App = () => {
             <Route path="/workspaces" element={<AuthenticatedRoute><Workspaces /></AuthenticatedRoute>} />
             <Route path="/analytics" element={<AuthenticatedRoute><Analytics /></AuthenticatedRoute>} />
             <Route path="/brain" element={<AuthenticatedRoute><BrainStats /></AuthenticatedRoute>} />
+            <Route path="/settings" element={<AuthenticatedRoute><Settings /></AuthenticatedRoute>} />
             <Route path="/dashboard" element={<Navigate to="/chats" replace />} />
             <Route path="*" element={<NotFound />} />
       </Routes>

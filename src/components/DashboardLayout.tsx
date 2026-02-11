@@ -20,7 +20,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { MessageSquare, Brain, Briefcase, BarChart3, LogOut, PanelLeft, Sparkles, Moon, Sun } from "lucide-react";
+import { MessageSquare, Brain, Briefcase, BarChart3, LogOut, PanelLeft, Sparkles, Moon, Sun, Settings } from "lucide-react";
 import { CSSProperties, ReactNode, useEffect, useState } from "react";
 import { useNavigate, useLocation, Navigate } from "react-router-dom";
 import { Button } from "./ui/button";
@@ -156,6 +156,10 @@ function DashboardLayoutContent({ children }: { children: ReactNode }) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={() => navigate("/settings")} className="cursor-pointer">
+                <Settings className="mr-2 h-4 w-4" />
+                <span>Settings</span>
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={handleLogout} className="cursor-pointer text-destructive focus:text-destructive">
                 <LogOut className="mr-2 h-4 w-4" />
                 <span>Sign out</span>
