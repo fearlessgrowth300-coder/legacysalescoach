@@ -259,6 +259,46 @@ TYPE LABELS:
 - The prospect's tone and engagement level
 - Where the conversation left off
 Then generate 3 reply suggestions to CONTINUE the conversation naturally from where it stopped.`;
+    } else if (mode === "reengage") {
+      taskInstructions = `TASK: The prospect has SEEN your last message but has NOT replied. They are ghosting you. Analyze the conversation context below and generate 3 RE-ENGAGEMENT messages designed to trigger a reply.
+
+RE-ENGAGEMENT PSYCHOLOGY — use these techniques:
+1. **Value Drop**: Share something genuinely useful related to their niche — no "just checking in"
+2. **Pattern Interrupt**: Break the silence with something unexpected that makes them curious
+3. **Soft Exit**: Give them an easy out that paradoxically makes them MORE likely to reply ("No worries if the timing's off, just thought of you when I saw this...")
+4. **Callback Reference**: Reference something specific from your earlier conversation that shows you were paying attention
+5. **Social Proof Nudge**: Casually mention a result or insight related to their situation
+
+RULES:
+- NEVER say "just following up", "checking in", "hey haven't heard back" — these KILL conversations
+- Keep it to 1-2 sentences max — short messages get more replies than long ones
+- Make it feel like you're sharing something of VALUE, not chasing them
+- Each suggestion should use a DIFFERENT psychological angle
+- Sound natural, not needy or desperate
+- The "whyThisWorks" must explain why this specific approach breaks the ghost pattern
+
+TYPE LABELS:
+- "primary" = Most likely to break the silence — strongest hook
+- "alternative" = Different angle — appeals to curiosity or FOMO
+- "softer" = Low-pressure, gives them an easy way back into the conversation`;
+    } else if (mode === "refine") {
+      taskInstructions = `TASK: The user has written a DRAFT message they want to send to the prospect. Your job is to REFINE and PERFECT this draft while keeping the user's voice and intent intact.
+
+REFINEMENT RULES:
+1. Keep the core message and intent — don't rewrite it into something completely different
+2. Fix awkward phrasing, grammar, and flow
+3. Make it sound more natural and conversational
+4. Remove anything that sounds salesy, pushy, or desperate
+5. Ensure it matches the conversation tone and stage
+6. Keep roughly the same length — don't make it much longer or shorter
+7. Add subtle psychological hooks where appropriate
+
+Generate 3 refined versions:
+- "primary" = Closest to their original but polished and perfected
+- "alternative" = Slightly reframed for better impact while keeping their intent
+- "softer" = More casual/relaxed version if their draft was too formal or intense
+
+The "whyThisWorks" should explain what you changed and why it's better.`;
     } else {
       taskInstructions = `TASK: The prospect just sent the following message. Generate 3 reply suggestions.`;
     }
