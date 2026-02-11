@@ -60,47 +60,85 @@ serve(async (req) => {
           });
         }
 
-        // Extract text from PDF binary directly (OpenAI doesn't support PDF in vision API)
+        // Convert PDF to base64 and send to Gemini which natively supports PDF
         const bytes = new Uint8Array(arrayBuffer);
-        const rawText = new TextDecoder("latin1").decode(bytes);
-        
-        // Extract text from PDF text operators (Tj and TJ)
-        const textParts: string[] = [];
-        
-        // Match text in parentheses followed by Tj operator
-        const tjMatches = rawText.matchAll(/\(([^\\)]*(?:\\.[^\\)]*)*)\)\s*Tj/g);
-        for (const match of tjMatches) {
-          const decoded = match[1]
-            .replace(/\\n/g, '\n').replace(/\\r/g, '\r')
-            .replace(/\\\\/g, '\\').replace(/\\(/g, '(').replace(/\\)/g, ')');
-          textParts.push(decoded);
+        const CHUNK_SIZE = 32768;
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+          const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
+          binary += String.fromCharCode(...chunk);
         }
+        const base64Pdf = btoa(binary);
         
-        // Match text arrays in TJ operator
-        const tjArrayMatches = rawText.matchAll(/\[([^\]]*)\]\s*TJ/gi);
-        for (const match of tjArrayMatches) {
-          const parts = match[1].match(/\(([^\\)]*(?:\\.[^\\)]*)*)\)/g) || [];
-          for (const p of parts) {
-            textParts.push(p.slice(1, -1)
-              .replace(/\\n/g, '\n').replace(/\\r/g, '\r')
-              .replace(/\\\\/g, '\\').replace(/\\(/g, '(').replace(/\\)/g, ')'));
+        console.log("Sending PDF to Gemini for direct reading...");
+        
+        const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+        if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+        const pdfReadResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${LOVABLE_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: "Read this entire PDF document and extract ALL the text content from it. Return the full text content exactly as it appears in the document. Do not summarize - return the complete text.",
+                  },
+                  {
+                    type: "image_url",
+                    image_url: { url: `data:application/pdf;base64,${base64Pdf}` },
+                  },
+                ],
+              },
+            ],
+            temperature: 0.1,
+          }),
+        });
+
+        if (pdfReadResponse.ok) {
+          const pdfData = await pdfReadResponse.json();
+          const extractedText = pdfData.choices?.[0]?.message?.content || "";
+          console.log("Gemini PDF extraction length:", extractedText.length);
+          if (extractedText.length > 100) {
+            content = extractedText.substring(0, 50000);
           }
-        }
-        
-        let extractedText = textParts.join(' ').replace(/\s+/g, ' ').trim();
-        
-        // Fallback: extract readable ASCII strings if PDF operators didn't yield much
-        if (extractedText.length < 200) {
-          const readable = rawText.match(/[A-Za-z0-9\s,.!?;:'"()\-]{15,}/g) || [];
-          extractedText = readable.join(' ').substring(0, 50000);
-        }
-        
-        console.log("PDF text extracted, length:", extractedText.length);
-        
-        if (extractedText.length > 100) {
-          content = extractedText.substring(0, 50000);
         } else {
-          content = `PDF file uploaded: ${filePath}. The text could not be extracted automatically. Please paste the content manually.`;
+          console.error("Gemini PDF read failed:", pdfReadResponse.status);
+        }
+
+        // Fallback: manual binary text extraction if Gemini failed
+        if (!content || content.length < 100) {
+          console.log("Falling back to manual PDF text extraction...");
+          const rawText = new TextDecoder("latin1").decode(bytes);
+          const textParts: string[] = [];
+          const tjMatches = rawText.matchAll(/\(([^\\)]*(?:\\.[^\\)]*)*)\)\s*Tj/g);
+          for (const match of tjMatches) {
+            textParts.push(match[1].replace(/\\n/g, '\n').replace(/\\\\/g, '\\'));
+          }
+          const tjArrayMatches = rawText.matchAll(/\[([^\]]*)\]\s*TJ/gi);
+          for (const match of tjArrayMatches) {
+            const parts = match[1].match(/\(([^\\)]*(?:\\.[^\\)]*)*)\)/g) || [];
+            for (const p of parts) {
+              textParts.push(p.slice(1, -1));
+            }
+          }
+          let extractedText = textParts.join(' ').replace(/\s+/g, ' ').trim();
+          if (extractedText.length < 200) {
+            const readable = rawText.match(/[A-Za-z0-9\s,.!?;:'"()\-]{15,}/g) || [];
+            extractedText = readable.join(' ').substring(0, 50000);
+          }
+          if (extractedText.length > 100) {
+            content = extractedText.substring(0, 50000);
+          } else {
+            content = `PDF file uploaded: ${filePath}. The text could not be extracted automatically. Please paste the content manually.`;
+          }
         }
       } catch (e) {
         console.error("PDF processing error:", e);
