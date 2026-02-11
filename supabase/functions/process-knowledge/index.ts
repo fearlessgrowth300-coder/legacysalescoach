@@ -100,17 +100,23 @@ serve(async (req) => {
             ],
             temperature: 0.1,
           }),
+          signal: AbortSignal.timeout(120000),
         });
 
         if (pdfReadResponse.ok) {
-          const pdfData = await pdfReadResponse.json();
-          const extractedText = pdfData.choices?.[0]?.message?.content || "";
-          console.log("Gemini PDF extraction length:", extractedText.length);
-          if (extractedText.length > 100) {
-            content = extractedText.substring(0, 50000);
+          try {
+            const pdfData = await pdfReadResponse.json();
+            const extractedText = pdfData.choices?.[0]?.message?.content || "";
+            console.log("Gemini PDF extraction length:", extractedText.length);
+            if (extractedText.length > 100) {
+              content = extractedText.substring(0, 50000);
+            }
+          } catch (jsonErr) {
+            console.error("Gemini response JSON parse failed, using fallback:", jsonErr);
           }
         } else {
           console.error("Gemini PDF read failed:", pdfReadResponse.status);
+          try { await pdfReadResponse.text(); } catch {}
         }
 
         // Fallback: manual binary text extraction if Gemini failed
@@ -142,10 +148,14 @@ serve(async (req) => {
         }
       } catch (e) {
         console.error("PDF processing error:", e);
-        await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-        return new Response(JSON.stringify({ error: `PDF processing failed: ${e instanceof Error ? e.message : "Unknown error"}. Try a smaller file or paste text manually.` }), {
-          status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        // Don't fail entirely - if we got some content from fallback, continue
+        if (!content || content.length < 100) {
+          await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+          return new Response(JSON.stringify({ error: `PDF processing failed: ${e instanceof Error ? e.message : "Unknown error"}. Try a smaller file or paste text manually.` }), {
+            status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        console.log("PDF had errors but fallback content available, continuing...");
       }
     } else if (url) {
       content = await extractUrlContent(url, supabaseUrl, supabaseKey, supabase);
