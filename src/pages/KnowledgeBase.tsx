@@ -94,7 +94,8 @@ export default function KnowledgeBase() {
 
       setUrlPreview(data);
       if (data.title && !urlTitle) setUrlTitle(data.title);
-      setUrlStep(data.hasTranscript ? "confirm" : "preview");
+      // Always show confirm step so user can review before processing
+      setUrlStep("confirm");
     } catch (e: any) {
       console.error("Preview error:", e);
       toast.error("Could not preview URL. You can still add it.");

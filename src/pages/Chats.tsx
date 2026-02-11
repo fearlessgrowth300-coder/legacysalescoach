@@ -161,7 +161,13 @@ export default function Chats() {
           });
           if (igData && !igData.error) {
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
-            await supabase.from("prospects").update({ detected_interests: interests || null }).eq("id", prospect.id);
+            await supabase.from("prospects").update({
+              detected_interests: interests || null,
+              profile_pic_url: igData.profilePicUrl || null,
+              instagram_username: igData.username || null,
+              name: igData.fullName || newProspectName,
+            } as any).eq("id", prospect.id);
+            
           }
         } catch (e) { console.error("IG fetch error:", e); }
       }
@@ -252,9 +258,14 @@ export default function Chats() {
           const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
             body: { username: newProspectIg },
           });
-          if (igData && !igData.error) {
+      if (igData && !igData.error) {
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
-            await supabase.from("prospects").update({ detected_interests: interests || null }).eq("id", data.id);
+            await supabase.from("prospects").update({
+              detected_interests: interests || null,
+              profile_pic_url: igData.profilePicUrl || null,
+              instagram_username: igData.username || null,
+              name: igData.fullName || newProspectName,
+            } as any).eq("id", data.id);
 
             // Generate first message using AI — pass full profile summary
             const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
@@ -598,15 +609,21 @@ export default function Chats() {
                   onClick={() => navigate(`/chats/${prospect.id}`)}
                 >
                   <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-                      <User className="h-5 w-5 text-primary" />
-                    </div>
+                    {(prospect as any).profile_pic_url ? (
+                      <img src={(prospect as any).profile_pic_url} alt={prospect.name} className="h-10 w-10 rounded-full object-cover shrink-0" />
+                    ) : (
+                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                        <User className="h-5 w-5 text-primary" />
+                      </div>
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
                         <p className="font-medium truncate">{prospect.name}</p>
                         {prospect.reply_mode === "expert" ? <Briefcase className="h-3 w-3 text-blue-500" /> : <Heart className="h-3 w-3 text-pink-500" />}
                       </div>
-                      <p className="text-xs text-muted-foreground truncate">{prospect.conversation_stage?.replace(/_/g, " ")}</p>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {(prospect as any).instagram_username ? `@${(prospect as any).instagram_username} · ` : ""}{prospect.conversation_stage?.replace(/_/g, " ")}
+                      </p>
                     </div>
                     {prospect.outcome !== "active" && (
                       <Badge variant={prospect.outcome === "won" ? "default" : "secondary"} className="text-xs">{prospect.outcome}</Badge>
@@ -634,11 +651,15 @@ export default function Chats() {
             {/* Chat Header */}
             <div className="p-4 border-b flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-                  <User className="h-5 w-5 text-primary" />
-                </div>
+                {(selectedProspect as any)?.profile_pic_url ? (
+                  <img src={(selectedProspect as any).profile_pic_url} alt={selectedProspect?.name} className="h-10 w-10 rounded-full object-cover shrink-0" />
+                ) : (
+                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                    <User className="h-5 w-5 text-primary" />
+                  </div>
+                )}
                 <div>
-                  <h3 className="font-medium">{selectedProspect?.name}</h3>
+                  <h3 className="font-medium">{selectedProspect?.name} {(selectedProspect as any)?.instagram_username ? <span className="text-xs text-muted-foreground font-normal">@{(selectedProspect as any).instagram_username}</span> : null}</h3>
                   <p className="text-xs text-muted-foreground">{selectedProspect?.detected_interests || "Paste a message to get AI suggestions"}</p>
                 </div>
               </div>

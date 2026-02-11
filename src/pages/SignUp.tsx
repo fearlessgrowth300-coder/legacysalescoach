@@ -18,20 +18,46 @@ export default function SignUp() {
   const [showOtp, setShowOtp] = useState(false);
   const [otpCode, setOtpCode] = useState("");
 
+  const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (password !== confirmPassword) {
-      toast.error("Passwords do not match");
-      return;
-    }
-    if (password.length < 6) {
-      toast.error("Password must be at least 6 characters");
-      return;
-    }
+    if (password !== confirmPassword) { toast.error("Passwords do not match"); return; }
+    if (password.length < 6) { toast.error("Password must be at least 6 characters"); return; }
 
     setIsLoading(true);
     try {
+      // Generate OTP and send via Resend
+      const otp = generateOtp();
+      sessionStorage.setItem("signup_otp", otp);
+      sessionStorage.setItem("signup_otp_time", Date.now().toString());
+
+      const { data: sendData, error: sendError } = await supabase.functions.invoke("send-otp", {
+        body: { email, otp, type: "signup" },
+      });
+      if (sendError) throw sendError;
+      if (sendData?.error) throw new Error(sendData.error);
+
+      toast.success("A verification code has been sent to your email!");
+      setShowOtp(true);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to send verification code");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (otpCode.length < 6) { toast.error("Please enter the 6-digit code"); return; }
+
+    const stored = sessionStorage.getItem("signup_otp");
+    const time = parseInt(sessionStorage.getItem("signup_otp_time") || "0");
+    if (Date.now() - time > 600000) { toast.error("Code expired. Please try again."); setShowOtp(false); return; }
+    if (otpCode !== stored) { toast.error("Invalid verification code"); return; }
+
+    setIsLoading(true);
+    try {
+      // OTP verified - now create the account with auto-confirm since we verified manually
       const { error } = await supabase.auth.signUp({
         email,
         password,
@@ -41,32 +67,37 @@ export default function SignUp() {
         },
       });
       if (error) throw error;
-      toast.success("A verification code has been sent to your email!");
-      setShowOtp(true);
+
+      // Clean up
+      sessionStorage.removeItem("signup_otp");
+      sessionStorage.removeItem("signup_otp_time");
+
+      toast.success("Account created! Redirecting...");
+      // The auth state change will handle navigation
+      navigate("/chats");
     } catch (error: any) {
-      toast.error(error.message || "Failed to sign up");
+      toast.error(error.message || "Failed to create account");
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleVerifyOtp = async () => {
-    if (otpCode.length < 6) {
-      toast.error("Please enter the 6-digit code");
-      return;
-    }
+  const handleResendCode = async () => {
     setIsLoading(true);
     try {
-      const { error } = await supabase.auth.verifyOtp({
-        email,
-        token: otpCode,
-        type: "signup",
+      const otp = generateOtp();
+      sessionStorage.setItem("signup_otp", otp);
+      sessionStorage.setItem("signup_otp_time", Date.now().toString());
+
+      const { data: sendData, error: sendError } = await supabase.functions.invoke("send-otp", {
+        body: { email, otp, type: "signup" },
       });
-      if (error) throw error;
-      toast.success("Account verified! Redirecting...");
-      navigate("/chats");
+      if (sendError) throw sendError;
+      if (sendData?.error) throw new Error(sendData.error);
+
+      toast.success("New code sent!");
     } catch (error: any) {
-      toast.error(error.message || "Invalid verification code");
+      toast.error(error.message || "Failed to resend code");
     } finally {
       setIsLoading(false);
     }
@@ -103,6 +134,9 @@ export default function SignUp() {
               <Button onClick={handleVerifyOtp} className="w-full" disabled={isLoading}>
                 {isLoading ? "Verifying..." : "Verify & Continue"}
               </Button>
+              <Button variant="ghost" className="w-full" onClick={handleResendCode} disabled={isLoading}>
+                {isLoading ? "Sending..." : "Resend Code"}
+              </Button>
               <Button
                 variant="ghost"
                 className="w-full"
@@ -130,7 +164,7 @@ export default function SignUp() {
                 <Input id="confirmPassword" type="password" placeholder="••••••••" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required />
               </div>
               <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? "Creating account..." : "Sign Up"}
+                {isLoading ? "Sending code..." : "Sign Up"}
               </Button>
             </form>
           )}

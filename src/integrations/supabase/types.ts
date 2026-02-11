@@ -244,8 +244,10 @@ export type Database = {
           detected_interests: string | null
           id: string
           instagram_url: string | null
+          instagram_username: string | null
           name: string
           outcome: string
+          profile_pic_url: string | null
           reply_mode: string
           store_url: string | null
           suggested_first_message: string | null
@@ -260,8 +262,10 @@ export type Database = {
           detected_interests?: string | null
           id?: string
           instagram_url?: string | null
+          instagram_username?: string | null
           name: string
           outcome?: string
+          profile_pic_url?: string | null
           reply_mode?: string
           store_url?: string | null
           suggested_first_message?: string | null
@@ -276,8 +280,10 @@ export type Database = {
           detected_interests?: string | null
           id?: string
           instagram_url?: string | null
+          instagram_username?: string | null
           name?: string
           outcome?: string
+          profile_pic_url?: string | null
           reply_mode?: string
           store_url?: string | null
           suggested_first_message?: string | null
