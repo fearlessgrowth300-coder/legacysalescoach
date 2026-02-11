@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import { useNavigate, useParams } from "react-router-dom";
 import {
@@ -835,24 +836,24 @@ export default function Chats() {
                   onClick={() => navigate(`/chats/${prospect.id}`)}
                 >
                   <div className="flex items-center gap-3">
-                    {(prospect as any).profile_pic_url ? (
-                      <img
-                        src={(prospect as any).profile_pic_url}
-                        alt={prospect.name}
-                        className="h-10 w-10 rounded-full object-cover shrink-0"
-                        loading="lazy"
-                        referrerPolicy="no-referrer"
-                        crossOrigin="anonymous"
-                        onError={(e) => {
-                          e.currentTarget.onerror = null;
-                          e.currentTarget.src = "/placeholder.svg";
-                        }}
-                      />
-                    ) : (
-                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                    <Avatar className="h-10 w-10 shrink-0">
+                      {(prospect as any).profile_pic_url ? (
+                        <AvatarImage
+                          src={(prospect as any).profile_pic_url}
+                          alt={prospect.name}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          crossOrigin="anonymous"
+                          onError={(e) => {
+                            // Hide the image so the fallback shows
+                            e.currentTarget.style.display = "none";
+                          }}
+                        />
+                      ) : null}
+                      <AvatarFallback className="bg-primary/10">
                         <User className="h-5 w-5 text-primary" />
-                      </div>
-                    )}
+                      </AvatarFallback>
+                    </Avatar>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
                         <p className="font-medium truncate">{prospect.name}</p>
@@ -888,24 +889,23 @@ export default function Chats() {
             {/* Chat Header */}
             <div className="p-4 border-b flex items-center justify-between">
               <div className="flex items-center gap-3">
-                {(selectedProspect as any)?.profile_pic_url ? (
-                  <img
-                    src={(selectedProspect as any).profile_pic_url}
-                    alt={selectedProspect?.name}
-                    className="h-10 w-10 rounded-full object-cover shrink-0"
-                    loading="lazy"
-                    referrerPolicy="no-referrer"
-                    crossOrigin="anonymous"
-                    onError={(e) => {
-                      e.currentTarget.onerror = null;
-                      e.currentTarget.src = "/placeholder.svg";
-                    }}
-                  />
-                ) : (
-                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                <Avatar className="h-10 w-10 shrink-0">
+                  {(selectedProspect as any)?.profile_pic_url ? (
+                    <AvatarImage
+                      src={(selectedProspect as any).profile_pic_url}
+                      alt={selectedProspect?.name}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      crossOrigin="anonymous"
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                      }}
+                    />
+                  ) : null}
+                  <AvatarFallback className="bg-primary/10">
                     <User className="h-5 w-5 text-primary" />
-                  </div>
-                )}
+                  </AvatarFallback>
+                </Avatar>
                 <div>
                   <h3 className="font-medium">{selectedProspect?.name} {(selectedProspect as any)?.instagram_username ? <span className="text-xs text-muted-foreground font-normal">@{(selectedProspect as any).instagram_username}</span> : null}</h3>
                   <p className="text-xs text-muted-foreground">{selectedProspect?.detected_interests || "Paste a message to get AI suggestions"}</p>
