@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,14 +8,26 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import {
   Brain, FileText, Plus, Trash2, Loader2, CheckCircle2, AlertCircle,
-  Link as LinkIcon, Globe, Youtube, Sparkles, Heart, Briefcase, Upload, Instagram, ListPlus
+  Link as LinkIcon, Globe, Youtube, Sparkles, Heart, Briefcase, Upload, Instagram, ListPlus, Eye, ArrowRight
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+
+type UrlPreview = {
+  type: "youtube" | "instagram" | "webpage";
+  thumbnail: string;
+  title: string;
+  transcript: string;
+  hasTranscript: boolean;
+  videoId?: string;
+  shortcode?: string;
+  username?: string;
+};
 
 export default function KnowledgeBase() {
   const { user } = useAuth();
@@ -34,6 +46,11 @@ export default function KnowledgeBase() {
   const [batchBrainType, setBatchBrainType] = useState<"friend" | "expert" | "both">("both");
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+
+  // URL preview state
+  const [urlStep, setUrlStep] = useState<"input" | "preview" | "confirm">("input");
+  const [urlPreview, setUrlPreview] = useState<UrlPreview | null>(null);
+  const [isFetchingPreview, setIsFetchingPreview] = useState(false);
 
   const { data: items } = useQuery({
     queryKey: ["kb-items"],
@@ -54,6 +71,39 @@ export default function KnowledgeBase() {
     },
     enabled: !!user,
   });
+
+  // Reset URL dialog state
+  const resetUrlDialog = () => {
+    setUrlStep("input");
+    setUrlPreview(null);
+    setUrlTitle("");
+    setUrlValue("");
+    setIsFetchingPreview(false);
+  };
+
+  // Fetch URL preview (thumbnail + transcript)
+  const fetchPreview = async () => {
+    if (!urlValue.trim()) return;
+    setIsFetchingPreview(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("preview-url", {
+        body: { url: urlValue },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      setUrlPreview(data);
+      if (data.title && !urlTitle) setUrlTitle(data.title);
+      setUrlStep(data.hasTranscript ? "confirm" : "preview");
+    } catch (e: any) {
+      console.error("Preview error:", e);
+      toast.error("Could not preview URL. You can still add it.");
+      setUrlStep("preview");
+      setUrlPreview(null);
+    } finally {
+      setIsFetchingPreview(false);
+    }
+  };
 
   const addUrl = useMutation({
     mutationFn: async () => {
@@ -79,8 +129,7 @@ export default function KnowledgeBase() {
     onSuccess: () => {
       toast.success("URL added! Processing content in background...");
       setUrlDialogOpen(false);
-      setUrlTitle("");
-      setUrlValue("");
+      resetUrlDialog();
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
       startPolling();
     },
@@ -90,11 +139,8 @@ export default function KnowledgeBase() {
   const addPdf = useMutation({
     mutationFn: async () => {
       if (!pdfFile) throw new Error("No file selected");
-
       const filePath = `${user!.id}/${Date.now()}-${pdfFile.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from("knowledge-files")
-        .upload(filePath, pdfFile);
+      const { error: uploadError } = await supabase.storage.from("knowledge-files").upload(filePath, pdfFile);
       if (uploadError) throw uploadError;
 
       const { data, error } = await supabase.from("knowledge_base_items").insert({
@@ -136,15 +182,8 @@ export default function KnowledgeBase() {
   };
 
   const handleBatchImport = async () => {
-    const urls = batchUrls
-      .split("\n")
-      .map((u) => u.trim())
-      .filter((u) => u.length > 0 && (u.startsWith("http://") || u.startsWith("https://")));
-
-    if (urls.length === 0) {
-      toast.error("No valid URLs found");
-      return;
-    }
+    const urls = batchUrls.split("\n").map((u) => u.trim()).filter((u) => u.length > 0 && (u.startsWith("http://") || u.startsWith("https://")));
+    if (urls.length === 0) { toast.error("No valid URLs found"); return; }
 
     setBatchProcessing(true);
     setBatchProgress({ current: 0, total: urls.length });
@@ -153,18 +192,11 @@ export default function KnowledgeBase() {
       const url = urls[i];
       const title = url.includes("youtube.com") || url.includes("youtu.be")
         ? `YouTube Video ${i + 1}`
-        : url.includes("instagram.com")
-        ? `Instagram ${i + 1}`
-        : `URL ${i + 1}`;
+        : url.includes("instagram.com") ? `Instagram ${i + 1}` : `URL ${i + 1}`;
 
       try {
         const { data, error } = await supabase.from("knowledge_base_items").insert({
-          user_id: user!.id,
-          title,
-          type: "url",
-          url,
-          brain_type: batchBrainType,
-          status: "processing",
+          user_id: user!.id, title, type: "url", url, brain_type: batchBrainType, status: "processing",
         }).select().single();
 
         if (!error && data) {
@@ -175,9 +207,7 @@ export default function KnowledgeBase() {
             queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
           }).catch(console.error);
         }
-      } catch (e) {
-        console.error(`Failed to add ${url}:`, e);
-      }
+      } catch (e) { console.error(`Failed to add ${url}:`, e); }
 
       setBatchProgress({ current: i + 1, total: urls.length });
       if (i < urls.length - 1) await new Promise((r) => setTimeout(r, 500));
@@ -217,6 +247,18 @@ export default function KnowledgeBase() {
     return <Globe className="h-5 w-5 text-primary" />;
   };
 
+  const getItemThumbnail = (item: any) => {
+    if (!item.url) return null;
+    if (item.url.includes("youtube.com") || item.url.includes("youtu.be")) {
+      try {
+        const u = new URL(item.url);
+        const videoId = item.url.includes("youtu.be") ? u.pathname.slice(1) : u.searchParams.get("v");
+        if (videoId) return `https://img.youtube.com/vi/${videoId}/default.jpg`;
+      } catch { /* ignore */ }
+    }
+    return null;
+  };
+
   const getChunksForItem = (itemId: string) => chunks?.filter(c => c.source_id === itemId) || [];
 
   return (
@@ -237,17 +279,13 @@ export default function KnowledgeBase() {
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Batch Import URLs</DialogTitle>
-                <DialogDescription>Paste multiple YouTube, Instagram, or web URLs (one per line) to process them all at once</DialogDescription>
+                <DialogDescription>Paste multiple YouTube, Instagram, or web URLs (one per line)</DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div>
                   <Label>URLs (one per line) *</Label>
-                  <Textarea
-                    value={batchUrls}
-                    onChange={(e) => setBatchUrls(e.target.value)}
-                    placeholder={"https://youtube.com/watch?v=abc123\nhttps://youtube.com/watch?v=def456\nhttps://instagram.com/p/xyz789"}
-                    rows={6}
-                  />
+                  <Textarea value={batchUrls} onChange={(e) => setBatchUrls(e.target.value)}
+                    placeholder={"https://youtube.com/watch?v=abc123\nhttps://instagram.com/p/xyz789"} rows={6} />
                   <p className="text-xs text-muted-foreground mt-1">
                     {batchUrls.split("\n").filter((u) => u.trim().startsWith("http")).length} valid URLs detected
                   </p>
@@ -295,23 +333,9 @@ export default function KnowledgeBase() {
                 </div>
                 <div>
                   <Label>PDF File *</Label>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".pdf"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        setPdfFile(file);
-                        if (!pdfTitle) setPdfTitle(file.name.replace(".pdf", ""));
-                      }
-                    }}
-                  />
-                  <div
-                    onClick={() => fileInputRef.current?.click()}
-                    className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors"
-                  >
+                  <input ref={fileInputRef} type="file" accept=".pdf" className="hidden"
+                    onChange={(e) => { const file = e.target.files?.[0]; if (file) { setPdfFile(file); if (!pdfTitle) setPdfTitle(file.name.replace(".pdf", "")); } }} />
+                  <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors">
                     {pdfFile ? (
                       <div className="flex items-center justify-center gap-2">
                         <FileText className="h-5 w-5 text-red-600" />
@@ -346,42 +370,137 @@ export default function KnowledgeBase() {
             </DialogContent>
           </Dialog>
 
-          {/* URL Dialog */}
-          <Dialog open={urlDialogOpen} onOpenChange={setUrlDialogOpen}>
+          {/* URL Dialog with Preview */}
+          <Dialog open={urlDialogOpen} onOpenChange={(open) => { setUrlDialogOpen(open); if (!open) resetUrlDialog(); }}>
             <DialogTrigger asChild>
               <Button><Plus className="h-4 w-4 mr-2" />Add URL</Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-lg">
               <DialogHeader>
                 <DialogTitle>Add URL Content</DialogTitle>
                 <DialogDescription>Add a YouTube video, Instagram post, article, or webpage to your knowledge base</DialogDescription>
               </DialogHeader>
-              <div className="space-y-4 py-4">
-                <div>
-                  <Label>Title *</Label>
-                  <Input value={urlTitle} onChange={(e) => setUrlTitle(e.target.value)} placeholder="e.g., Sales Training Video" />
+
+              {/* Step 1: Enter URL */}
+              {urlStep === "input" && (
+                <div className="space-y-4 py-4">
+                  <div>
+                    <Label>URL *</Label>
+                    <Input value={urlValue} onChange={(e) => setUrlValue(e.target.value)}
+                      placeholder="https://youtube.com/watch?v=... or https://instagram.com/p/..." />
+                  </div>
+                  <DialogFooter>
+                    <Button onClick={fetchPreview} disabled={!urlValue.trim() || isFetchingPreview}>
+                      {isFetchingPreview ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Fetching preview...</> : <><Eye className="h-4 w-4 mr-2" />Preview & Verify</>}
+                    </Button>
+                  </DialogFooter>
                 </div>
-                <div>
-                  <Label>URL *</Label>
-                  <Input value={urlValue} onChange={(e) => setUrlValue(e.target.value)} placeholder="https://youtube.com/watch?v=... or https://instagram.com/p/..." />
+              )}
+
+              {/* Step 2: Preview (no transcript) */}
+              {urlStep === "preview" && (
+                <div className="space-y-4 py-4">
+                  <Button variant="ghost" size="sm" onClick={() => setUrlStep("input")}>← Back</Button>
+
+                  {/* Thumbnail Preview */}
+                  {urlPreview?.thumbnail && (
+                    <div className="rounded-lg overflow-hidden border">
+                      <img src={urlPreview.thumbnail} alt="Preview" className="w-full h-48 object-cover" />
+                    </div>
+                  )}
+
+                  {urlPreview && (
+                    <div className="flex items-center gap-2">
+                      {urlPreview.type === "youtube" && <Youtube className="h-5 w-5 text-red-500 shrink-0" />}
+                      {urlPreview.type === "instagram" && <Instagram className="h-5 w-5 text-pink-500 shrink-0" />}
+                      {urlPreview.type === "webpage" && <Globe className="h-5 w-5 text-primary shrink-0" />}
+                      <p className="text-sm font-medium">{urlPreview.title || "Untitled"}</p>
+                    </div>
+                  )}
+
+                  {!urlPreview && (
+                    <p className="text-sm text-muted-foreground">Could not preview this URL, but you can still add it.</p>
+                  )}
+
+                  <div>
+                    <Label>Title *</Label>
+                    <Input value={urlTitle} onChange={(e) => setUrlTitle(e.target.value)} placeholder="e.g., Sales Training Video" />
+                  </div>
+                  <div>
+                    <Label>Brain Mode</Label>
+                    <Select value={brainType} onValueChange={(v: "friend" | "expert" | "both") => setBrainType(v)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="both"><div className="flex items-center gap-2"><Sparkles className="h-4 w-4" />Both Modes</div></SelectItem>
+                        <SelectItem value="friend"><div className="flex items-center gap-2"><Heart className="h-4 w-4 text-pink-500" />Friend Only</div></SelectItem>
+                        <SelectItem value="expert"><div className="flex items-center gap-2"><Briefcase className="h-4 w-4 text-blue-500" />Expert Only</div></SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <DialogFooter>
+                    <Button onClick={() => addUrl.mutate()} disabled={!urlTitle.trim() || addUrl.isPending}>
+                      {addUrl.isPending ? "Adding..." : "Add to Knowledge Base"}
+                    </Button>
+                  </DialogFooter>
                 </div>
-                <div>
-                  <Label>Brain Mode</Label>
-                  <Select value={brainType} onValueChange={(v: "friend" | "expert" | "both") => setBrainType(v)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="both"><div className="flex items-center gap-2"><Sparkles className="h-4 w-4" />Both Modes</div></SelectItem>
-                      <SelectItem value="friend"><div className="flex items-center gap-2"><Heart className="h-4 w-4 text-pink-500" />Friend Only</div></SelectItem>
-                      <SelectItem value="expert"><div className="flex items-center gap-2"><Briefcase className="h-4 w-4 text-blue-500" />Expert Only</div></SelectItem>
-                    </SelectContent>
-                  </Select>
+              )}
+
+              {/* Step 3: Confirm Transcript */}
+              {urlStep === "confirm" && (
+                <div className="space-y-4 py-4">
+                  <Button variant="ghost" size="sm" onClick={() => setUrlStep("input")}>← Back</Button>
+
+                  {/* Thumbnail Preview */}
+                  {urlPreview?.thumbnail && (
+                    <div className="rounded-lg overflow-hidden border">
+                      <img src={urlPreview.thumbnail} alt="Preview" className="w-full h-48 object-cover" />
+                    </div>
+                  )}
+
+                  {urlPreview && (
+                    <div className="flex items-center gap-2">
+                      {urlPreview.type === "youtube" && <Youtube className="h-5 w-5 text-red-500 shrink-0" />}
+                      {urlPreview.type === "instagram" && <Instagram className="h-5 w-5 text-pink-500 shrink-0" />}
+                      <p className="text-sm font-medium">{urlPreview.title || "Untitled"}</p>
+                    </div>
+                  )}
+
+                  {/* Transcript Preview */}
+                  <div>
+                    <Label className="flex items-center gap-2 mb-2">
+                      <FileText className="h-4 w-4" />Extracted Content
+                      <Badge variant="outline" className="text-xs">Review before learning</Badge>
+                    </Label>
+                    <ScrollArea className="h-48 rounded-md border p-3 bg-muted/30">
+                      <p className="text-xs whitespace-pre-wrap font-mono">{urlPreview?.transcript || "No content extracted"}</p>
+                    </ScrollArea>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      ✓ This is the content the AI will learn from. Confirm it looks correct.
+                    </p>
+                  </div>
+
+                  <div>
+                    <Label>Title *</Label>
+                    <Input value={urlTitle} onChange={(e) => setUrlTitle(e.target.value)} placeholder="e.g., Sales Training Video" />
+                  </div>
+                  <div>
+                    <Label>Brain Mode</Label>
+                    <Select value={brainType} onValueChange={(v: "friend" | "expert" | "both") => setBrainType(v)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="both"><div className="flex items-center gap-2"><Sparkles className="h-4 w-4" />Both Modes</div></SelectItem>
+                        <SelectItem value="friend"><div className="flex items-center gap-2"><Heart className="h-4 w-4 text-pink-500" />Friend Only</div></SelectItem>
+                        <SelectItem value="expert"><div className="flex items-center gap-2"><Briefcase className="h-4 w-4 text-blue-500" />Expert Only</div></SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <DialogFooter>
+                    <Button onClick={() => addUrl.mutate()} disabled={!urlTitle.trim() || addUrl.isPending}>
+                      {addUrl.isPending ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Processing...</> : <><CheckCircle2 className="h-4 w-4 mr-2" />Confirm & Learn</>}
+                    </Button>
+                  </DialogFooter>
                 </div>
-              </div>
-              <DialogFooter>
-                <Button onClick={() => addUrl.mutate()} disabled={!urlTitle.trim() || !urlValue.trim() || addUrl.isPending}>
-                  {addUrl.isPending ? "Adding..." : "Add to Knowledge Base"}
-                </Button>
-              </DialogFooter>
+              )}
             </DialogContent>
           </Dialog>
         </div>
@@ -404,13 +523,19 @@ export default function KnowledgeBase() {
         <div className="space-y-3">
           {items?.map((item) => {
             const itemChunks = getChunksForItem(item.id);
+            const thumbnail = getItemThumbnail(item);
             return (
               <Card key={item.id}>
                 <CardContent className="py-4">
                   <div className="flex items-center gap-4">
-                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                      {getPlatformIcon(item)}
-                    </div>
+                    {/* Thumbnail or Icon */}
+                    {thumbnail ? (
+                      <img src={thumbnail} alt="" className="h-12 w-16 rounded object-cover shrink-0" />
+                    ) : (
+                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                        {getPlatformIcon(item)}
+                      </div>
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <p className="font-medium truncate">{item.title}</p>
