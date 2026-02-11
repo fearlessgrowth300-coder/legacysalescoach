@@ -13,7 +13,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   MessageSquare, Plus, Send, User, Sparkles,
   Copy, Check, AlertTriangle,
-  Heart, Briefcase, MoreVertical, Trash2, Camera, Loader2, Image, Upload, X
+  Heart, Briefcase, MoreVertical, Trash2, Camera, Loader2, Image, Upload, X,
+  Ghost, PenLine, RotateCcw
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
@@ -30,7 +31,7 @@ export default function Chats() {
   const selectedProspectId = prospectId || null;
 
   const [newProspectOpen, setNewProspectOpen] = useState(false);
-  const [chatType, setChatType] = useState<"new" | "existing" | null>(null);
+  const [chatType, setChatType] = useState<"new" | "existing" | "reengage" | null>(null);
   const [newProspectName, setNewProspectName] = useState("");
   const [newProspectIg, setNewProspectIg] = useState("");
   const [messageInput, setMessageInput] = useState("");
@@ -48,6 +49,8 @@ export default function Chats() {
   const [extractedConversation, setExtractedConversation] = useState("");
   const [firstMessageSuggestions, setFirstMessageSuggestions] = useState<Suggestion[]>([]);
   const [isGeneratingFirst, setIsGeneratingFirst] = useState(false);
+  const [isRefineMode, setIsRefineMode] = useState(false);
+  const [isRefining, setIsRefining] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
@@ -231,6 +234,123 @@ export default function Chats() {
       toast.error(e.message || "Failed to process screenshots");
       setUploadStep("upload");
     }
+  };
+
+  // Process re-engage conversation (ghosted prospect)
+  const processReengageConversation = async () => {
+    if (!user || !activeWorkspace || screenshotFiles.length === 0) return;
+    setUploadStep("processing");
+
+    try {
+      const { data: prospect, error: prospectError } = await supabase
+        .from("prospects")
+        .insert({
+          user_id: user.id,
+          workspace_id: activeWorkspace.id,
+          name: newProspectName,
+          instagram_url: newProspectIg || null,
+          reply_mode: activeWorkspace.default_reply_mode,
+          conversation_stage: "ghosted",
+        })
+        .select()
+        .single();
+      if (prospectError) throw prospectError;
+
+      if (newProspectIg) {
+        try {
+          const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
+            body: { username: newProspectIg },
+          });
+          if (igData && !igData.error) {
+            const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
+            await supabase.from("prospects").update({
+              detected_interests: interests || null,
+              profile_pic_url: igData.profilePicUrl || null,
+              instagram_username: igData.username || null,
+              name: igData.fullName || newProspectName,
+            } as any).eq("id", prospect.id);
+          }
+        } catch (e) { console.error("IG fetch error:", e); }
+      }
+
+      const allTexts: string[] = [];
+      for (let i = 0; i < screenshotFiles.length; i++) {
+        const file = screenshotFiles[i];
+        const filePath = `${user.id}/${Date.now()}-${i}-${file.name}`;
+        const { error: uploadError } = await supabase.storage.from("chat-screenshots").upload(filePath, file);
+        if (uploadError) { console.error("Upload error:", uploadError); continue; }
+        const { data, error } = await supabase.functions.invoke("ocr-screenshot", { body: { filePath } });
+        if (!error && data?.text) {
+          allTexts.push(`[Screenshot ${i + 1}]:\n${data.text}`);
+        }
+      }
+
+      const fullConversation = allTexts.join("\n\n");
+
+      if (fullConversation) {
+        await supabase.from("chat_messages").insert({
+          user_id: user.id,
+          prospect_id: prospect.id,
+          content: fullConversation,
+          direction: "inbound",
+          thread_type: currentThreadType,
+        });
+      }
+
+      const { data: suggestData, error: suggestError } = await supabase.functions.invoke("chat-suggest", {
+        body: {
+          prospectId: prospect.id,
+          message: fullConversation || "The prospect has ghosted me. They saw my last message but didn't reply.",
+          threadType: currentThreadType,
+          mode: "reengage",
+        },
+      });
+
+      if (!suggestError && suggestData?.suggestions) {
+        setFirstMessageSuggestions(suggestData.suggestions);
+      }
+
+      setUploadStep("done");
+      queryClient.invalidateQueries({ queryKey: ["prospects"] });
+
+      setTimeout(() => {
+        handleDialogChange(false);
+        navigate(`/chats/${prospect.id}`);
+        if (suggestData?.suggestions) {
+          setSuggestions(suggestData.suggestions);
+          setPushyWarning(suggestData.pushyWarning || null);
+        }
+      }, 1500);
+    } catch (e: any) {
+      console.error("Re-engage process error:", e);
+      toast.error(e.message || "Failed to process screenshots");
+      setUploadStep("upload");
+    }
+  };
+
+  // Refine user's draft message
+  const handleRefineDraft = async () => {
+    if (!messageInput.trim() || !selectedProspectId) return;
+    setIsRefining(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke("chat-suggest", {
+        body: {
+          prospectId: selectedProspectId,
+          message: `MY DRAFT MESSAGE TO REFINE:\n${messageInput}`,
+          threadType: currentThreadType,
+          mode: "refine",
+        },
+      });
+      if (error) throw error;
+      setSuggestions(data.suggestions || []);
+      setPushyWarning(data.pushyWarning || null);
+    } catch (e: any) {
+      console.error("Refine error:", e);
+      toast.error("Failed to refine your draft");
+    }
+
+    setIsRefining(false);
   };
 
   // Create new prospect (cold outreach) with first message generation
@@ -436,7 +556,7 @@ export default function Chats() {
                 {!chatType && (
                   <div className="space-y-3 py-4">
                     <p className="text-sm text-muted-foreground">What type of conversation is this?</p>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-3 gap-3">
                       <Card
                         className="p-4 cursor-pointer hover:border-primary transition-colors"
                         onClick={() => setChatType("new")}
@@ -444,7 +564,7 @@ export default function Chats() {
                         <div className="text-center space-y-2">
                           <MessageSquare className="h-8 w-8 mx-auto text-primary" />
                           <h4 className="font-medium text-sm">New Prospect</h4>
-                          <p className="text-xs text-muted-foreground">Cold outreach — start a fresh conversation</p>
+                          <p className="text-xs text-muted-foreground">Cold outreach — start fresh</p>
                         </div>
                       </Card>
                       <Card
@@ -453,8 +573,18 @@ export default function Chats() {
                       >
                         <div className="text-center space-y-2">
                           <Upload className="h-8 w-8 mx-auto text-primary" />
-                          <h4 className="font-medium text-sm">Existing Conversation</h4>
-                          <p className="text-xs text-muted-foreground">Upload screenshots of your DMs to continue</p>
+                          <h4 className="font-medium text-sm">Existing Chat</h4>
+                          <p className="text-xs text-muted-foreground">Upload DMs to continue</p>
+                        </div>
+                      </Card>
+                      <Card
+                        className="p-4 cursor-pointer hover:border-primary transition-colors"
+                        onClick={() => setChatType("reengage")}
+                      >
+                        <div className="text-center space-y-2">
+                          <Ghost className="h-8 w-8 mx-auto text-primary" />
+                          <h4 className="font-medium text-sm">Re-engage</h4>
+                          <p className="text-xs text-muted-foreground">They saw but didn't reply</p>
                         </div>
                       </Card>
                     </div>
@@ -582,6 +712,102 @@ export default function Chats() {
                         <div>
                           <p className="font-medium">Conversation analyzed!</p>
                           <p className="text-sm text-muted-foreground">Redirecting to your chat with AI suggestions...</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Re-engage Flow (ghosted prospect) */}
+                {chatType === "reengage" && (
+                  <div className="space-y-4 py-4">
+                    <Button variant="ghost" size="sm" onClick={() => { setChatType(null); setUploadStep("info"); setScreenshotFiles([]); setScreenshotPreviews([]); }} className="mb-2">← Back</Button>
+
+                    {uploadStep === "info" && (
+                      <>
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3">
+                          <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200 text-sm">
+                            <Ghost className="h-4 w-4" />
+                            <span className="font-medium">Re-engagement Mode</span>
+                          </div>
+                          <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">Upload your conversation screenshots. The AI will analyze why they stopped replying and craft a message to bring them back.</p>
+                        </div>
+                        <div>
+                          <Label>Prospect Name *</Label>
+                          <Input value={newProspectName} onChange={(e) => setNewProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
+                        </div>
+                        <div>
+                          <Label>Instagram URL</Label>
+                          <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username" />
+                        </div>
+                        <DialogFooter>
+                          <Button onClick={() => setUploadStep("upload")} disabled={!newProspectName.trim()}>Next: Upload Screenshots</Button>
+                        </DialogFooter>
+                      </>
+                    )}
+
+                    {uploadStep === "upload" && (
+                      <>
+                        <div className="text-center p-6 border-2 border-dashed rounded-lg">
+                          <input
+                            ref={bulkScreenshotInputRef}
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => { handleBulkScreenshotSelect(e.target.files); e.target.value = ""; }}
+                          />
+                          <Ghost className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+                          <p className="text-sm font-medium mb-1">Upload the full conversation</p>
+                          <p className="text-xs text-muted-foreground mb-3">Include your last sent message that was seen but not replied to.</p>
+                          <Button variant="outline" onClick={() => bulkScreenshotInputRef.current?.click()}>
+                            <Image className="h-4 w-4 mr-2" />Add Screenshots
+                          </Button>
+                        </div>
+
+                        {screenshotPreviews.length > 0 && (
+                          <div>
+                            <p className="text-sm font-medium mb-2">{screenshotFiles.length} screenshot(s) selected</p>
+                            <div className="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto">
+                              {screenshotPreviews.map((preview, i) => (
+                                <div key={i} className="relative group">
+                                  <img src={preview} alt={`Screenshot ${i + 1}`} className="rounded border h-20 w-full object-cover" />
+                                  <button
+                                    onClick={() => removeScreenshot(i)}
+                                    className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <DialogFooter>
+                          <Button onClick={processReengageConversation} disabled={screenshotFiles.length === 0}>
+                            <Sparkles className="h-4 w-4 mr-2" />Analyze & Get Re-engage Message
+                          </Button>
+                        </DialogFooter>
+                      </>
+                    )}
+
+                    {uploadStep === "processing" && (
+                      <div className="text-center py-8 space-y-4">
+                        <Loader2 className="h-10 w-10 animate-spin mx-auto text-primary" />
+                        <div>
+                          <p className="font-medium">Analyzing conversation...</p>
+                          <p className="text-sm text-muted-foreground">Finding the best way to re-engage this prospect</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {uploadStep === "done" && (
+                      <div className="text-center py-8 space-y-4">
+                        <Check className="h-10 w-10 mx-auto text-green-500" />
+                        <div>
+                          <p className="font-medium">Re-engagement strategy ready!</p>
+                          <p className="text-sm text-muted-foreground">Redirecting to your chat...</p>
                         </div>
                       </div>
                     )}
@@ -767,15 +993,34 @@ export default function Chats() {
                   e.target.value = "";
                 }}
               />
+              {/* Mode toggle */}
+              <div className="flex items-center gap-2 mb-2">
+                <Button
+                  variant={!isRefineMode ? "default" : "outline"}
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => { setIsRefineMode(false); setSuggestions([]); }}
+                >
+                  <Send className="h-3 w-3 mr-1" />Prospect's Message
+                </Button>
+                <Button
+                  variant={isRefineMode ? "default" : "outline"}
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => { setIsRefineMode(true); setSuggestions([]); }}
+                >
+                  <PenLine className="h-3 w-3 mr-1" />Refine My Draft
+                </Button>
+              </div>
               <div className="flex gap-2">
                 <div className="flex-1 relative">
                   <Textarea
                     value={messageInput}
                     onChange={(e) => setMessageInput(e.target.value)}
-                    placeholder={isOcrProcessing ? "Extracting text from screenshot..." : "Paste the prospect's message here..."}
+                    placeholder={isOcrProcessing ? "Extracting text from screenshot..." : isRefineMode ? "Paste your draft message here and we'll perfect it..." : "Paste the prospect's message here..."}
                     className="min-h-[80px] pr-12"
                     disabled={isOcrProcessing}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendInbound(); } }}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); isRefineMode ? handleRefineDraft() : handleSendInbound(); } }}
                   />
                   <Button
                     variant="ghost"
@@ -788,12 +1033,22 @@ export default function Chats() {
                     {isOcrProcessing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4 text-muted-foreground" />}
                   </Button>
                 </div>
-                <Button onClick={handleSendInbound} disabled={!messageInput.trim() || isAnalyzing} className="self-end">
-                  {isAnalyzing ? <Sparkles className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                </Button>
+                {isRefineMode ? (
+                  <Button onClick={handleRefineDraft} disabled={!messageInput.trim() || isRefining} className="self-end">
+                    {isRefining ? <Loader2 className="h-4 w-4 animate-spin" /> : <><PenLine className="h-4 w-4 mr-1" />Refine</>}
+                  </Button>
+                ) : (
+                  <Button onClick={handleSendInbound} disabled={!messageInput.trim() || isAnalyzing} className="self-end">
+                    {isAnalyzing ? <Sparkles className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  </Button>
+                )}
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                <Camera className="h-3 w-3 inline mr-1" />Upload a screenshot to extract text via OCR
+                {isRefineMode ? (
+                  <><PenLine className="h-3 w-3 inline mr-1" />Paste your message and we'll polish it before you send</>
+                ) : (
+                  <><Camera className="h-3 w-3 inline mr-1" />Upload a screenshot to extract text via OCR</>
+                )}
               </p>
             </div>
           </>
