@@ -65,8 +65,7 @@ export default function Settings() {
               YouTube Transcript API Key
             </CardTitle>
             <CardDescription>
-              Used for extracting YouTube video transcripts automatically. You get 100 free credits.
-              When credits run out, the app will ask you to paste transcripts manually or add a new key.
+              Used for extracting YouTube video transcripts automatically via TranscriptAPI.com.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -74,10 +73,10 @@ export default function Settings() {
               <AlertTriangle className="h-4 w-4" />
               <AlertDescription>
                 Get your API key from{" "}
-                <a href="https://supadata.ai" target="_blank" rel="noopener noreferrer" className="text-primary underline">
-                  supadata.ai
+                <a href="https://transcriptapi.com" target="_blank" rel="noopener noreferrer" className="text-primary underline">
+                  transcriptapi.com
                 </a>
-                . Free tier includes 100 credits. Each transcript uses 1-2 credits.
+                . Sign up for free to get started.
               </AlertDescription>
             </Alert>
 
