@@ -106,6 +106,27 @@ export default function Chats() {
         .select()
         .single();
       if (error) throw error;
+
+      // If Instagram URL provided, auto-fetch profile details via Apify
+      if (newProspectIg) {
+        try {
+          const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
+            body: { username: newProspectIg },
+          });
+          if (igData && !igData.error) {
+            const interests = [
+              igData.businessCategory,
+              igData.biography?.substring(0, 200),
+            ].filter(Boolean).join(" | ");
+            await supabase.from("prospects").update({
+              detected_interests: interests || null,
+            }).eq("id", data.id);
+          }
+        } catch (e) {
+          console.error("Instagram auto-fetch error:", e);
+        }
+      }
+
       return data;
     },
     onSuccess: (data) => {

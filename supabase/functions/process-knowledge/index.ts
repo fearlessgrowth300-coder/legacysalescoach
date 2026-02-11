@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
 serve(async (req) => {
@@ -86,43 +86,27 @@ serve(async (req) => {
       const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
 
       if (isInstagram) {
-        // Instagram URL - scrape page content
+        // Instagram URL - use Apify via fetch-instagram function
         try {
-          const res = await fetch(url, {
+          const supabaseFnUrl = `${supabaseUrl}/functions/v1/fetch-instagram`;
+          const igRes = await fetch(supabaseFnUrl, {
+            method: "POST",
             headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-              "Accept": "text/html,application/xhtml+xml",
-              "Accept-Language": "en-US,en;q=0.9",
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${supabaseKey}`,
             },
-            signal: AbortSignal.timeout(15000),
+            body: JSON.stringify({ username: url }),
+            signal: AbortSignal.timeout(90000),
           });
-          if (res.ok) {
-            const html = await res.text();
-            // Extract meta content, alt text, and any JSON-LD data
-            const metaDesc = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]*)"/)?.[1] || "";
-            const metaTitle = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/)?.[1] || "";
-            const altTexts = [...html.matchAll(/alt="([^"]{10,})"/g)].map(m => m[1]).join("\n");
-            const jsonLdMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
-            let jsonLdText = "";
-            if (jsonLdMatch) {
-              try {
-                const ld = JSON.parse(jsonLdMatch[1]);
-                jsonLdText = JSON.stringify(ld, null, 2).substring(0, 3000);
-              } catch { /* ignore */ }
+          if (igRes.ok) {
+            const igData = await igRes.json();
+            content = igData.summary || "";
+            if (!content && igData.biography) {
+              content = `Instagram Profile: @${igData.username}\nBio: ${igData.biography}\nFollowers: ${igData.followersCount}`;
             }
-            // Strip HTML for remaining text
-            const bodyText = html
-              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-              .replace(/<[^>]+>/g, " ")
-              .replace(/\s+/g, " ")
-              .trim()
-              .substring(0, 5000);
-
-            content = `Instagram Content from: ${url}\n\nTitle: ${metaTitle}\nDescription: ${metaDesc}\n\nImage descriptions:\n${altTexts}\n\nStructured data:\n${jsonLdText}\n\nPage text:\n${bodyText}`.substring(0, 15000);
           }
         } catch (e) {
-          console.error("Instagram fetch error:", e);
+          console.error("Instagram Apify fetch error:", e);
         }
 
         if (!content || content.length < 50) {
