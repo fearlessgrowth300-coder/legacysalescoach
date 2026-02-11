@@ -383,7 +383,7 @@ export default function KnowledgeBase() {
             <DialogTrigger asChild>
               <Button><Plus className="h-4 w-4 mr-2" />Add URL</Button>
             </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Add URL Content</DialogTitle>
                 <DialogDescription>Add a YouTube video, Instagram post, article, or webpage to your knowledge base</DialogDescription>
@@ -520,7 +520,7 @@ export default function KnowledgeBase() {
                   {/* Thumbnail Preview */}
                   {urlPreview?.thumbnail && (
                     <div className="rounded-lg overflow-hidden border">
-                      <img src={urlPreview.thumbnail} alt="Preview" className="w-full h-48 object-cover" />
+                      <img src={urlPreview.thumbnail} alt="Preview" className="w-full h-32 object-cover" />
                     </div>
                   )}
 
@@ -539,7 +539,7 @@ export default function KnowledgeBase() {
                       <Badge variant="outline" className="text-xs">Review before learning</Badge>
                     </Label>
                     {urlPreview?.hasTranscript ? (
-                      <ScrollArea className="h-48 rounded-md border p-3 bg-muted/30">
+                      <ScrollArea className="h-32 rounded-md border p-3 bg-muted/30">
                         <p className="text-xs whitespace-pre-wrap font-mono">{urlPreview.transcript}</p>
                       </ScrollArea>
                     ) : (
@@ -552,7 +552,7 @@ export default function KnowledgeBase() {
                           value={manualTranscript}
                           onChange={(e) => setManualTranscript(e.target.value)}
                           placeholder="Paste the video/post transcript or caption here..."
-                          rows={6}
+                          rows={4}
                           className="text-xs font-mono"
                         />
                       </div>
