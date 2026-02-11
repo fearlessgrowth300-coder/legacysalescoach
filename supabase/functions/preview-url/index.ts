@@ -40,94 +40,58 @@ async function fetchYouTubeData(videoId: string) {
     }
   } catch (e) { console.error("YouTube oembed error:", e); }
 
-  // 2. Get transcript via innertube API
+  // 2. Get transcript - try multiple methods
   try {
-    // Try WEB_EMBEDDED_PLAYER client (works better from server IPs)
-    const playerRes = await fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
-      method: "POST",
+    // Method 1: Fetch watch page and extract captions URL
+    console.log("Trying watch page method for transcript...");
+    const watchRes = await fetch(`https://www.youtube.com/watch?v=${videoId}&hl=en`, {
       headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "com.google.android.youtube/19.02.39 (Linux; U; Android 14) gzip",
-        "X-YouTube-Client-Name": "3",
-        "X-YouTube-Client-Version": "2.20240101.00.00",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Cookie": "CONSENT=PENDING+987",
+        "Accept-Language": "en-US,en;q=0.9",
       },
-      body: JSON.stringify({
-        context: {
-          client: {
-            clientName: "ANDROID",
-            clientVersion: "19.02.39",
-            androidSdkVersion: 34,
-            hl: "en",
-            gl: "US",
-          },
-        },
-        videoId,
-      }),
       signal: AbortSignal.timeout(15000),
     });
 
-    console.log("Innertube player status:", playerRes.status);
-
-    if (playerRes.ok) {
-      const playerData = await playerRes.json();
-      const captionTracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      console.log("Caption tracks found:", captionTracks?.length || 0);
+    if (watchRes.ok) {
+      const html = await watchRes.text();
       
-      if (captionTracks && captionTracks.length > 0) {
-        const englishTrack = captionTracks.find((t: any) => 
-          t.languageCode === "en" || t.languageCode?.startsWith("en")
-        );
-        const track = englishTrack || captionTracks[0];
+      // Try to find captions URL in the page data
+      const captionUrls = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/g);
+      if (captionUrls && captionUrls.length > 0) {
+        // Get the first (usually English) caption URL
+        const captionUrl = captionUrls[0]
+          .replace(/"baseUrl":"/, "")
+          .replace(/"$/, "")
+          .replace(/\\u0026/g, "&");
         
-        if (track?.baseUrl) {
-          console.log("Fetching captions for lang:", track.languageCode);
-          const captionRes = await fetch(track.baseUrl, { signal: AbortSignal.timeout(10000) });
-          if (captionRes.ok) {
-            const captionXml = await captionRes.text();
-            transcript = captionXml
-              .replace(/<[^>]+>/g, " ")
-              .replace(/&amp;/g, "&")
-              .replace(/&lt;/g, "<")
-              .replace(/&gt;/g, ">")
-              .replace(/&#39;/g, "'")
-              .replace(/&quot;/g, '"')
-              .replace(/\s+/g, " ")
-              .trim();
-            console.log("Transcript length:", transcript.length);
-          }
+        console.log("Found caption URL, fetching...");
+        const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
+        if (captionRes.ok) {
+          const captionXml = await captionRes.text();
+          transcript = captionXml
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+            .replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+            .replace(/\s+/g, " ").trim();
+          console.log("Watch page transcript length:", transcript.length);
         }
-      } else {
-        // Try fallback: fetch watch page with consent cookie
-        console.log("No innertube captions, trying watch page fallback");
-        const watchRes = await fetch(`https://www.youtube.com/watch?v=${videoId}&hl=en`, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Cookie": "CONSENT=YES+cb.20210328-17-p0.en+FX+111",
-            "Accept-Language": "en-US,en;q=0.9",
-          },
-          signal: AbortSignal.timeout(15000),
-        });
-        if (watchRes.ok) {
-          const html = await watchRes.text();
-          const baseUrlMatch = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/);
-          if (baseUrlMatch) {
-            const captionUrl = baseUrlMatch[1].replace(/\\u0026/g, "&");
-            const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
-            if (captionRes.ok) {
-              const captionXml = await captionRes.text();
-              transcript = captionXml
-                .replace(/<[^>]+>/g, " ")
-                .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-                .replace(/&#39;/g, "'").replace(/&quot;/g, '"')
-                .replace(/\s+/g, " ").trim();
-              console.log("Fallback transcript length:", transcript.length);
-            }
+      }
+      
+      // If no captions found, try extracting description as fallback
+      if (!transcript || transcript.length < 50) {
+        const descMatch = html.match(/"shortDescription":"((?:[^"\\]|\\.)*)"/);
+        if (descMatch) {
+          const desc = descMatch[1]
+            .replace(/\\n/g, "\n")
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, "\\");
+          if (desc.length > 50) {
+            transcript = `[Video Description]\n${desc}`;
+            console.log("Using video description as fallback, length:", transcript.length);
           }
         }
       }
-    } else {
-      const errText = await playerRes.text();
-      console.error("Innertube error:", playerRes.status, errText.substring(0, 500));
     }
   } catch (e) { console.error("YouTube transcript error:", e); }
 

@@ -32,16 +32,27 @@ export default function SignUp() {
       sessionStorage.setItem("signup_otp", otp);
       sessionStorage.setItem("signup_otp_time", Date.now().toString());
 
-      const { data: sendData, error: sendError } = await supabase.functions.invoke("send-otp", {
+      const res = await supabase.functions.invoke("send-otp", {
         body: { email, otp, type: "signup" },
       });
-      if (sendError) throw sendError;
-      if (sendData?.error) throw new Error(sendData.error);
+      
+      // Handle both edge function errors and API errors
+      if (res.error) {
+        const msg = typeof res.error === 'object' && 'message' in res.error ? res.error.message : String(res.error);
+        throw new Error(msg);
+      }
+      if (res.data?.error) throw new Error(res.data.error);
 
       toast.success("A verification code has been sent to your email!");
       setShowOtp(true);
     } catch (error: any) {
-      toast.error(error.message || "Failed to send verification code");
+      console.error("Send OTP error:", error);
+      const msg = error.message || "Failed to send verification code";
+      if (msg.includes("verify a domain") || msg.includes("testing emails")) {
+        toast.error("Email delivery requires domain verification. Please contact the admin or use a verified email.");
+      } else {
+        toast.error(msg);
+      }
     } finally {
       setIsLoading(false);
     }

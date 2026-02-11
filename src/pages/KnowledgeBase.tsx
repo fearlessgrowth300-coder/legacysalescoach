@@ -51,6 +51,7 @@ export default function KnowledgeBase() {
   const [urlStep, setUrlStep] = useState<"input" | "preview" | "confirm">("input");
   const [urlPreview, setUrlPreview] = useState<UrlPreview | null>(null);
   const [isFetchingPreview, setIsFetchingPreview] = useState(false);
+  const [manualTranscript, setManualTranscript] = useState("");
 
   const { data: items } = useQuery({
     queryKey: ["kb-items"],
@@ -79,6 +80,7 @@ export default function KnowledgeBase() {
     setUrlTitle("");
     setUrlValue("");
     setIsFetchingPreview(false);
+    setManualTranscript("");
   };
 
   // Fetch URL preview (thumbnail + transcript)
@@ -118,8 +120,11 @@ export default function KnowledgeBase() {
       }).select().single();
       if (error) throw error;
 
+      // Pass manual transcript if auto-extraction failed
+      const transcript = urlPreview?.hasTranscript ? undefined : manualTranscript.trim() || undefined;
+
       supabase.functions.invoke("process-knowledge", {
-        body: { itemId: data.id, url: urlValue, type: "url" },
+        body: { itemId: data.id, url: urlValue, type: "url", manualTranscript: transcript },
       }).then(() => {
         queryClient.invalidateQueries({ queryKey: ["kb-items"] });
         queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
@@ -466,15 +471,31 @@ export default function KnowledgeBase() {
                     </div>
                   )}
 
-                  {/* Transcript Preview */}
+                  {/* Transcript Preview / Manual Paste */}
                   <div>
                     <Label className="flex items-center gap-2 mb-2">
                       <FileText className="h-4 w-4" />Extracted Content
                       <Badge variant="outline" className="text-xs">Review before learning</Badge>
                     </Label>
-                    <ScrollArea className="h-48 rounded-md border p-3 bg-muted/30">
-                      <p className="text-xs whitespace-pre-wrap font-mono">{urlPreview?.transcript || "No content extracted"}</p>
-                    </ScrollArea>
+                    {urlPreview?.hasTranscript ? (
+                      <ScrollArea className="h-48 rounded-md border p-3 bg-muted/30">
+                        <p className="text-xs whitespace-pre-wrap font-mono">{urlPreview.transcript}</p>
+                      </ScrollArea>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-xs text-amber-500 flex items-center gap-1">
+                          <AlertCircle className="h-3 w-3" />
+                          Could not auto-extract transcript. Paste it manually below:
+                        </p>
+                        <Textarea
+                          value={manualTranscript}
+                          onChange={(e) => setManualTranscript(e.target.value)}
+                          placeholder="Paste the video/post transcript or caption here..."
+                          rows={6}
+                          className="text-xs font-mono"
+                        />
+                      </div>
+                    )}
                     <p className="text-xs text-muted-foreground mt-1">
                       ✓ This is the content the AI will learn from. Confirm it looks correct.
                     </p>
@@ -496,7 +517,7 @@ export default function KnowledgeBase() {
                     </Select>
                   </div>
                   <DialogFooter>
-                    <Button onClick={() => addUrl.mutate()} disabled={!urlTitle.trim() || addUrl.isPending}>
+                    <Button onClick={() => addUrl.mutate()} disabled={!urlTitle.trim() || addUrl.isPending || (!urlPreview?.hasTranscript && !manualTranscript.trim())}>
                       {addUrl.isPending ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Processing...</> : <><CheckCircle2 className="h-4 w-4 mr-2" />Confirm & Learn</>}
                     </Button>
                   </DialogFooter>
