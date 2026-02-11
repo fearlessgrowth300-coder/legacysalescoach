@@ -28,7 +28,7 @@ serve(async (req) => {
       : "Welcome to Sales Reply Coach! Use the code below to verify your email:";
 
     const { data, error } = await resend.emails.send({
-      from: "Sales Reply Coach <onboarding@resend.dev>",
+      from: "Sales Reply Coach <noreply@ordersstan.store>",
       to: [email],
       subject,
       html: `
