@@ -165,42 +165,24 @@ export default function KnowledgeBase() {
       }).select().single();
       if (error) throw error;
 
-      setPdfProgress({ step: "Extracting text from PDF...", percent: 40 });
-      
-      // Track progress while edge function processes
-      const progressInterval = setInterval(() => {
-        setPdfProgress(prev => {
-          if (!prev || prev.percent >= 90) return prev;
-          const newPercent = Math.min(prev.percent + 5, 90);
-          const steps = [
-            { at: 45, label: "Reading PDF pages..." },
-            { at: 55, label: "Analyzing content with AI..." },
-            { at: 70, label: "Extracting sales insights..." },
-            { at: 80, label: "Categorizing knowledge chunks..." },
-            { at: 85, label: "Saving to knowledge base..." },
-          ];
-          const currentStep = steps.filter(s => s.at <= newPercent).pop();
-          return { step: currentStep?.label || prev.step, percent: newPercent };
-        });
-      }, 2000);
+      setPdfProgress({ step: "Processing PDF in background...", percent: 50 });
 
-      try {
-        const result = await supabase.functions.invoke("process-knowledge", {
-          body: { itemId: data.id, type: "pdf", filePath },
-        });
-        clearInterval(progressInterval);
-        
+      // Fire edge function in background — don't await it (avoids timeout on large PDFs)
+      supabase.functions.invoke("process-knowledge", {
+        body: { itemId: data.id, type: "pdf", filePath },
+      }).then((result) => {
         if (result.error || result.data?.error) {
-          throw new Error(result.data?.error || result.error?.message || "Processing failed");
+          console.error("PDF processing error:", result.data?.error || result.error?.message);
         }
-        
-        setPdfProgress({ step: "Complete!", percent: 100 });
         queryClient.invalidateQueries({ queryKey: ["kb-items"] });
         queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
-      } catch (e) {
-        clearInterval(progressInterval);
-        throw e;
-      }
+      }).catch((e) => {
+        console.error("PDF edge function error:", e);
+        queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+      });
+
+      setPdfProgress({ step: "Queued for processing!", percent: 100 });
+      startPolling();
 
       return data;
     },
