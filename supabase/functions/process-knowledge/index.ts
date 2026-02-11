@@ -86,27 +86,61 @@ serve(async (req) => {
       const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
 
       if (isInstagram) {
-        // Instagram URL - use Apify via fetch-instagram function
-        try {
-          const supabaseFnUrl = `${supabaseUrl}/functions/v1/fetch-instagram`;
-          const igRes = await fetch(supabaseFnUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${supabaseKey}`,
-            },
-            body: JSON.stringify({ username: url }),
-            signal: AbortSignal.timeout(90000),
-          });
-          if (igRes.ok) {
-            const igData = await igRes.json();
-            content = igData.summary || "";
-            if (!content && igData.biography) {
-              content = `Instagram Profile: @${igData.username}\nBio: ${igData.biography}\nFollowers: ${igData.followersCount}`;
+        const isPost = url.match(/instagram\.com\/(?:p|reel|tv)\//);
+        const APIFY_API_KEY = Deno.env.get("APIFY_API_KEY");
+
+        if (isPost && APIFY_API_KEY) {
+          // Instagram post/reel - use Apify Instagram Post Scraper
+          try {
+            const actorRes = await fetch(
+              `https://api.apify.com/v2/acts/apify~instagram-post-scraper/run-sync-get-dataset-items?token=${APIFY_API_KEY}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ directUrls: [url], resultsLimit: 1 }),
+                signal: AbortSignal.timeout(60000),
+              }
+            );
+            if (actorRes.ok) {
+              const results = await actorRes.json();
+              const post = Array.isArray(results) && results.length > 0 ? results[0] : null;
+              if (post) {
+                content = [
+                  `Instagram ${post.type === "Video" ? "Reel/Video" : "Post"} by @${post.ownerUsername || "unknown"}`,
+                  `Caption: ${post.caption || "No caption"}`,
+                  `Likes: ${post.likesCount || 0} | Comments: ${post.commentsCount || 0}`,
+                  post.type === "Video" ? `Video views: ${post.videoViewCount || 0}` : "",
+                  // Include top comments for context
+                  ...(post.latestComments || []).slice(0, 10).map((c: any) => `Comment by @${c.ownerUsername}: ${c.text}`),
+                ].filter(Boolean).join("\n");
+              }
             }
+          } catch (e) {
+            console.error("Apify post scraper error:", e);
           }
-        } catch (e) {
-          console.error("Instagram Apify fetch error:", e);
+        } else {
+          // Instagram profile URL - use fetch-instagram function
+          try {
+            const supabaseFnUrl = `${supabaseUrl}/functions/v1/fetch-instagram`;
+            const igRes = await fetch(supabaseFnUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${supabaseKey}`,
+              },
+              body: JSON.stringify({ username: url }),
+              signal: AbortSignal.timeout(90000),
+            });
+            if (igRes.ok) {
+              const igData = await igRes.json();
+              content = igData.summary || "";
+              if (!content && igData.biography) {
+                content = `Instagram Profile: @${igData.username}\nBio: ${igData.biography}\nFollowers: ${igData.followersCount}`;
+              }
+            }
+          } catch (e) {
+            console.error("Instagram Apify fetch error:", e);
+          }
         }
 
         if (!content || content.length < 50) {
