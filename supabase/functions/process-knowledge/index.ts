@@ -52,10 +52,10 @@ serve(async (req) => {
         const fileSizeMB = fileSizeKB / 1024;
         console.log(`PDF file size: ${fileSizeMB.toFixed(2)} MB`);
 
-        // For files over 10MB, reject gracefully
-        if (arrayBuffer.byteLength > 10 * 1024 * 1024) {
+        // For files over 25MB, reject gracefully
+        if (arrayBuffer.byteLength > 25 * 1024 * 1024) {
           await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-          return new Response(JSON.stringify({ error: "PDF too large. Max 10MB. Please split into smaller files." }), {
+          return new Response(JSON.stringify({ error: "PDF too large. Max 25MB. Please split into smaller files." }), {
             status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
