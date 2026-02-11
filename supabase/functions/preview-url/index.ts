@@ -40,49 +40,37 @@ async function fetchYouTubeData(videoId: string) {
     }
   } catch (e) { console.error("YouTube oembed error:", e); }
 
-  // 2. Try Supadata API first (most reliable)
+  // 2. Try TranscriptAPI.com (primary method)
   const SUPADATA_API_KEY = Deno.env.get("SUPADATA_API_KEY");
   if (SUPADATA_API_KEY) {
     try {
-      console.log("Trying Supadata API for transcript...", "key length:", SUPADATA_API_KEY.length);
-      const encodedUrl = encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`);
+      console.log("Trying TranscriptAPI.com for transcript...", "key length:", SUPADATA_API_KEY.length);
       const sdRes = await fetch(
-        `https://api.supadata.ai/v1/transcript?url=${encodedUrl}&text=true`,
+        `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`,
         {
-          headers: { "x-api-key": SUPADATA_API_KEY },
+          headers: { "Authorization": `Bearer ${SUPADATA_API_KEY}` },
           signal: AbortSignal.timeout(30000),
         }
       );
-      console.log("Supadata status:", sdRes.status);
+      console.log("TranscriptAPI status:", sdRes.status);
       if (sdRes.ok) {
         const sdData = await sdRes.json();
-        if (sdData.content && typeof sdData.content === "string" && sdData.content.length > 50) {
+        // Handle text response
+        if (sdData.transcript && typeof sdData.transcript === "string" && sdData.transcript.length > 50) {
+          transcript = sdData.transcript;
+        } else if (sdData.text && typeof sdData.text === "string" && sdData.text.length > 50) {
+          transcript = sdData.text;
+        } else if (Array.isArray(sdData.transcript)) {
+          transcript = sdData.transcript.map((c: any) => c.text || c.content || "").join(" ");
+        } else if (sdData.content && typeof sdData.content === "string" && sdData.content.length > 50) {
           transcript = sdData.content;
-          console.log("Supadata transcript length:", transcript.length);
-        } else if (Array.isArray(sdData.content)) {
-          transcript = sdData.content.map((c: any) => c.text).join(" ");
-          console.log("Supadata transcript (array) length:", transcript.length);
         }
-      } else if (sdRes.status === 202) {
-        // Async processing - try polling once
-        const jobData = await sdRes.json();
-        if (jobData.jobId) {
-          console.log("Supadata async job:", jobData.jobId);
-          await new Promise(r => setTimeout(r, 5000));
-          const pollRes = await fetch(`https://api.supadata.ai/v1/transcript/${jobData.jobId}`, {
-            headers: { "x-api-key": SUPADATA_API_KEY },
-            signal: AbortSignal.timeout(15000),
-          });
-          if (pollRes.ok) {
-            const pollData = await pollRes.json();
-            if (pollData.content && typeof pollData.content === "string") transcript = pollData.content;
-          }
-        }
+        console.log("TranscriptAPI transcript length:", transcript.length);
       } else {
         const errBody = await sdRes.text();
-        console.warn("Supadata error:", sdRes.status, errBody);
+        console.warn("TranscriptAPI error:", sdRes.status, errBody);
       }
-    } catch (e) { console.error("Supadata error:", e); }
+    } catch (e) { console.error("TranscriptAPI error:", e); }
   }
 
   // 3. Fallback: watch page scraping
