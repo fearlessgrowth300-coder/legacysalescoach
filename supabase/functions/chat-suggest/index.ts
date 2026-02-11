@@ -116,7 +116,7 @@ serve(async (req) => {
   }
 
   try {
-    const { prospectId, message, threadType } = await req.json();
+    const { prospectId, message, threadType, mode } = await req.json();
     
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -252,11 +252,24 @@ ${knowledgeContext}
 
 PROSPECT: ${prospect.name}
 STAGE: ${prospect.conversation_stage}
+${prospect.detected_interests ? `PROSPECT INTERESTS/BIO: ${prospect.detected_interests}` : ""}
 
 PREVIOUS CONVERSATION:
 ${conversationHistory}
 
-TASK: The prospect just sent the following message. Generate 3 reply suggestions.
+${mode === "first_message" ? `TASK: Based on the prospect's Instagram profile data below, generate 3 compelling OPENING MESSAGES to send as a cold DM. These must be:
+- Personalized to their profile, interests, and content
+- Designed to TRIGGER A REPLY (not just get seen)
+- Natural, not salesy — like a real person who found their content interesting
+- Reference something specific about them (a post, their bio, their niche)
+The goal is to start a genuine conversation that leads to trust-building.` :
+mode === "continue" ? `TASK: Based on the conversation screenshots below, analyze the full conversation context. Understand:
+- What has been discussed so far
+- The prospect's tone and engagement level
+- Where the conversation left off
+Then generate 3 reply suggestions to CONTINUE the conversation naturally from where it stopped.` :
+`TASK: The prospect just sent the following message. Generate 3 reply suggestions.`}
+
 Also detect which questioning pattern this conversation is currently in (situation, problem, implication, need_payoff, emotional_trigger, closing, or general).
 Return valid JSON with this structure:
 {
