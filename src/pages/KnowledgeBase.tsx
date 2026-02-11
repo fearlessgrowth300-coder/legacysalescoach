@@ -52,6 +52,7 @@ export default function KnowledgeBase() {
   const [urlPreview, setUrlPreview] = useState<UrlPreview | null>(null);
   const [isFetchingPreview, setIsFetchingPreview] = useState(false);
   const [manualTranscript, setManualTranscript] = useState("");
+  const [urlSourceType, setUrlSourceType] = useState<"auto" | "youtube" | "instagram" | "web">("auto");
 
   const { data: items } = useQuery({
     queryKey: ["kb-items"],
@@ -81,6 +82,7 @@ export default function KnowledgeBase() {
     setUrlValue("");
     setIsFetchingPreview(false);
     setManualTranscript("");
+    setUrlSourceType("auto");
   };
 
   // Fetch URL preview (thumbnail + transcript)
@@ -391,14 +393,73 @@ export default function KnowledgeBase() {
               {urlStep === "input" && (
                 <div className="space-y-4 py-4">
                   <div>
+                    <Label>Source Type</Label>
+                    <div className="flex gap-2 mt-1">
+                      {[
+                        { value: "auto" as const, icon: Globe, label: "Auto Detect" },
+                        { value: "youtube" as const, icon: Youtube, label: "YouTube" },
+                        { value: "instagram" as const, icon: Instagram, label: "Instagram" },
+                      ].map((opt) => (
+                        <Button
+                          key={opt.value}
+                          type="button"
+                          variant={urlSourceType === opt.value ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setUrlSourceType(opt.value)}
+                          className="flex-1"
+                        >
+                          <opt.icon className="h-4 w-4 mr-1" />
+                          {opt.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
                     <Label>URL *</Label>
                     <Input value={urlValue} onChange={(e) => setUrlValue(e.target.value)}
-                      placeholder="https://youtube.com/watch?v=... or https://instagram.com/p/..." />
+                      placeholder={urlSourceType === "instagram" ? "https://instagram.com/p/... or https://instagram.com/reel/..." : "https://youtube.com/watch?v=..."} />
                   </div>
+
+                  {/* Instagram: always manual transcript */}
+                  {urlSourceType === "instagram" && (
+                    <div className="space-y-2">
+                      <Label>Title *</Label>
+                      <Input value={urlTitle} onChange={(e) => setUrlTitle(e.target.value)} placeholder="e.g., Prospect Reel Caption" />
+                      <Label className="flex items-center gap-2">
+                        <Instagram className="h-4 w-4 text-pink-500" />
+                        Paste Transcript / Caption *
+                      </Label>
+                      <Textarea
+                        value={manualTranscript}
+                        onChange={(e) => setManualTranscript(e.target.value)}
+                        placeholder="Paste the Instagram reel transcript or post caption here..."
+                        rows={6}
+                        className="text-xs font-mono"
+                      />
+                      <div>
+                        <Label>Brain Mode</Label>
+                        <Select value={brainType} onValueChange={(v: "friend" | "expert" | "both") => setBrainType(v)}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="both"><div className="flex items-center gap-2"><Sparkles className="h-4 w-4" />Both Modes</div></SelectItem>
+                            <SelectItem value="friend"><div className="flex items-center gap-2"><Heart className="h-4 w-4 text-pink-500" />Friend Only</div></SelectItem>
+                            <SelectItem value="expert"><div className="flex items-center gap-2"><Briefcase className="h-4 w-4 text-blue-500" />Expert Only</div></SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  )}
+
                   <DialogFooter>
-                    <Button onClick={fetchPreview} disabled={!urlValue.trim() || isFetchingPreview}>
-                      {isFetchingPreview ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Fetching preview...</> : <><Eye className="h-4 w-4 mr-2" />Preview & Verify</>}
-                    </Button>
+                    {urlSourceType === "instagram" ? (
+                      <Button onClick={() => addUrl.mutate()} disabled={!urlValue.trim() || !urlTitle.trim() || !manualTranscript.trim() || addUrl.isPending}>
+                        {addUrl.isPending ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Processing...</> : <><CheckCircle2 className="h-4 w-4 mr-2" />Add Instagram Content</>}
+                      </Button>
+                    ) : (
+                      <Button onClick={fetchPreview} disabled={!urlValue.trim() || isFetchingPreview}>
+                        {isFetchingPreview ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Fetching preview...</> : <><Eye className="h-4 w-4 mr-2" />Preview & Verify</>}
+                      </Button>
+                    )}
                   </DialogFooter>
                 </div>
               )}

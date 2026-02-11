@@ -40,60 +40,76 @@ async function fetchYouTubeData(videoId: string) {
     }
   } catch (e) { console.error("YouTube oembed error:", e); }
 
-  // 2. Get transcript - try multiple methods
-  try {
-    // Method 1: Fetch watch page and extract captions URL
-    console.log("Trying watch page method for transcript...");
-    const watchRes = await fetch(`https://www.youtube.com/watch?v=${videoId}&hl=en`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Cookie": "CONSENT=PENDING+987",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (watchRes.ok) {
-      const html = await watchRes.text();
-      
-      // Try to find captions URL in the page data
-      const captionUrls = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/g);
-      if (captionUrls && captionUrls.length > 0) {
-        // Get the first (usually English) caption URL
-        const captionUrl = captionUrls[0]
-          .replace(/"baseUrl":"/, "")
-          .replace(/"$/, "")
-          .replace(/\\u0026/g, "&");
-        
-        console.log("Found caption URL, fetching...");
-        const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
-        if (captionRes.ok) {
-          const captionXml = await captionRes.text();
-          transcript = captionXml
-            .replace(/<[^>]+>/g, " ")
-            .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-            .replace(/&#39;/g, "'").replace(/&quot;/g, '"')
-            .replace(/\s+/g, " ").trim();
-          console.log("Watch page transcript length:", transcript.length);
+  // 2. Try Supadata API first (most reliable)
+  const SUPADATA_API_KEY = Deno.env.get("SUPADATA_API_KEY");
+  if (SUPADATA_API_KEY) {
+    try {
+      console.log("Trying Supadata API for transcript...");
+      const sdRes = await fetch(
+        `https://api.supadata.ai/v1/transcript?url=https://www.youtube.com/watch?v=${videoId}&text=true`,
+        {
+          headers: { "x-api-key": SUPADATA_API_KEY },
+          signal: AbortSignal.timeout(30000),
         }
+      );
+      console.log("Supadata status:", sdRes.status);
+      if (sdRes.ok) {
+        const sdData = await sdRes.json();
+        if (sdData.content && typeof sdData.content === "string" && sdData.content.length > 50) {
+          transcript = sdData.content;
+          console.log("Supadata transcript length:", transcript.length);
+        } else if (Array.isArray(sdData.content)) {
+          transcript = sdData.content.map((c: any) => c.text).join(" ");
+          console.log("Supadata transcript (array) length:", transcript.length);
+        }
+      } else if (sdRes.status === 402 || sdRes.status === 429) {
+        console.warn("Supadata credits exhausted or rate limited:", sdRes.status);
+        // Will fall through to watch page method
       }
-      
-      // If no captions found, try extracting description as fallback
-      if (!transcript || transcript.length < 50) {
-        const descMatch = html.match(/"shortDescription":"((?:[^"\\]|\\.)*)"/);
-        if (descMatch) {
-          const desc = descMatch[1]
-            .replace(/\\n/g, "\n")
-            .replace(/\\"/g, '"')
-            .replace(/\\\\/g, "\\");
-          if (desc.length > 50) {
-            transcript = `[Video Description]\n${desc}`;
-            console.log("Using video description as fallback, length:", transcript.length);
+    } catch (e) { console.error("Supadata error:", e); }
+  }
+
+  // 3. Fallback: watch page scraping
+  if (!transcript || transcript.length < 50) {
+    try {
+      console.log("Trying watch page method for transcript...");
+      const watchRes = await fetch(`https://www.youtube.com/watch?v=${videoId}&hl=en`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Cookie": "CONSENT=PENDING+987",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (watchRes.ok) {
+        const html = await watchRes.text();
+        const captionUrls = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/g);
+        if (captionUrls && captionUrls.length > 0) {
+          const captionUrl = captionUrls[0]
+            .replace(/"baseUrl":"/, "")
+            .replace(/"$/, "")
+            .replace(/\\u0026/g, "&");
+          const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
+          if (captionRes.ok) {
+            const captionXml = await captionRes.text();
+            transcript = captionXml
+              .replace(/<[^>]+>/g, " ")
+              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+              .replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+              .replace(/\s+/g, " ").trim();
+          }
+        }
+        if (!transcript || transcript.length < 50) {
+          const descMatch = html.match(/"shortDescription":"((?:[^"\\]|\\.)*)"/);
+          if (descMatch) {
+            const desc = descMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+            if (desc.length > 50) transcript = `[Video Description]\n${desc}`;
           }
         }
       }
-    }
-  } catch (e) { console.error("YouTube transcript error:", e); }
+    } catch (e) { console.error("YouTube transcript error:", e); }
+  }
 
   return { thumbnail, title, transcript: transcript.substring(0, 15000) };
 }
