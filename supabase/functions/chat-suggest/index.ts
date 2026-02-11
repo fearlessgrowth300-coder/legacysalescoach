@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { SALES_PLAYBOOK, FRAMEWORK_DETECTION_PROMPT } from "./sales-playbook.ts";
+import { OBJECTION_HANDLERS, OBJECTION_DETECTION_PROMPT } from "./objection-handlers.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -158,7 +160,6 @@ serve(async (req) => {
       .limit(20);
 
     // ===== TONALITY LEARNING =====
-    // Aggregate detected tones from past messages for this prospect
     const toneHistory = (history || [])
       .filter((m: any) => m.detected_tone && m.detected_tone !== "neutral")
       .map((m: any) => m.detected_tone);
@@ -173,9 +174,7 @@ serve(async (req) => {
       .map(([tone, count]) => `${tone} (${count}x)`);
 
     const tonalitySection = dominantTones.length > 0
-      ? `\nTONALITY ANALYSIS (from past messages):
-The prospect's detected tone patterns: ${dominantTones.join(", ")}.
-ADAPT your communication style to mirror and complement these tones. If they're enthusiastic, match their energy. If they're skeptical, be more grounded and evidence-based. If they're anxious, be reassuring and steady.`
+      ? `\nTONALITY ANALYSIS (from past messages):\nThe prospect's detected tone patterns: ${dominantTones.join(", ")}.\nADAPT your communication style to mirror and complement these tones.`
       : "";
 
     // ===== WINNING PATTERNS FROM PAST CONVERSATIONS =====
@@ -204,10 +203,7 @@ ADAPT your communication style to mirror and complement these tones. If they're 
         .map((a: any) => a.key_insights)
         .slice(0, 3);
 
-      winningPatternsSection = `\nPROVEN WINNING PATTERNS (from past successful conversations):
-Top patterns: ${topPatterns.join(", ")}
-${insights.length > 0 ? `Key insights from wins:\n${insights.map((i: string) => `- ${i}`).join("\n")}` : ""}
-Use these proven approaches when appropriate for THIS prospect.`;
+      winningPatternsSection = `\nPROVEN WINNING PATTERNS (from past successful conversations):\nTop patterns: ${topPatterns.join(", ")}\n${insights.length > 0 ? `Key insights from wins:\n${insights.map((i: string) => `- ${i}`).join("\n")}` : ""}\nUse these proven approaches when appropriate for THIS prospect.`;
     }
 
     // Get relevant knowledge chunks
@@ -232,32 +228,10 @@ Use these proven approaches when appropriate for THIS prospect.`;
       throw new Error("LOVABLE_API_KEY is not configured");
     }
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          {
-            role: "system",
-            content: `${systemPrompt}
-${tonalitySection}
-${winningPatternsSection}
-
-YOUR KNOWLEDGE BASE:
-${knowledgeContext}
-
-PROSPECT: ${prospect.name}
-STAGE: ${prospect.conversation_stage}
-${prospect.detected_interests ? `PROSPECT INTERESTS/BIO: ${prospect.detected_interests}` : ""}
-
-PREVIOUS CONVERSATION:
-${conversationHistory}
-
-${mode === "first_message" ? `TASK: You have the prospect's full Instagram profile data below. Generate 3 IRRESISTIBLE opening DMs that will GUARANTEE a reply.
+    // Build task instructions based on mode
+    let taskInstructions = "";
+    if (mode === "first_message") {
+      taskInstructions = `TASK: You have the prospect's full Instagram profile data below. Generate 3 IRRESISTIBLE opening DMs that will GUARANTEE a reply.
 
 OPENING MESSAGE PSYCHOLOGY — use these proven techniques:
 1. **Pattern Interrupt**: Say something unexpected that breaks the scroll. NOT "Hey, love your page!" — everyone says that.
@@ -278,27 +252,71 @@ RULES:
 TYPE LABELS:
 - "primary" = Highest reply probability — uses strongest psychological hook
 - "alternative" = Different angle — appeals to different motivation  
-- "softer" = Low-pressure curiosity — for prospects who might be guarded` :
-mode === "continue" ? `TASK: Based on the conversation screenshots below, analyze the full conversation context. Understand:
+- "softer" = Low-pressure curiosity — for prospects who might be guarded`;
+    } else if (mode === "continue") {
+      taskInstructions = `TASK: Based on the conversation screenshots below, analyze the full conversation context. Understand:
 - What has been discussed so far
 - The prospect's tone and engagement level
 - Where the conversation left off
-Then generate 3 reply suggestions to CONTINUE the conversation naturally from where it stopped.` :
-`TASK: The prospect just sent the following message. Generate 3 reply suggestions.`}
+Then generate 3 reply suggestions to CONTINUE the conversation naturally from where it stopped.`;
+    } else {
+      taskInstructions = `TASK: The prospect just sent the following message. Generate 3 reply suggestions.`;
+    }
 
-Also detect which questioning pattern this conversation is currently in (situation, problem, implication, need_payoff, emotional_trigger, closing, or general).
-Return valid JSON with this structure:
+    const jsonFormat = `
+Also detect:
+1. Questioning pattern (situation, problem, implication, need_payoff, emotional_trigger, closing, general)
+2. Any objection detected — identify the category and handler technique you applied
+3. Which sales framework(s) you used in each suggestion
+
+Return valid JSON:
 {
   "suggestions": [
-    {"id": 1, "type": "primary", "text": "...", "whyThisWorks": "..."},
-    {"id": 2, "type": "alternative", "text": "...", "whyThisWorks": "..."},
-    {"id": 3, "type": "softer", "text": "...", "whyThisWorks": "..."}
+    {"id": 1, "type": "primary", "text": "...", "whyThisWorks": "...", "frameworkUsed": "e.g. Chris Voss - Accusation Audit"},
+    {"id": 2, "type": "alternative", "text": "...", "whyThisWorks": "...", "frameworkUsed": "..."},
+    {"id": 3, "type": "softer", "text": "...", "whyThisWorks": "...", "frameworkUsed": "..."}
   ],
-  "pushyWarning": null or "warning text if the user is being too pushy",
-  "detectedTone": "the tone of the prospect's message",
-  "questioningPattern": "the current questioning pattern stage"
-}`
-          },
+  "pushyWarning": null or "warning text",
+  "detectedTone": "tone of prospect's message",
+  "questioningPattern": "current stage",
+  "detectedObjection": null or "objection category detected",
+  "frameworkApplied": "primary framework used and why"
+}`;
+
+    const fullSystemPrompt = `${systemPrompt}
+
+${SALES_PLAYBOOK}
+
+${OBJECTION_HANDLERS}
+
+${FRAMEWORK_DETECTION_PROMPT}
+${OBJECTION_DETECTION_PROMPT}
+${tonalitySection}
+${winningPatternsSection}
+
+YOUR KNOWLEDGE BASE:
+${knowledgeContext}
+
+PROSPECT: ${prospect.name}
+STAGE: ${prospect.conversation_stage}
+${prospect.detected_interests ? `PROSPECT INTERESTS/BIO: ${prospect.detected_interests}` : ""}
+
+PREVIOUS CONVERSATION:
+${conversationHistory}
+
+${taskInstructions}
+${jsonFormat}`;
+
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          { role: "system", content: fullSystemPrompt },
           { role: "user", content: message }
         ],
         temperature: 0.8,
@@ -340,7 +358,6 @@ Return valid JSON with this structure:
     }
 
     // ===== SAVE TONALITY & PATTERN DATA =====
-    // Update the inbound message with detected tone (fire & forget)
     if (parsed.detectedTone) {
       const latestInbound = (history || [])
         .filter((m: any) => m.direction === "inbound")
