@@ -44,9 +44,10 @@ async function fetchYouTubeData(videoId: string) {
   const SUPADATA_API_KEY = Deno.env.get("SUPADATA_API_KEY");
   if (SUPADATA_API_KEY) {
     try {
-      console.log("Trying Supadata API for transcript...");
+      console.log("Trying Supadata API for transcript...", "key length:", SUPADATA_API_KEY.length);
+      const encodedUrl = encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`);
       const sdRes = await fetch(
-        `https://api.supadata.ai/v1/transcript?url=https://www.youtube.com/watch?v=${videoId}&text=true`,
+        `https://api.supadata.ai/v1/transcript?url=${encodedUrl}&text=true`,
         {
           headers: { "x-api-key": SUPADATA_API_KEY },
           signal: AbortSignal.timeout(30000),
@@ -62,9 +63,24 @@ async function fetchYouTubeData(videoId: string) {
           transcript = sdData.content.map((c: any) => c.text).join(" ");
           console.log("Supadata transcript (array) length:", transcript.length);
         }
-      } else if (sdRes.status === 402 || sdRes.status === 429) {
-        console.warn("Supadata credits exhausted or rate limited:", sdRes.status);
-        // Will fall through to watch page method
+      } else if (sdRes.status === 202) {
+        // Async processing - try polling once
+        const jobData = await sdRes.json();
+        if (jobData.jobId) {
+          console.log("Supadata async job:", jobData.jobId);
+          await new Promise(r => setTimeout(r, 5000));
+          const pollRes = await fetch(`https://api.supadata.ai/v1/transcript/${jobData.jobId}`, {
+            headers: { "x-api-key": SUPADATA_API_KEY },
+            signal: AbortSignal.timeout(15000),
+          });
+          if (pollRes.ok) {
+            const pollData = await pollRes.json();
+            if (pollData.content && typeof pollData.content === "string") transcript = pollData.content;
+          }
+        }
+      } else {
+        const errBody = await sdRes.text();
+        console.warn("Supadata error:", sdRes.status, errBody);
       }
     } catch (e) { console.error("Supadata error:", e); }
   }
