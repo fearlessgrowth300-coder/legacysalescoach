@@ -1,44 +1,89 @@
 
 
-# Fix Authentication - Session Persistence and Login Issues
+# Fix All "Failed to Fetch" Errors + Instagram Apify Integration + OTP Sign Up
 
-## Root Cause
+## Issues Found
 
-The `useAuth` hook has a critical bug: it performs `await` calls (profile fetch) inside the `onAuthStateChange` callback. This blocks Supabase's internal auth state machine, causing:
-- Sessions not restoring on page reload
-- Login appearing to hang (button stays on "Signing in...")
-- The 5-second timeout fires, sets `loading=false`, but `user` is still `null` so the app shows the sign-in page
+### 1. CORS Headers Broken on ALL Edge Functions (ROOT CAUSE of "fail to fetch")
+All 4 edge functions (`chat-suggest`, `process-knowledge`, `ocr-screenshot`, `analyze-profile`) have **incomplete CORS headers**. The app uses `@supabase/supabase-js@2.95.3` which sends additional headers (`x-supabase-client-platform`, `x-supabase-client-platform-version`, `x-supabase-client-runtime`, `x-supabase-client-runtime-version`). These are NOT listed in the `Access-Control-Allow-Headers`, so the browser blocks the preflight OPTIONS request, causing "Failed to fetch" for every edge function call (workspace creation, PDF upload, URL processing, chat suggestions, etc.).
 
-## Fix
+**Fix**: Update CORS headers in all 4 edge functions to include the full set of allowed headers.
 
-### 1. Rewrite `useAuth.tsx` with proper async handling
-- Set up `onAuthStateChange` with **synchronous-only** state updates (set session and user immediately from `session.user`)
-- Fetch profile data in a **separate, non-blocking** call (fire and forget, then update user with name when it resolves)
-- Use `getSession()` for the initial load, completing all work before setting `loading = false`
-- Add `isMounted` flag to prevent state updates after unmount
-- Keep the 5-second timeout as a safety net
+### 2. Instagram Scraping via Apify API
+Currently the app tries to scrape Instagram directly with `fetch()`, which Instagram blocks. The user has provided an Apify API key (`apify_api_l4V98dj5TbYLNuh74lfDFk0RhSNGba2g3Cwq`) to use the Instagram Scraper actor instead.
 
-### 2. Fix Login page navigation
-- After `signInWithPassword` succeeds, wait briefly for auth state to propagate before navigating
-- Or use the auth state change to trigger navigation instead of doing it manually
+**Fix**: 
+- Store the Apify API key as a secret
+- Create a new `fetch-instagram` edge function that calls Apify's Instagram Profile Scraper
+- Update `process-knowledge` to use this function for Instagram URLs
+- Update the Chats page to fetch prospect details via Apify when an Instagram URL is pasted during new chat creation
 
-### 3. Fix `DashboardLayout` redirect behavior
-- When `loading` is `false` and `user` is `null`, redirect to `/login` using `Navigate` instead of showing an inline sign-in card (which creates a confusing duplicate login UI)
+### 3. Sign Up: OTP Code Instead of Email Link
+Currently sign up sends a confirmation link. User wants a verification code (OTP) sent to email instead.
 
-## Technical Details
+**Fix**:
+- Enable auto-confirm on sign up (so users can log in immediately), OR
+- Implement OTP flow: use `supabase.auth.signUp()` then `supabase.auth.verifyOtp()` with a code input screen
+- Update `SignUp.tsx` to show a code verification step after sign up
 
-### Files to modify
+### 4. New Chat: Auto-fetch Instagram Prospect Details
+When creating a new chat and pasting an Instagram URL, the app should automatically fetch the prospect's bio, interests, and profile info via Apify to generate a better first message.
 
-**`src/hooks/useAuth.tsx`**
-- Remove `async` from `onAuthStateChange` callback
-- Set `session` and `user` synchronously from `session.user` (no profile fetch blocking)
-- Fire profile fetch separately: `setTimeout(() => fetchProfile(session.user.id), 0)` to avoid deadlock
-- In `getSession` initial load: fetch profile, set user, THEN set `loading = false`
-- Add `isMounted` cleanup flag
+**Fix**: When a prospect is created with an Instagram URL, call the `fetch-instagram` edge function and save the scraped data (bio, interests, followers) to the prospect record.
 
-**`src/pages/Login.tsx`**
-- After successful login, add a small delay or listen to auth context before navigating
-- Alternatively, check if user is already set in context and auto-redirect
+---
 
-**`src/components/DashboardLayout.tsx`**
-- Replace the inline "Sign in to continue" card with `<Navigate to="/login" replace />` so users go to the real login page instead of seeing a second login UI
+## Implementation Steps
+
+### Step 1: Fix CORS on ALL Edge Functions
+Update the `corsHeaders` in all 4 files to:
+```text
+"Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version"
+```
+
+Files: `chat-suggest/index.ts`, `process-knowledge/index.ts`, `ocr-screenshot/index.ts`, `analyze-profile/index.ts`
+
+### Step 2: Add Apify API Key as Secret
+Store `apify_api_l4V98dj5TbYLNuh74lfDFk0RhSNGba2g3Cwq` as `APIFY_API_KEY` secret.
+
+### Step 3: Create `fetch-instagram` Edge Function
+New edge function that:
+- Takes an Instagram username or URL
+- Calls the Apify Instagram Profile Scraper API
+- Returns bio, follower count, posts, interests, niche info
+- Used by both knowledge base processing and new chat creation
+
+### Step 4: Update `process-knowledge` for Instagram
+Replace the direct Instagram `fetch()` with a call to the Apify-based scraper for much richer data extraction.
+
+### Step 5: Update Chat Creation with Instagram Auto-Fetch
+In `Chats.tsx`, after creating a prospect with an Instagram URL:
+- Call `fetch-instagram` to get profile details
+- Update the prospect record with scraped bio, interests, detected niche
+- Use this data to inform the AI's first message strategy
+
+### Step 6: Implement OTP Email Verification on Sign Up
+Update `SignUp.tsx`:
+- After `signUp()`, show a code input field
+- User enters the OTP code from their email
+- Call `supabase.auth.verifyOtp({ email, token, type: 'signup' })` to verify
+- On success, navigate to `/chats`
+
+### Step 7: Update `supabase/config.toml`
+Add the new `fetch-instagram` function with `verify_jwt = false`.
+
+### Step 8: Deploy All Edge Functions
+Deploy all updated and new edge functions.
+
+---
+
+## Files to Modify
+1. `supabase/functions/chat-suggest/index.ts` -- Fix CORS headers
+2. `supabase/functions/process-knowledge/index.ts` -- Fix CORS + use Apify for Instagram
+3. `supabase/functions/ocr-screenshot/index.ts` -- Fix CORS headers
+4. `supabase/functions/analyze-profile/index.ts` -- Fix CORS headers (already correct)
+5. `supabase/functions/fetch-instagram/index.ts` -- NEW: Apify Instagram scraper
+6. `supabase/config.toml` -- Add fetch-instagram function
+7. `src/pages/SignUp.tsx` -- Add OTP verification step
+8. `src/pages/Chats.tsx` -- Auto-fetch Instagram details on prospect creation
+
