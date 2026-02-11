@@ -257,12 +257,28 @@ ${prospect.detected_interests ? `PROSPECT INTERESTS/BIO: ${prospect.detected_int
 PREVIOUS CONVERSATION:
 ${conversationHistory}
 
-${mode === "first_message" ? `TASK: Based on the prospect's Instagram profile data below, generate 3 compelling OPENING MESSAGES to send as a cold DM. These must be:
-- Personalized to their profile, interests, and content
-- Designed to TRIGGER A REPLY (not just get seen)
-- Natural, not salesy — like a real person who found their content interesting
-- Reference something specific about them (a post, their bio, their niche)
-The goal is to start a genuine conversation that leads to trust-building.` :
+${mode === "first_message" ? `TASK: You have the prospect's full Instagram profile data below. Generate 3 IRRESISTIBLE opening DMs that will GUARANTEE a reply.
+
+OPENING MESSAGE PSYCHOLOGY — use these proven techniques:
+1. **Pattern Interrupt**: Say something unexpected that breaks the scroll. NOT "Hey, love your page!" — everyone says that.
+2. **Specific Observation**: Reference a SPECIFIC post, caption detail, or bio element. Show you actually looked at their content.
+3. **Curiosity Gap**: End with something that makes them NEED to reply to find out more.
+4. **Identity Validation**: Make them feel seen for WHO they are, not what they sell.
+5. **Implied Social Proof**: Subtly hint that you're in a similar space without bragging.
+
+RULES:
+- Keep each message under 3 sentences — long DMs get ignored
+- NO compliments without substance ("love your content" = delete)
+- NO business talk, NO pitching, NO "I can help you"
+- Sound like a REAL person who genuinely found something interesting
+- Each message must create an emotional pull to reply
+- Use their actual post content, bio details, or niche specifics
+- The "whyThisWorks" must explain the psychological trigger being used
+
+TYPE LABELS:
+- "primary" = Highest reply probability — uses strongest psychological hook
+- "alternative" = Different angle — appeals to different motivation  
+- "softer" = Low-pressure curiosity — for prospects who might be guarded` :
 mode === "continue" ? `TASK: Based on the conversation screenshots below, analyze the full conversation context. Understand:
 - What has been discussed so far
 - The prospect's tone and engagement level
