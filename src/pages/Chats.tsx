@@ -836,7 +836,7 @@ export default function Chats() {
                 >
                   <div className="flex items-center gap-3">
                     {(prospect as any).profile_pic_url ? (
-                      <img src={(prospect as any).profile_pic_url} alt={prospect.name} className="h-10 w-10 rounded-full object-cover shrink-0" />
+                      <img src={(prospect as any).profile_pic_url} alt={prospect.name} className="h-10 w-10 rounded-full object-cover shrink-0" referrerPolicy="no-referrer" onError={(e) => { (e.target as HTMLImageElement).src = ''; (e.target as HTMLImageElement).onerror = null; }} />
                     ) : (
                       <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
                         <User className="h-5 w-5 text-primary" />
@@ -878,7 +878,7 @@ export default function Chats() {
             <div className="p-4 border-b flex items-center justify-between">
               <div className="flex items-center gap-3">
                 {(selectedProspect as any)?.profile_pic_url ? (
-                  <img src={(selectedProspect as any).profile_pic_url} alt={selectedProspect?.name} className="h-10 w-10 rounded-full object-cover shrink-0" />
+                  <img src={(selectedProspect as any).profile_pic_url} alt={selectedProspect?.name} className="h-10 w-10 rounded-full object-cover shrink-0" referrerPolicy="no-referrer" onError={(e) => { (e.target as HTMLImageElement).src = ''; (e.target as HTMLImageElement).onerror = null; }} />
                 ) : (
                   <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
                     <User className="h-5 w-5 text-primary" />
