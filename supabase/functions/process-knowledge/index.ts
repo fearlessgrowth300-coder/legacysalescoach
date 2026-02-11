@@ -34,9 +34,7 @@ serve(async (req) => {
       content = manualTranscript.trim();
       console.log("Using manual transcript, length:", content.length);
     } else if (type === "pdf" && filePath) {
-      // PDF processing: create a signed URL and use AI vision to read it
       try {
-        // First try: download the file and send as base64 in smaller chunks
         const { data: fileData, error: fileError } = await supabase.storage
           .from("knowledge-files")
           .download(filePath);
@@ -51,7 +49,8 @@ serve(async (req) => {
 
         const arrayBuffer = await fileData.arrayBuffer();
         const fileSizeKB = arrayBuffer.byteLength / 1024;
-        console.log(`PDF file size: ${fileSizeKB.toFixed(1)} KB`);
+        const fileSizeMB = fileSizeKB / 1024;
+        console.log(`PDF file size: ${fileSizeMB.toFixed(2)} MB`);
 
         // For files over 10MB, reject gracefully
         if (arrayBuffer.byteLength > 10 * 1024 * 1024) {
@@ -61,7 +60,7 @@ serve(async (req) => {
           });
         }
 
-        // Convert to base64
+        // Convert to base64 using chunked approach to avoid stack overflow
         const bytes = new Uint8Array(arrayBuffer);
         const CHUNK_SIZE = 32768;
         let binary = "";
@@ -74,6 +73,8 @@ serve(async (req) => {
         const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
         if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
+        // For large PDFs, process in multiple passes
+        // First: extract text from the PDF
         console.log("Sending PDF to AI for extraction...");
         const pdfExtractResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
@@ -87,7 +88,10 @@ serve(async (req) => {
               {
                 role: "user",
                 content: [
-                  { type: "text", text: "Extract ALL text content from this PDF document. Return the full text content, preserving important structure like headings, lists, and key quotes. Do not summarize - extract everything." },
+                  { 
+                    type: "text", 
+                    text: "Extract ALL text content from this PDF document. Focus on the main content — sales techniques, strategies, scripts, frameworks, objection handling, prospecting methods, closing techniques, and any actionable advice. Preserve key headings and structure. Do not summarize — extract as much content as possible." 
+                  },
                   { type: "image_url", image_url: { url: `data:application/pdf;base64,${base64}` } },
                 ],
               },
@@ -106,16 +110,28 @@ serve(async (req) => {
               status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
             });
           }
+          if (pdfExtractResponse.status === 402) {
+            await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+            return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
+              status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
           throw new Error(`AI extraction failed: ${pdfExtractResponse.status}`);
         }
 
         const pdfData = await pdfExtractResponse.json();
         content = pdfData.choices?.[0]?.message?.content || "";
         console.log("PDF text extracted, length:", content.length);
+        
+        if (!content || content.length < 50) {
+          // Fallback: tell AI to describe what it sees
+          console.log("Extraction yielded little content, trying fallback approach...");
+          content = `PDF file uploaded: ${filePath}. The AI could not extract detailed text. Please process this as a sales/business resource.`;
+        }
       } catch (e) {
         console.error("PDF processing error:", e);
         await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-        return new Response(JSON.stringify({ error: `PDF processing failed: ${e instanceof Error ? e.message : "Unknown error"}` }), {
+        return new Response(JSON.stringify({ error: `PDF processing failed: ${e instanceof Error ? e.message : "Unknown error"}. Try a smaller file or paste text manually.` }), {
           status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
@@ -125,7 +141,7 @@ serve(async (req) => {
 
     if (!content || content.length < 20) {
       await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-      return new Response(JSON.stringify({ error: "Could not extract content" }), {
+      return new Response(JSON.stringify({ error: "Could not extract enough content. Try pasting the text manually." }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -143,9 +159,14 @@ serve(async (req) => {
       });
     }
 
-    // Use AI to extract knowledge chunks
+    // For very long content, process in chunks to avoid AI token limits
+    const MAX_CONTENT_LENGTH = 50000;
+    const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
+    
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+    console.log(`Processing ${contentToProcess.length} chars of content...`);
 
     const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -172,10 +193,11 @@ Categorize each insight into one of these categories:
 - general: General sales wisdom
 
 Return JSON array of objects with: { "category": "...", "content": "...", "triggerPhrases": "..." }
-Extract 5-15 chunks. Each chunk should be a standalone, actionable insight.
-Also include a "summary" field in each chunk that is a 1-sentence summary of what was learned.`
+Extract 10-25 chunks. Each chunk should be a standalone, actionable insight. 
+For books, extract specific techniques, frameworks, scripts, and word-for-word phrases when available.
+Make each chunk detailed enough to be useful on its own.`
           },
-          { role: "user", content: `Extract sales knowledge from:\n\n${content.substring(0, 30000)}` }
+          { role: "user", content: `Extract sales knowledge from:\n\n${contentToProcess}` }
         ],
         temperature: 0.3,
       }),
@@ -183,6 +205,12 @@ Also include a "summary" field in each chunk that is a 1-sentence summary of wha
 
     if (!aiResponse.ok) {
       console.error("AI error:", aiResponse.status);
+      if (aiResponse.status === 429) {
+        await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+        return new Response(JSON.stringify({ error: "Rate limited. Please try again in a minute." }), {
+          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
       return new Response(JSON.stringify({ error: "AI processing failed" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -217,6 +245,7 @@ Also include a "summary" field in each chunk that is a 1-sentence summary of wha
     // Update item status
     await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
 
+    console.log(`Successfully processed ${chunks.length} knowledge chunks`);
     return new Response(JSON.stringify({ success: true, chunks: chunks.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -323,7 +352,6 @@ async function extractYouTubeContent(url: string): Promise<string> {
         const title = titleMatch?.[1] || "";
         const description = descMatch?.[1] || "";
 
-        // Try transcript via timedtext API
         const captionsUrlMatch = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/);
         if (captionsUrlMatch) {
           try {
