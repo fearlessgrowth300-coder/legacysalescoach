@@ -32,7 +32,19 @@ const App = () => {
       console.error("Unhandled promise rejection:", e.reason);
     };
     window.addEventListener("unhandledrejection", handler);
-    return () => window.removeEventListener("unhandledrejection", handler);
+
+    // Capture PWA install prompt globally so it's not missed
+    const installHandler = (e: Event) => {
+      e.preventDefault();
+      (window as any).__pwaInstallPrompt = e;
+      window.dispatchEvent(new Event("pwa-prompt-ready"));
+    };
+    window.addEventListener("beforeinstallprompt", installHandler);
+
+    return () => {
+      window.removeEventListener("unhandledrejection", handler);
+      window.removeEventListener("beforeinstallprompt", installHandler);
+    };
   }, []);
 
   return (
