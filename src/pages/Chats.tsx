@@ -243,6 +243,8 @@ export default function Chats() {
         .single();
       if (error) throw error;
 
+      let generatedSuggestions: Suggestion[] = [];
+
       // If Instagram URL provided, auto-fetch profile details via Apify
       if (newProspectIg) {
         setIsGeneratingFirst(true);
@@ -254,16 +256,17 @@ export default function Chats() {
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
             await supabase.from("prospects").update({ detected_interests: interests || null }).eq("id", data.id);
 
-            // Generate first message using AI
+            // Generate first message using AI — pass full profile summary
             const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
               body: {
                 prospectId: data.id,
-                message: `Instagram profile analyzed. Bio: ${igData.biography || "N/A"}. Followers: ${igData.followersCount || "N/A"}. Category: ${igData.businessCategory || "N/A"}. Recent posts: ${igData.recentPosts?.slice(0, 3)?.map((p: any) => p.caption?.substring(0, 100)).join("; ") || "N/A"}`,
+                message: igData.summary || `Instagram profile: @${igData.username}. Bio: ${igData.biography || "N/A"}. Followers: ${igData.followersCount || "N/A"}. Category: ${igData.businessCategory || "N/A"}. Posts: ${igData.postsCount || 0}. ${igData.recentPosts?.map((p: any, i: number) => `Post ${i+1}: "${p.caption}" (${p.likes} likes)`).join(". ") || ""}`,
                 threadType: currentThreadType,
                 mode: "first_message",
               },
             });
             if (suggestData?.suggestions) {
+              generatedSuggestions = suggestData.suggestions;
               setFirstMessageSuggestions(suggestData.suggestions);
             }
           }
@@ -274,20 +277,15 @@ export default function Chats() {
         }
       }
 
-      return data;
+      return { prospect: data, suggestions: generatedSuggestions };
     },
-    onSuccess: (data) => {
+    onSuccess: ({ prospect, suggestions: newSuggestions }) => {
       toast.success("New chat created!");
       queryClient.invalidateQueries({ queryKey: ["prospects"] });
-
-      // If we have first message suggestions, show them after navigating
-      if (firstMessageSuggestions.length > 0) {
-        handleDialogChange(false);
-        navigate(`/chats/${data.id}`);
-        setSuggestions(firstMessageSuggestions);
-      } else {
-        handleDialogChange(false);
-        navigate(`/chats/${data.id}`);
+      handleDialogChange(false);
+      navigate(`/chats/${prospect.id}`);
+      if (newSuggestions.length > 0) {
+        setSuggestions(newSuggestions);
       }
     },
     onError: (e: any) => toast.error(e.message),
