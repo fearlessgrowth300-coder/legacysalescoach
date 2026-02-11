@@ -54,8 +54,22 @@ export default function Chats() {
   const [isRefining, setIsRefining] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
   const bulkScreenshotInputRef = useRef<HTMLInputElement>(null);
+
+  const getInitials = (name: string) => {
+    return name.split(" ").map(w => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
+  };
+
+  const scrollToBottom = () => {
+    setTimeout(() => {
+      const viewport = scrollAreaRef.current?.querySelector("[data-radix-scroll-area-viewport]");
+      if (viewport) {
+        viewport.scrollTop = viewport.scrollHeight;
+      }
+    }, 100);
+  };
 
   // Get active workspace
   const { data: workspaces } = useQuery({
@@ -103,7 +117,7 @@ export default function Chats() {
   const selectedProspect = prospects?.find((p) => p.id === selectedProspectId);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    scrollToBottom();
   }, [messages]);
 
   // Reset dialog state when closing
@@ -841,17 +855,14 @@ export default function Chats() {
                         <AvatarImage
                           src={(prospect as any).profile_pic_url}
                           alt={prospect.name}
-                          loading="lazy"
                           referrerPolicy="no-referrer"
-                          crossOrigin="anonymous"
                           onError={(e) => {
-                            // Hide the image so the fallback shows
                             e.currentTarget.style.display = "none";
                           }}
                         />
                       ) : null}
-                      <AvatarFallback className="bg-primary/10">
-                        <User className="h-5 w-5 text-primary" />
+                      <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
+                        {getInitials(prospect.name)}
                       </AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
@@ -894,16 +905,14 @@ export default function Chats() {
                     <AvatarImage
                       src={(selectedProspect as any).profile_pic_url}
                       alt={selectedProspect?.name}
-                      loading="lazy"
                       referrerPolicy="no-referrer"
-                      crossOrigin="anonymous"
                       onError={(e) => {
                         e.currentTarget.style.display = "none";
                       }}
                     />
                   ) : null}
-                  <AvatarFallback className="bg-primary/10">
-                    <User className="h-5 w-5 text-primary" />
+                  <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
+                    {selectedProspect?.name ? getInitials(selectedProspect.name) : "?"}
                   </AvatarFallback>
                 </Avatar>
                 <div>
@@ -951,7 +960,7 @@ export default function Chats() {
             </div>
 
             {/* Messages */}
-            <ScrollArea className="flex-1 p-4">
+            <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
               <div className="space-y-4">
                 {messages?.map((message) => (
                   <div key={message.id} className={`flex ${message.direction === "outbound" ? "justify-end" : "justify-start"}`}>
