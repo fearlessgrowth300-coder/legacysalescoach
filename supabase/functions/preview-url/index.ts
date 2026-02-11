@@ -19,9 +19,206 @@ function extractInstagramShortcode(url: string): string | null {
 }
 
 function extractInstagramUsername(url: string): string | null {
-  // Match profile URLs like instagram.com/username (not /p/, /reel/, etc.)
   const match = url.match(/instagram\.com\/([A-Za-z0-9_.]+)\/?$/);
   return match ? match[1] : null;
+}
+
+async function fetchYouTubeData(videoId: string) {
+  let title = "";
+  let transcript = "";
+  const thumbnail = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+
+  // 1. Get title via oembed API (reliable)
+  try {
+    const oembedRes = await fetch(
+      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
+      { signal: AbortSignal.timeout(10000) }
+    );
+    if (oembedRes.ok) {
+      const oembed = await oembedRes.json();
+      title = oembed.title || "";
+    }
+  } catch (e) { console.error("YouTube oembed error:", e); }
+
+  // 2. Get transcript via innertube API
+  try {
+    // Try WEB_EMBEDDED_PLAYER client (works better from server IPs)
+    const playerRes = await fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "com.google.android.youtube/19.02.39 (Linux; U; Android 14) gzip",
+        "X-YouTube-Client-Name": "3",
+        "X-YouTube-Client-Version": "2.20240101.00.00",
+      },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: "ANDROID",
+            clientVersion: "19.02.39",
+            androidSdkVersion: 34,
+            hl: "en",
+            gl: "US",
+          },
+        },
+        videoId,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    console.log("Innertube player status:", playerRes.status);
+
+    if (playerRes.ok) {
+      const playerData = await playerRes.json();
+      const captionTracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      console.log("Caption tracks found:", captionTracks?.length || 0);
+      
+      if (captionTracks && captionTracks.length > 0) {
+        const englishTrack = captionTracks.find((t: any) => 
+          t.languageCode === "en" || t.languageCode?.startsWith("en")
+        );
+        const track = englishTrack || captionTracks[0];
+        
+        if (track?.baseUrl) {
+          console.log("Fetching captions for lang:", track.languageCode);
+          const captionRes = await fetch(track.baseUrl, { signal: AbortSignal.timeout(10000) });
+          if (captionRes.ok) {
+            const captionXml = await captionRes.text();
+            transcript = captionXml
+              .replace(/<[^>]+>/g, " ")
+              .replace(/&amp;/g, "&")
+              .replace(/&lt;/g, "<")
+              .replace(/&gt;/g, ">")
+              .replace(/&#39;/g, "'")
+              .replace(/&quot;/g, '"')
+              .replace(/\s+/g, " ")
+              .trim();
+            console.log("Transcript length:", transcript.length);
+          }
+        }
+      } else {
+        // Try fallback: fetch watch page with consent cookie
+        console.log("No innertube captions, trying watch page fallback");
+        const watchRes = await fetch(`https://www.youtube.com/watch?v=${videoId}&hl=en`, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Cookie": "CONSENT=YES+cb.20210328-17-p0.en+FX+111",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (watchRes.ok) {
+          const html = await watchRes.text();
+          const baseUrlMatch = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/);
+          if (baseUrlMatch) {
+            const captionUrl = baseUrlMatch[1].replace(/\\u0026/g, "&");
+            const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
+            if (captionRes.ok) {
+              const captionXml = await captionRes.text();
+              transcript = captionXml
+                .replace(/<[^>]+>/g, " ")
+                .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+                .replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+                .replace(/\s+/g, " ").trim();
+              console.log("Fallback transcript length:", transcript.length);
+            }
+          }
+        }
+      }
+    } else {
+      const errText = await playerRes.text();
+      console.error("Innertube error:", playerRes.status, errText.substring(0, 500));
+    }
+  } catch (e) { console.error("YouTube transcript error:", e); }
+
+  return { thumbnail, title, transcript: transcript.substring(0, 15000) };
+}
+
+async function fetchInstagramData(url: string, shortcode: string | null, username: string | null) {
+  const APIFY_API_KEY = Deno.env.get("APIFY_API_KEY");
+  let thumbnail = "";
+  let title = "";
+  let transcript = "";
+
+  if (!APIFY_API_KEY) {
+    console.error("APIFY_API_KEY not configured");
+    return { thumbnail, title, transcript };
+  }
+
+  if (shortcode) {
+    // It's a post/reel - use Instagram Reel Scraper (accepts both reel and post URLs via "username" field)
+    try {
+      console.log("Fetching Instagram content via Apify:", url);
+      
+      const actorRes = await fetch(
+        `https://api.apify.com/v2/acts/apify~instagram-reel-scraper/run-sync-get-dataset-items?token=${APIFY_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: [url],
+            resultsLimit: 1,
+            includeTranscript: true,
+          }),
+          signal: AbortSignal.timeout(120000),
+        }
+      );
+      console.log("Apify reel scraper status:", actorRes.status);
+      
+      if (actorRes.ok) {
+        const results = await actorRes.json();
+        console.log("Apify results count:", results?.length);
+        const post = Array.isArray(results) && results.length > 0 ? results[0] : null;
+        if (post) {
+          console.log("Post keys:", Object.keys(post).join(", "));
+          if (post.error) {
+            console.log("Apify post warning:", post.error, post.errorDescription);
+          }
+          // Extract whatever data is available (even partial from restricted pages)
+          thumbnail = post.displayUrl || post.thumbnailUrl || post.imageUrl || post.videoThumbnailUrl || "";
+          const postCaption = post.caption || "";
+          title = postCaption.substring(0, 200) || (post.ownerUsername ? `@${post.ownerUsername}` : "");
+          const caption = postCaption || "No caption available (restricted content)";
+          const isVideo = post.type === "Video" || !!post.videoUrl;
+          const reelTranscript = post.transcript || "";
+          
+          if (postCaption || post.likesCount || reelTranscript) {
+            transcript = isVideo
+              ? `[Instagram Reel/Video]\nCaption: ${caption}\nLikes: ${post.likesCount || 0}\nComments: ${post.commentsCount || 0}\nOwner: @${post.ownerUsername || "unknown"}${reelTranscript ? "\n\nTranscript:\n" + reelTranscript : ""}`
+              : `[Instagram Post]\nCaption: ${caption}\nLikes: ${post.likesCount || 0}\nComments: ${post.commentsCount || 0}\nOwner: @${post.ownerUsername || "unknown"}`;
+          } else if (post.error === "restricted_page") {
+            transcript = `[Instagram Content - Restricted Access]\nThis content has restricted access. Limited data could be extracted.\nURL: ${url}`;
+          }
+        }
+      } else {
+        const errText = await actorRes.text();
+        console.error("Apify reel scraper error:", actorRes.status, errText);
+      }
+    } catch (e) { console.error("Apify scraper error:", e); }
+  } else if (username) {
+    // It's a profile URL
+    try {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const igRes = await fetch(`${supabaseUrl}/functions/v1/fetch-instagram`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${supabaseKey}`,
+        },
+        body: JSON.stringify({ username }),
+        signal: AbortSignal.timeout(90000),
+      });
+      if (igRes.ok) {
+        const profileData = await igRes.json();
+        thumbnail = profileData.profilePicUrl || "";
+        title = `@${profileData.username} - ${profileData.fullName || ""}`;
+        transcript = profileData.summary || `Bio: ${profileData.biography || "N/A"}\nFollowers: ${profileData.followersCount}\nPosts: ${profileData.postsCount}`;
+      }
+    } catch (e) { console.error("IG profile fetch error:", e); }
+  }
+
+  return { thumbnail, title, transcript: transcript.substring(0, 10000) };
 }
 
 serve(async (req) => {
@@ -34,7 +231,6 @@ serve(async (req) => {
     const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
     const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
 
-    // ===== YOUTUBE =====
     if (isYouTube) {
       const videoId = extractYouTubeId(url);
       if (!videoId) {
@@ -42,133 +238,29 @@ serve(async (req) => {
           status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-
-      const thumbnail = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
-      let title = "";
-      let transcript = "";
-
-      // Fetch page to get title and transcript
-      try {
-        const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-          signal: AbortSignal.timeout(15000),
-        });
-        if (res.ok) {
-          const html = await res.text();
-          const titleMatch = html.match(/<meta name="title" content="([^"]*)"/) || html.match(/<title>([^<]*)<\/title>/);
-          title = titleMatch?.[1]?.replace(" - YouTube", "") || "";
-
-          // Try to get transcript
-          const captionsUrlMatch = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/);
-          if (captionsUrlMatch) {
-            try {
-              const captionUrl = captionsUrlMatch[1].replace(/\\u0026/g, "&");
-              const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
-              if (captionRes.ok) {
-                const captionXml = await captionRes.text();
-                transcript = captionXml
-                  .replace(/<[^>]+>/g, " ")
-                  .replace(/&amp;/g, "&")
-                  .replace(/&lt;/g, "<")
-                  .replace(/&gt;/g, ">")
-                  .replace(/&#39;/g, "'")
-                  .replace(/&quot;/g, '"')
-                  .replace(/\s+/g, " ")
-                  .trim();
-              }
-            } catch (e) { console.error("Transcript fetch error:", e); }
-          }
-        }
-      } catch (e) { console.error("YouTube fetch error:", e); }
-
+      const ytData = await fetchYouTubeData(videoId);
       return new Response(JSON.stringify({
         type: "youtube",
         videoId,
-        thumbnail,
-        title,
-        transcript: transcript.substring(0, 10000),
-        hasTranscript: transcript.length > 50,
+        ...ytData,
+        hasTranscript: ytData.transcript.length > 50,
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ===== INSTAGRAM =====
     if (isInstagram) {
       const shortcode = extractInstagramShortcode(url);
       const username = extractInstagramUsername(url);
-      const APIFY_API_KEY = Deno.env.get("APIFY_API_KEY");
-
-      let thumbnail = "";
-      let title = "";
-      let transcript = "";
-      let profileData: any = null;
-
-      if (APIFY_API_KEY) {
-        if (shortcode) {
-          // It's a post/reel - use Instagram Post Scraper
-          try {
-            const actorRes = await fetch(
-              `https://api.apify.com/v2/acts/apify~instagram-post-scraper/run-sync-get-dataset-items?token=${APIFY_API_KEY}`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  directUrls: [url],
-                  resultsLimit: 1,
-                }),
-                signal: AbortSignal.timeout(60000),
-              }
-            );
-            if (actorRes.ok) {
-              const results = await actorRes.json();
-              const post = Array.isArray(results) && results.length > 0 ? results[0] : null;
-              if (post) {
-                thumbnail = post.displayUrl || post.thumbnailUrl || "";
-                title = (post.caption || "").substring(0, 200);
-                // For video/reel posts, the caption IS the transcript context
-                if (post.type === "Video" || post.videoUrl) {
-                  transcript = `[Instagram Reel/Video]\nCaption: ${post.caption || "No caption"}\nLikes: ${post.likesCount || 0}\nComments: ${post.commentsCount || 0}\n\nThis is a video post. The AI will analyze the caption and context to extract sales knowledge.`;
-                } else {
-                  transcript = `[Instagram Post]\nCaption: ${post.caption || "No caption"}\nLikes: ${post.likesCount || 0}\nComments: ${post.commentsCount || 0}`;
-                }
-              }
-            }
-          } catch (e) { console.error("Apify post scraper error:", e); }
-        } else if (username) {
-          // It's a profile URL - use Instagram Profile Scraper
-          try {
-            const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-            const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-            const igRes = await fetch(`${supabaseUrl}/functions/v1/fetch-instagram`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${supabaseKey}`,
-              },
-              body: JSON.stringify({ username }),
-              signal: AbortSignal.timeout(60000),
-            });
-            if (igRes.ok) {
-              profileData = await igRes.json();
-              thumbnail = profileData.profilePicUrl || "";
-              title = `@${profileData.username} - ${profileData.fullName || ""}`;
-              transcript = profileData.summary || `Bio: ${profileData.biography || "N/A"}\nFollowers: ${profileData.followersCount}\nPosts: ${profileData.postsCount}`;
-            }
-          } catch (e) { console.error("IG profile fetch error:", e); }
-        }
-      }
-
+      const igData = await fetchInstagramData(url, shortcode, username);
       return new Response(JSON.stringify({
         type: "instagram",
-        thumbnail,
-        title,
-        transcript: transcript.substring(0, 10000),
-        hasTranscript: transcript.length > 20,
+        ...igData,
+        hasTranscript: igData.transcript.length > 20,
         shortcode,
         username,
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ===== REGULAR URL =====
+    // Regular URL
     let title = "";
     let ogImage = "";
     try {
@@ -187,11 +279,7 @@ serve(async (req) => {
     } catch { /* ignore */ }
 
     return new Response(JSON.stringify({
-      type: "webpage",
-      thumbnail: ogImage,
-      title,
-      transcript: "",
-      hasTranscript: false,
+      type: "webpage", thumbnail: ogImage, title, transcript: "", hasTranscript: false,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
   } catch (error) {
