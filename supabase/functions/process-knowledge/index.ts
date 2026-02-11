@@ -60,73 +60,47 @@ serve(async (req) => {
           });
         }
 
-        // Convert to base64 using chunked approach to avoid stack overflow
+        // Extract text from PDF binary directly (OpenAI doesn't support PDF in vision API)
         const bytes = new Uint8Array(arrayBuffer);
-        const CHUNK_SIZE = 32768;
-        let binary = "";
-        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-          const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
-          binary += String.fromCharCode(...chunk);
-        }
-        const base64 = btoa(binary);
-
-        const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-        if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
-
-        // For large PDFs, process in multiple passes
-        // First: extract text from the PDF
-        console.log("Sending PDF to AI for extraction...");
-        const pdfExtractResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash",
-            messages: [
-              {
-                role: "user",
-                content: [
-                  { 
-                    type: "text", 
-                    text: "Extract ALL text content from this PDF document. Focus on the main content — sales techniques, strategies, scripts, frameworks, objection handling, prospecting methods, closing techniques, and any actionable advice. Preserve key headings and structure. Do not summarize — extract as much content as possible." 
-                  },
-                  { type: "image_url", image_url: { url: `data:application/pdf;base64,${base64}` } },
-                ],
-              },
-            ],
-            temperature: 0.1,
-          }),
-        });
-
-        if (!pdfExtractResponse.ok) {
-          const errText = await pdfExtractResponse.text();
-          console.error("AI PDF extraction failed:", pdfExtractResponse.status, errText);
-          
-          if (pdfExtractResponse.status === 429) {
-            await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-            return new Response(JSON.stringify({ error: "Rate limited. Please try again in a minute." }), {
-              status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-            });
-          }
-          if (pdfExtractResponse.status === 402) {
-            await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-            return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
-              status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-            });
-          }
-          throw new Error(`AI extraction failed: ${pdfExtractResponse.status}`);
-        }
-
-        const pdfData = await pdfExtractResponse.json();
-        content = pdfData.choices?.[0]?.message?.content || "";
-        console.log("PDF text extracted, length:", content.length);
+        const rawText = new TextDecoder("latin1").decode(bytes);
         
-        if (!content || content.length < 50) {
-          // Fallback: tell AI to describe what it sees
-          console.log("Extraction yielded little content, trying fallback approach...");
-          content = `PDF file uploaded: ${filePath}. The AI could not extract detailed text. Please process this as a sales/business resource.`;
+        // Extract text from PDF text operators (Tj and TJ)
+        const textParts: string[] = [];
+        
+        // Match text in parentheses followed by Tj operator
+        const tjMatches = rawText.matchAll(/\(([^\\)]*(?:\\.[^\\)]*)*)\)\s*Tj/g);
+        for (const match of tjMatches) {
+          const decoded = match[1]
+            .replace(/\\n/g, '\n').replace(/\\r/g, '\r')
+            .replace(/\\\\/g, '\\').replace(/\\(/g, '(').replace(/\\)/g, ')');
+          textParts.push(decoded);
+        }
+        
+        // Match text arrays in TJ operator
+        const tjArrayMatches = rawText.matchAll(/\[([^\]]*)\]\s*TJ/gi);
+        for (const match of tjArrayMatches) {
+          const parts = match[1].match(/\(([^\\)]*(?:\\.[^\\)]*)*)\)/g) || [];
+          for (const p of parts) {
+            textParts.push(p.slice(1, -1)
+              .replace(/\\n/g, '\n').replace(/\\r/g, '\r')
+              .replace(/\\\\/g, '\\').replace(/\\(/g, '(').replace(/\\)/g, ')'));
+          }
+        }
+        
+        let extractedText = textParts.join(' ').replace(/\s+/g, ' ').trim();
+        
+        // Fallback: extract readable ASCII strings if PDF operators didn't yield much
+        if (extractedText.length < 200) {
+          const readable = rawText.match(/[A-Za-z0-9\s,.!?;:'"()\-]{15,}/g) || [];
+          extractedText = readable.join(' ').substring(0, 50000);
+        }
+        
+        console.log("PDF text extracted, length:", extractedText.length);
+        
+        if (extractedText.length > 100) {
+          content = extractedText.substring(0, 50000);
+        } else {
+          content = `PDF file uploaded: ${filePath}. The text could not be extracted automatically. Please paste the content manually.`;
         }
       } catch (e) {
         console.error("PDF processing error:", e);
@@ -163,19 +137,19 @@ serve(async (req) => {
     const MAX_CONTENT_LENGTH = 50000;
     const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
     
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+    if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
 
     console.log(`Processing ${contentToProcess.length} chars of content...`);
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
+        model: "gpt-4o-mini",
         messages: [
           {
             role: "system",
