@@ -46,6 +46,7 @@ export default function KnowledgeBase() {
   const [batchBrainType, setBatchBrainType] = useState<"friend" | "expert" | "both">("both");
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [pdfProgress, setPdfProgress] = useState<{ step: string; percent: number } | null>(null);
 
   // URL preview state
   const [urlStep, setUrlStep] = useState<"input" | "preview" | "confirm">("input");
@@ -147,10 +148,13 @@ export default function KnowledgeBase() {
   const addPdf = useMutation({
     mutationFn: async () => {
       if (!pdfFile) throw new Error("No file selected");
+      
+      setPdfProgress({ step: "Uploading file...", percent: 10 });
       const filePath = `${user!.id}/${Date.now()}-${pdfFile.name}`;
       const { error: uploadError } = await supabase.storage.from("knowledge-files").upload(filePath, pdfFile);
       if (uploadError) throw uploadError;
 
+      setPdfProgress({ step: "Creating record...", percent: 25 });
       const { data, error } = await supabase.from("knowledge_base_items").insert({
         user_id: user!.id,
         title: pdfTitle || pdfFile.name,
@@ -161,24 +165,59 @@ export default function KnowledgeBase() {
       }).select().single();
       if (error) throw error;
 
-      supabase.functions.invoke("process-knowledge", {
-        body: { itemId: data.id, type: "pdf", filePath },
-      }).then(() => {
+      setPdfProgress({ step: "Extracting text from PDF...", percent: 40 });
+      
+      // Track progress while edge function processes
+      const progressInterval = setInterval(() => {
+        setPdfProgress(prev => {
+          if (!prev || prev.percent >= 90) return prev;
+          const newPercent = Math.min(prev.percent + 5, 90);
+          const steps = [
+            { at: 45, label: "Reading PDF pages..." },
+            { at: 55, label: "Analyzing content with AI..." },
+            { at: 70, label: "Extracting sales insights..." },
+            { at: 80, label: "Categorizing knowledge chunks..." },
+            { at: 85, label: "Saving to knowledge base..." },
+          ];
+          const currentStep = steps.filter(s => s.at <= newPercent).pop();
+          return { step: currentStep?.label || prev.step, percent: newPercent };
+        });
+      }, 2000);
+
+      try {
+        const result = await supabase.functions.invoke("process-knowledge", {
+          body: { itemId: data.id, type: "pdf", filePath },
+        });
+        clearInterval(progressInterval);
+        
+        if (result.error || result.data?.error) {
+          throw new Error(result.data?.error || result.error?.message || "Processing failed");
+        }
+        
+        setPdfProgress({ step: "Complete!", percent: 100 });
         queryClient.invalidateQueries({ queryKey: ["kb-items"] });
         queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
-      }).catch(console.error);
+      } catch (e) {
+        clearInterval(progressInterval);
+        throw e;
+      }
 
       return data;
     },
     onSuccess: () => {
-      toast.success("PDF uploaded! Processing content...");
-      setPdfDialogOpen(false);
-      setPdfTitle("");
-      setPdfFile(null);
+      toast.success("PDF processed successfully!");
+      setTimeout(() => {
+        setPdfDialogOpen(false);
+        setPdfTitle("");
+        setPdfFile(null);
+        setPdfProgress(null);
+      }, 1000);
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      startPolling();
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (e: any) => {
+      setPdfProgress(null);
+      toast.error(e.message);
+    },
   });
 
   const startPolling = () => {
@@ -369,10 +408,24 @@ export default function KnowledgeBase() {
                     </SelectContent>
                   </Select>
                 </div>
+                {pdfProgress && (
+                  <div className="space-y-2 pt-2">
+                    <div className="flex items-center gap-2">
+                      {pdfProgress.percent < 100 ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4 text-green-500" />
+                      )}
+                      <span className="text-sm font-medium">{pdfProgress.step}</span>
+                    </div>
+                    <Progress value={pdfProgress.percent} className="h-2" />
+                    <p className="text-xs text-muted-foreground">{pdfProgress.percent}% complete</p>
+                  </div>
+                )}
               </div>
               <DialogFooter>
                 <Button onClick={() => addPdf.mutate()} disabled={!pdfFile || addPdf.isPending}>
-                  {addPdf.isPending ? "Uploading..." : "Upload & Process"}
+                  {addPdf.isPending ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Processing...</> : "Upload & Process"}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -634,6 +687,15 @@ export default function KnowledgeBase() {
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
                   </div>
+                  {item.status === "processing" && (
+                    <div className="mt-3 pt-3 border-t">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                        <p className="text-xs font-medium text-muted-foreground">Processing content — extracting knowledge...</p>
+                      </div>
+                      <Progress value={undefined} className="h-1.5 animate-pulse" />
+                    </div>
+                  )}
                   {item.status === "ready" && itemChunks.length > 0 && (
                     <div className="mt-3 pt-3 border-t">
                       <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
