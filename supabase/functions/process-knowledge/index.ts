@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { itemId, url, type, filePath } = await req.json();
+    const { itemId, url, type, filePath, manualTranscript } = await req.json();
     
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -29,7 +29,11 @@ serve(async (req) => {
 
     let content = "";
 
-    if (type === "pdf" && filePath) {
+    // Use manual transcript if provided (user pasted it manually)
+    if (manualTranscript && manualTranscript.trim().length > 10) {
+      content = manualTranscript.trim();
+      console.log("Using manual transcript, length:", content.length);
+    } else if (type === "pdf" && filePath) {
       // Download PDF from storage and extract text
       const { data: fileData, error: fileError } = await supabase.storage
         .from("knowledge-files")
