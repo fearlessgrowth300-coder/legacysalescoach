@@ -20,13 +20,14 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { MessageSquare, Brain, Briefcase, BarChart3, LogOut, PanelLeft, Sparkles, Moon, Sun, Settings } from "lucide-react";
+import { MessageSquare, Brain, Briefcase, BarChart3, LogOut, PanelLeft, Sparkles, Moon, Sun, Settings, Phone } from "lucide-react";
 import { CSSProperties, ReactNode, useEffect, useState } from "react";
 import { useNavigate, useLocation, Navigate } from "react-router-dom";
 import { Button } from "./ui/button";
 
 const menuItems = [
   { icon: MessageSquare, label: "Chats", path: "/chats" },
+  { icon: Phone, label: "Practice", path: "/practice" },
   { icon: Brain, label: "Knowledge Base", path: "/knowledge-base" },
   { icon: Sparkles, label: "AI Brain", path: "/brain" },
   { icon: Briefcase, label: "Workspaces", path: "/workspaces" },

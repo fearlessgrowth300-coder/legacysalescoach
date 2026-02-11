@@ -29,248 +29,102 @@ serve(async (req) => {
 
     let content = "";
 
-    // Use manual transcript if provided (user pasted it manually)
+    // Use manual transcript if provided
     if (manualTranscript && manualTranscript.trim().length > 10) {
       content = manualTranscript.trim();
       console.log("Using manual transcript, length:", content.length);
     } else if (type === "pdf" && filePath) {
-      // Download PDF from storage and extract text
-      const { data: fileData, error: fileError } = await supabase.storage
-        .from("knowledge-files")
-        .download(filePath);
-      
-      if (fileError || !fileData) {
-        console.error("File download error:", fileError);
-        await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-        return new Response(JSON.stringify({ error: "Could not download file" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      // PDF processing: create a signed URL and use AI vision to read it
+      try {
+        // First try: download the file and send as base64 in smaller chunks
+        const { data: fileData, error: fileError } = await supabase.storage
+          .from("knowledge-files")
+          .download(filePath);
+        
+        if (fileError || !fileData) {
+          console.error("File download error:", fileError);
+          await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+          return new Response(JSON.stringify({ error: "Could not download file" }), {
+            status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        const arrayBuffer = await fileData.arrayBuffer();
+        const fileSizeKB = arrayBuffer.byteLength / 1024;
+        console.log(`PDF file size: ${fileSizeKB.toFixed(1)} KB`);
+
+        // For files over 10MB, reject gracefully
+        if (arrayBuffer.byteLength > 10 * 1024 * 1024) {
+          await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+          return new Response(JSON.stringify({ error: "PDF too large. Max 10MB. Please split into smaller files." }), {
+            status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        // Convert to base64
+        const bytes = new Uint8Array(arrayBuffer);
+        const CHUNK_SIZE = 32768;
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+          const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
+          binary += String.fromCharCode(...chunk);
+        }
+        const base64 = btoa(binary);
+
+        const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+        if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+        console.log("Sending PDF to AI for extraction...");
+        const pdfExtractResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${LOVABLE_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "Extract ALL text content from this PDF document. Return the full text content, preserving important structure like headings, lists, and key quotes. Do not summarize - extract everything." },
+                  { type: "image_url", image_url: { url: `data:application/pdf;base64,${base64}` } },
+                ],
+              },
+            ],
+            temperature: 0.1,
+          }),
         });
-      }
 
-      // Extract text from PDF using AI vision
-      const arrayBuffer = await fileData.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      let binary = "";
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      const base64 = btoa(binary);
+        if (!pdfExtractResponse.ok) {
+          const errText = await pdfExtractResponse.text();
+          console.error("AI PDF extraction failed:", pdfExtractResponse.status, errText);
+          
+          if (pdfExtractResponse.status === 429) {
+            await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+            return new Response(JSON.stringify({ error: "Rate limited. Please try again in a minute." }), {
+              status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+          throw new Error(`AI extraction failed: ${pdfExtractResponse.status}`);
+        }
 
-      const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-      if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
-
-      const pdfExtractResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "Extract ALL text content from this PDF document. Return the full text content, preserving important structure. Do not summarize." },
-                { type: "image_url", image_url: { url: `data:application/pdf;base64,${base64}` } },
-              ],
-            },
-          ],
-          temperature: 0.1,
-        }),
-      });
-
-      if (pdfExtractResponse.ok) {
         const pdfData = await pdfExtractResponse.json();
         content = pdfData.choices?.[0]?.message?.content || "";
+        console.log("PDF text extracted, length:", content.length);
+      } catch (e) {
+        console.error("PDF processing error:", e);
+        await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+        return new Response(JSON.stringify({ error: `PDF processing failed: ${e instanceof Error ? e.message : "Unknown error"}` }), {
+          status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
     } else if (url) {
-      // Check URL type
-      const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
-      const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
-
-      if (isInstagram) {
-        const isPost = url.match(/instagram\.com\/(?:p|reel|tv)\//);
-        const APIFY_API_KEY = Deno.env.get("APIFY_API_KEY");
-
-        if (isPost && APIFY_API_KEY) {
-          // Instagram post/reel - use Apify Instagram Post Scraper
-          try {
-            const actorRes = await fetch(
-              `https://api.apify.com/v2/acts/apify~instagram-post-scraper/run-sync-get-dataset-items?token=${APIFY_API_KEY}`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ directUrls: [url], resultsLimit: 1 }),
-                signal: AbortSignal.timeout(60000),
-              }
-            );
-            if (actorRes.ok) {
-              const results = await actorRes.json();
-              const post = Array.isArray(results) && results.length > 0 ? results[0] : null;
-              if (post) {
-                content = [
-                  `Instagram ${post.type === "Video" ? "Reel/Video" : "Post"} by @${post.ownerUsername || "unknown"}`,
-                  `Caption: ${post.caption || "No caption"}`,
-                  `Likes: ${post.likesCount || 0} | Comments: ${post.commentsCount || 0}`,
-                  post.type === "Video" ? `Video views: ${post.videoViewCount || 0}` : "",
-                  // Include top comments for context
-                  ...(post.latestComments || []).slice(0, 10).map((c: any) => `Comment by @${c.ownerUsername}: ${c.text}`),
-                ].filter(Boolean).join("\n");
-              }
-            }
-          } catch (e) {
-            console.error("Apify post scraper error:", e);
-          }
-        } else {
-          // Instagram profile URL - use fetch-instagram function
-          try {
-            const supabaseFnUrl = `${supabaseUrl}/functions/v1/fetch-instagram`;
-            const igRes = await fetch(supabaseFnUrl, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${supabaseKey}`,
-              },
-              body: JSON.stringify({ username: url }),
-              signal: AbortSignal.timeout(90000),
-            });
-            if (igRes.ok) {
-              const igData = await igRes.json();
-              content = igData.summary || "";
-              if (!content && igData.biography) {
-                content = `Instagram Profile: @${igData.username}\nBio: ${igData.biography}\nFollowers: ${igData.followersCount}`;
-              }
-            }
-          } catch (e) {
-            console.error("Instagram Apify fetch error:", e);
-          }
-        }
-
-        if (!content || content.length < 50) {
-          content = `Instagram URL: ${url}. Please analyze this Instagram profile/post based on the URL and extract any sales-relevant knowledge.`;
-        }
-      } else if (isYouTube) {
-        // Extract video ID
-        let videoId = "";
-        try {
-          const urlObj = new URL(url);
-          if (url.includes("youtu.be")) {
-            videoId = urlObj.pathname.slice(1);
-          } else {
-            videoId = urlObj.searchParams.get("v") || "";
-          }
-        } catch { /* ignore */ }
-
-        if (videoId) {
-          // Use AI to analyze YouTube video via its publicly available info
-          // First try to get the transcript via an unofficial API
-          try {
-            const transcriptRes = await fetch(
-              `https://www.youtube.com/watch?v=${videoId}`,
-              {
-                headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-                signal: AbortSignal.timeout(15000),
-              }
-            );
-            if (transcriptRes.ok) {
-              const html = await transcriptRes.text();
-              // Try to extract captions/transcript data from the page
-              const captionMatch = html.match(/"captions":\s*(\{[^}]*"playerCaptionsTracklistRenderer"[^}]*\})/);
-              
-              // Extract video title and description from meta tags
-              const titleMatch = html.match(/<meta name="title" content="([^"]*)"/) || html.match(/<title>([^<]*)<\/title>/);
-              const descMatch = html.match(/<meta name="description" content="([^"]*)"/);
-              const title = titleMatch?.[1] || "";
-              const description = descMatch?.[1] || "";
-
-              // Get initial data JSON for more content
-              const initialDataMatch = html.match(/var ytInitialData = ({.*?});<\/script>/s);
-              let additionalContent = "";
-              if (initialDataMatch) {
-                try {
-                  const ytData = JSON.parse(initialDataMatch[1]);
-                  // Extract any available text content
-                  const str = JSON.stringify(ytData);
-                  const textParts = str.match(/"text":"([^"]{20,})"/g);
-                  if (textParts) {
-                    additionalContent = textParts
-                      .map(p => p.replace(/"text":"/, "").replace(/"$/, ""))
-                      .join(" ")
-                      .substring(0, 5000);
-                  }
-                } catch { /* ignore */ }
-              }
-
-              // Try to get transcript via timedtext API
-              const captionsUrlMatch = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/);
-              if (captionsUrlMatch) {
-                try {
-                  const captionUrl = captionsUrlMatch[1].replace(/\\u0026/g, "&");
-                  const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
-                  if (captionRes.ok) {
-                    const captionXml = await captionRes.text();
-                    const transcriptText = captionXml
-                      .replace(/<[^>]+>/g, " ")
-                      .replace(/&amp;/g, "&")
-                      .replace(/&lt;/g, "<")
-                      .replace(/&gt;/g, ">")
-                      .replace(/&#39;/g, "'")
-                      .replace(/&quot;/g, '"')
-                      .replace(/\s+/g, " ")
-                      .trim();
-                    if (transcriptText.length > 100) {
-                      content = `Video Title: ${title}\n\nTranscript:\n${transcriptText.substring(0, 15000)}`;
-                    }
-                  }
-                } catch (e) {
-                  console.error("Transcript fetch error:", e);
-                }
-              }
-
-              // Fallback: use title + description + extracted text
-              if (!content || content.length < 100) {
-                content = `YouTube Video: ${title}\n\nDescription: ${description}\n\n${additionalContent}`.substring(0, 15000);
-              }
-            }
-          } catch (e) {
-            console.error("YouTube fetch error:", e);
-          }
-        }
-
-        // Final fallback: ask AI to analyze based on whatever we have
-        if (!content || content.length < 50) {
-          content = `YouTube video URL: ${url}. Please analyze this video based on the URL and any knowledge you have about it.`;
-        }
-      } else {
-        // Regular URL - fetch and extract text
-        try {
-          const res = await fetch(url, {
-            headers: { "User-Agent": "Mozilla/5.0 (compatible; SalesCoachBot/1.0)" },
-            signal: AbortSignal.timeout(15000),
-          });
-          if (res.ok) {
-            const html = await res.text();
-            content = html
-              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-              .replace(/<[^>]+>/g, " ")
-              .replace(/&nbsp;/g, " ")
-              .replace(/\s+/g, " ")
-              .trim()
-              .substring(0, 15000);
-          }
-        } catch (e) {
-          console.error("Fetch error:", e);
-        }
-      }
+      content = await extractUrlContent(url, supabaseUrl, supabaseKey, supabase);
     }
 
     if (!content || content.length < 20) {
-      await supabase
-        .from("knowledge_base_items")
-        .update({ status: "error" })
-        .eq("id", itemId);
+      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
       return new Response(JSON.stringify({ error: "Could not extract content" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -304,7 +158,7 @@ serve(async (req) => {
         messages: [
           {
             role: "system",
-            content: `You are a sales knowledge extractor. Extract actionable sales knowledge from the content below.
+            content: `You are a sales & network marketing knowledge extractor. Extract actionable sales and prospecting knowledge from the content below.
 
 Categorize each insight into one of these categories:
 - opening_lines: Good ways to start conversations
@@ -313,13 +167,15 @@ Categorize each insight into one of these categories:
 - objection_handling: How to handle objections and resistance
 - closing_techniques: How to close deals and get commitments
 - trust_building: How to establish credibility
+- prospecting: How to find and approach prospects
+- network_marketing: Network marketing specific strategies
 - general: General sales wisdom
 
 Return JSON array of objects with: { "category": "...", "content": "...", "triggerPhrases": "..." }
 Extract 5-15 chunks. Each chunk should be a standalone, actionable insight.
 Also include a "summary" field in each chunk that is a 1-sentence summary of what was learned.`
           },
-          { role: "user", content: `Extract sales knowledge from:\n\n${content}` }
+          { role: "user", content: `Extract sales knowledge from:\n\n${content.substring(0, 30000)}` }
         ],
         temperature: 0.3,
       }),
@@ -372,3 +228,169 @@ Also include a "summary" field in each chunk that is a 1-sentence summary of wha
     );
   }
 });
+
+// Extract content from URLs (YouTube, Instagram, regular web pages)
+async function extractUrlContent(url: string, supabaseUrl: string, supabaseKey: string, supabase: any): Promise<string> {
+  const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
+  const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
+
+  if (isInstagram) {
+    return await extractInstagramContent(url, supabaseUrl, supabaseKey, supabase);
+  } else if (isYouTube) {
+    return await extractYouTubeContent(url);
+  } else {
+    return await extractWebContent(url);
+  }
+}
+
+async function extractInstagramContent(url: string, supabaseUrl: string, supabaseKey: string, supabase: any): Promise<string> {
+  let content = "";
+  const isPost = url.match(/instagram\.com\/(?:p|reel|tv)\//);
+  const APIFY_API_KEY = Deno.env.get("APIFY_API_KEY");
+
+  if (isPost && APIFY_API_KEY) {
+    try {
+      const actorRes = await fetch(
+        `https://api.apify.com/v2/acts/apify~instagram-post-scraper/run-sync-get-dataset-items?token=${APIFY_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ directUrls: [url], resultsLimit: 1 }),
+          signal: AbortSignal.timeout(60000),
+        }
+      );
+      if (actorRes.ok) {
+        const results = await actorRes.json();
+        const post = Array.isArray(results) && results.length > 0 ? results[0] : null;
+        if (post) {
+          content = [
+            `Instagram ${post.type === "Video" ? "Reel/Video" : "Post"} by @${post.ownerUsername || "unknown"}`,
+            `Caption: ${post.caption || "No caption"}`,
+            `Likes: ${post.likesCount || 0} | Comments: ${post.commentsCount || 0}`,
+            post.type === "Video" ? `Video views: ${post.videoViewCount || 0}` : "",
+            ...(post.latestComments || []).slice(0, 10).map((c: any) => `Comment by @${c.ownerUsername}: ${c.text}`),
+          ].filter(Boolean).join("\n");
+        }
+      }
+    } catch (e) {
+      console.error("Apify post scraper error:", e);
+    }
+  } else {
+    try {
+      const supabaseFnUrl = `${supabaseUrl}/functions/v1/fetch-instagram`;
+      const igRes = await fetch(supabaseFnUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseKey}` },
+        body: JSON.stringify({ username: url }),
+        signal: AbortSignal.timeout(90000),
+      });
+      if (igRes.ok) {
+        const igData = await igRes.json();
+        content = igData.summary || "";
+        if (!content && igData.biography) {
+          content = `Instagram Profile: @${igData.username}\nBio: ${igData.biography}\nFollowers: ${igData.followersCount}`;
+        }
+      }
+    } catch (e) {
+      console.error("Instagram Apify fetch error:", e);
+    }
+  }
+
+  if (!content || content.length < 50) {
+    content = `Instagram URL: ${url}. Please analyze this Instagram profile/post based on the URL and extract any sales-relevant knowledge.`;
+  }
+  return content;
+}
+
+async function extractYouTubeContent(url: string): Promise<string> {
+  let content = "";
+  let videoId = "";
+  try {
+    const urlObj = new URL(url);
+    videoId = url.includes("youtu.be") ? urlObj.pathname.slice(1) : (urlObj.searchParams.get("v") || "");
+  } catch { /* ignore */ }
+
+  if (videoId) {
+    try {
+      const transcriptRes = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (transcriptRes.ok) {
+        const html = await transcriptRes.text();
+        const titleMatch = html.match(/<meta name="title" content="([^"]*)"/) || html.match(/<title>([^<]*)<\/title>/);
+        const descMatch = html.match(/<meta name="description" content="([^"]*)"/);
+        const title = titleMatch?.[1] || "";
+        const description = descMatch?.[1] || "";
+
+        // Try transcript via timedtext API
+        const captionsUrlMatch = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/);
+        if (captionsUrlMatch) {
+          try {
+            const captionUrl = captionsUrlMatch[1].replace(/\\u0026/g, "&");
+            const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
+            if (captionRes.ok) {
+              const captionXml = await captionRes.text();
+              const transcriptText = captionXml
+                .replace(/<[^>]+>/g, " ")
+                .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+                .replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+                .replace(/\s+/g, " ").trim();
+              if (transcriptText.length > 100) {
+                content = `Video Title: ${title}\n\nTranscript:\n${transcriptText.substring(0, 15000)}`;
+              }
+            }
+          } catch (e) {
+            console.error("Transcript fetch error:", e);
+          }
+        }
+
+        if (!content || content.length < 100) {
+          const initialDataMatch = html.match(/var ytInitialData = ({.*?});<\/script>/s);
+          let additionalContent = "";
+          if (initialDataMatch) {
+            try {
+              const ytData = JSON.parse(initialDataMatch[1]);
+              const str = JSON.stringify(ytData);
+              const textParts = str.match(/"text":"([^"]{20,})"/g);
+              if (textParts) {
+                additionalContent = textParts.map(p => p.replace(/"text":"/, "").replace(/"$/, "")).join(" ").substring(0, 5000);
+              }
+            } catch { /* ignore */ }
+          }
+          content = `YouTube Video: ${title}\n\nDescription: ${description}\n\n${additionalContent}`.substring(0, 15000);
+        }
+      }
+    } catch (e) {
+      console.error("YouTube fetch error:", e);
+    }
+  }
+
+  if (!content || content.length < 50) {
+    content = `YouTube video URL: ${url}. Please analyze this video based on the URL and any knowledge you have about it.`;
+  }
+  return content;
+}
+
+async function extractWebContent(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; SalesCoachBot/1.0)" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      return html
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .substring(0, 15000);
+    }
+  } catch (e) {
+    console.error("Fetch error:", e);
+  }
+  return "";
+}
