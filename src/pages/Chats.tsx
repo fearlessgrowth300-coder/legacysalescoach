@@ -13,7 +13,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   MessageSquare, Plus, Send, User, Sparkles,
   Copy, Check, AlertTriangle,
-  Heart, Briefcase, MoreVertical, Trash2, Camera, Loader2, Image
+  Heart, Briefcase, MoreVertical, Trash2, Camera, Loader2, Image, Upload, X
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
@@ -30,6 +30,7 @@ export default function Chats() {
   const selectedProspectId = prospectId || null;
 
   const [newProspectOpen, setNewProspectOpen] = useState(false);
+  const [chatType, setChatType] = useState<"new" | "existing" | null>(null);
   const [newProspectName, setNewProspectName] = useState("");
   const [newProspectIg, setNewProspectIg] = useState("");
   const [messageInput, setMessageInput] = useState("");
@@ -40,8 +41,17 @@ export default function Chats() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isOcrProcessing, setIsOcrProcessing] = useState(false);
 
+  // Screenshot upload flow for existing conversations
+  const [screenshotFiles, setScreenshotFiles] = useState<File[]>([]);
+  const [screenshotPreviews, setScreenshotPreviews] = useState<string[]>([]);
+  const [uploadStep, setUploadStep] = useState<"info" | "upload" | "processing" | "done">("info");
+  const [extractedConversation, setExtractedConversation] = useState("");
+  const [firstMessageSuggestions, setFirstMessageSuggestions] = useState<Suggestion[]>([]);
+  const [isGeneratingFirst, setIsGeneratingFirst] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
+  const bulkScreenshotInputRef = useRef<HTMLInputElement>(null);
 
   // Get active workspace
   const { data: workspaces } = useQuery({
@@ -92,6 +102,132 @@ export default function Chats() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Reset dialog state when closing
+  const handleDialogChange = (open: boolean) => {
+    setNewProspectOpen(open);
+    if (!open) {
+      setChatType(null);
+      setNewProspectName("");
+      setNewProspectIg("");
+      setScreenshotFiles([]);
+      setScreenshotPreviews([]);
+      setUploadStep("info");
+      setExtractedConversation("");
+      setFirstMessageSuggestions([]);
+    }
+  };
+
+  // Handle bulk screenshot file selection
+  const handleBulkScreenshotSelect = (files: FileList | null) => {
+    if (!files) return;
+    const newFiles = Array.from(files);
+    const newPreviews = newFiles.map((f) => URL.createObjectURL(f));
+    setScreenshotFiles((prev) => [...prev, ...newFiles]);
+    setScreenshotPreviews((prev) => [...prev, ...newPreviews]);
+  };
+
+  const removeScreenshot = (index: number) => {
+    URL.revokeObjectURL(screenshotPreviews[index]);
+    setScreenshotFiles((prev) => prev.filter((_, i) => i !== index));
+    setScreenshotPreviews((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Process all screenshots via OCR and create prospect
+  const processExistingConversation = async () => {
+    if (!user || !activeWorkspace || screenshotFiles.length === 0) return;
+    setUploadStep("processing");
+
+    try {
+      // 1. Create the prospect first
+      const { data: prospect, error: prospectError } = await supabase
+        .from("prospects")
+        .insert({
+          user_id: user.id,
+          workspace_id: activeWorkspace.id,
+          name: newProspectName,
+          instagram_url: newProspectIg || null,
+          reply_mode: activeWorkspace.default_reply_mode,
+          conversation_stage: "continuing",
+        })
+        .select()
+        .single();
+      if (prospectError) throw prospectError;
+
+      // 2. If Instagram URL, fetch profile
+      if (newProspectIg) {
+        try {
+          const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
+            body: { username: newProspectIg },
+          });
+          if (igData && !igData.error) {
+            const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
+            await supabase.from("prospects").update({ detected_interests: interests || null }).eq("id", prospect.id);
+          }
+        } catch (e) { console.error("IG fetch error:", e); }
+      }
+
+      // 3. Upload and OCR all screenshots sequentially
+      const allTexts: string[] = [];
+      for (let i = 0; i < screenshotFiles.length; i++) {
+        const file = screenshotFiles[i];
+        const filePath = `${user.id}/${Date.now()}-${i}-${file.name}`;
+        const { error: uploadError } = await supabase.storage.from("chat-screenshots").upload(filePath, file);
+        if (uploadError) { console.error("Upload error:", uploadError); continue; }
+
+        const { data, error } = await supabase.functions.invoke("ocr-screenshot", { body: { filePath } });
+        if (!error && data?.text) {
+          allTexts.push(`[Screenshot ${i + 1}]:\n${data.text}`);
+        }
+      }
+
+      const fullConversation = allTexts.join("\n\n");
+      setExtractedConversation(fullConversation);
+
+      // 4. Save the extracted conversation as inbound messages
+      if (fullConversation) {
+        await supabase.from("chat_messages").insert({
+          user_id: user.id,
+          prospect_id: prospect.id,
+          content: fullConversation,
+          direction: "inbound",
+          thread_type: currentThreadType,
+        });
+      }
+
+      // 5. Ask AI for next reply suggestion based on full conversation
+      const { data: suggestData, error: suggestError } = await supabase.functions.invoke("chat-suggest", {
+        body: {
+          prospectId: prospect.id,
+          message: fullConversation,
+          threadType: currentThreadType,
+          mode: "continue",
+        },
+      });
+
+      if (!suggestError && suggestData?.suggestions) {
+        setFirstMessageSuggestions(suggestData.suggestions);
+      }
+
+      setUploadStep("done");
+      queryClient.invalidateQueries({ queryKey: ["prospects"] });
+
+      // Navigate to the new chat
+      setTimeout(() => {
+        handleDialogChange(false);
+        navigate(`/chats/${prospect.id}`);
+        if (suggestData?.suggestions) {
+          setSuggestions(suggestData.suggestions);
+          setPushyWarning(suggestData.pushyWarning || null);
+        }
+      }, 1500);
+    } catch (e: any) {
+      console.error("Process error:", e);
+      toast.error(e.message || "Failed to process screenshots");
+      setUploadStep("upload");
+    }
+  };
+
+  // Create new prospect (cold outreach) with first message generation
   const createProspect = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase
@@ -109,21 +245,32 @@ export default function Chats() {
 
       // If Instagram URL provided, auto-fetch profile details via Apify
       if (newProspectIg) {
+        setIsGeneratingFirst(true);
         try {
           const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
             body: { username: newProspectIg },
           });
           if (igData && !igData.error) {
-            const interests = [
-              igData.businessCategory,
-              igData.biography?.substring(0, 200),
-            ].filter(Boolean).join(" | ");
-            await supabase.from("prospects").update({
-              detected_interests: interests || null,
-            }).eq("id", data.id);
+            const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
+            await supabase.from("prospects").update({ detected_interests: interests || null }).eq("id", data.id);
+
+            // Generate first message using AI
+            const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
+              body: {
+                prospectId: data.id,
+                message: `Instagram profile analyzed. Bio: ${igData.biography || "N/A"}. Followers: ${igData.followersCount || "N/A"}. Category: ${igData.businessCategory || "N/A"}. Recent posts: ${igData.recentPosts?.slice(0, 3)?.map((p: any) => p.caption?.substring(0, 100)).join("; ") || "N/A"}`,
+                threadType: currentThreadType,
+                mode: "first_message",
+              },
+            });
+            if (suggestData?.suggestions) {
+              setFirstMessageSuggestions(suggestData.suggestions);
+            }
           }
         } catch (e) {
           console.error("Instagram auto-fetch error:", e);
+        } finally {
+          setIsGeneratingFirst(false);
         }
       }
 
@@ -131,11 +278,17 @@ export default function Chats() {
     },
     onSuccess: (data) => {
       toast.success("New chat created!");
-      setNewProspectOpen(false);
-      setNewProspectName("");
-      setNewProspectIg("");
       queryClient.invalidateQueries({ queryKey: ["prospects"] });
-      navigate(`/chats/${data.id}`);
+
+      // If we have first message suggestions, show them after navigating
+      if (firstMessageSuggestions.length > 0) {
+        handleDialogChange(false);
+        navigate(`/chats/${data.id}`);
+        setSuggestions(firstMessageSuggestions);
+      } else {
+        handleDialogChange(false);
+        navigate(`/chats/${data.id}`);
+      }
     },
     onError: (e: any) => toast.error(e.message),
   });
@@ -146,14 +299,10 @@ export default function Chats() {
 
     try {
       const filePath = `${user.id}/${Date.now()}-${file.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from("chat-screenshots")
-        .upload(filePath, file);
+      const { error: uploadError } = await supabase.storage.from("chat-screenshots").upload(filePath, file);
       if (uploadError) throw uploadError;
 
-      const { data, error } = await supabase.functions.invoke("ocr-screenshot", {
-        body: { filePath },
-      });
+      const { data, error } = await supabase.functions.invoke("ocr-screenshot", { body: { filePath } });
       if (error) throw error;
 
       if (data?.text) {
@@ -267,25 +416,168 @@ export default function Chats() {
         <div className="p-4 border-b">
           <div className="flex items-center justify-between mb-2">
             <h2 className="font-semibold">Chats</h2>
-            <Dialog open={newProspectOpen} onOpenChange={setNewProspectOpen}>
+            <Dialog open={newProspectOpen} onOpenChange={handleDialogChange}>
               <DialogTrigger asChild>
                 <Button size="sm" variant="outline"><Plus className="h-4 w-4 mr-1" />New</Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent className="max-w-lg">
                 <DialogHeader><DialogTitle>New Chat</DialogTitle></DialogHeader>
-                <div className="space-y-4 py-4">
-                  <div>
-                    <Label>Prospect Name *</Label>
-                    <Input value={newProspectName} onChange={(e) => setNewProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
+
+                {/* Step 1: Choose chat type */}
+                {!chatType && (
+                  <div className="space-y-3 py-4">
+                    <p className="text-sm text-muted-foreground">What type of conversation is this?</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Card
+                        className="p-4 cursor-pointer hover:border-primary transition-colors"
+                        onClick={() => setChatType("new")}
+                      >
+                        <div className="text-center space-y-2">
+                          <MessageSquare className="h-8 w-8 mx-auto text-primary" />
+                          <h4 className="font-medium text-sm">New Prospect</h4>
+                          <p className="text-xs text-muted-foreground">Cold outreach — start a fresh conversation</p>
+                        </div>
+                      </Card>
+                      <Card
+                        className="p-4 cursor-pointer hover:border-primary transition-colors"
+                        onClick={() => setChatType("existing")}
+                      >
+                        <div className="text-center space-y-2">
+                          <Upload className="h-8 w-8 mx-auto text-primary" />
+                          <h4 className="font-medium text-sm">Existing Conversation</h4>
+                          <p className="text-xs text-muted-foreground">Upload screenshots of your DMs to continue</p>
+                        </div>
+                      </Card>
+                    </div>
                   </div>
-                  <div>
-                    <Label>Instagram URL</Label>
-                    <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username" />
+                )}
+
+                {/* New Prospect Flow */}
+                {chatType === "new" && (
+                  <div className="space-y-4 py-4">
+                    <Button variant="ghost" size="sm" onClick={() => setChatType(null)} className="mb-2">← Back</Button>
+                    <div>
+                      <Label>Prospect Name *</Label>
+                      <Input value={newProspectName} onChange={(e) => setNewProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
+                    </div>
+                    <div>
+                      <Label>Instagram URL</Label>
+                      <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username" />
+                      <p className="text-xs text-muted-foreground mt-1">We'll analyze their profile to craft a perfect opening message</p>
+                    </div>
+                    {isGeneratingFirst && (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Analyzing profile & generating first message...</span>
+                      </div>
+                    )}
+                    {firstMessageSuggestions.length > 0 && (
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium flex items-center gap-2"><Sparkles className="h-4 w-4 text-primary" />Suggested Opening Messages</p>
+                        {firstMessageSuggestions.map((s) => (
+                          <Card key={s.id} className="p-3">
+                            <p className="text-sm">{s.text}</p>
+                            {s.whyThisWorks && <p className="text-xs text-muted-foreground mt-1">💡 {s.whyThisWorks}</p>}
+                          </Card>
+                        ))}
+                      </div>
+                    )}
+                    <DialogFooter>
+                      <Button onClick={() => createProspect.mutate()} disabled={!newProspectName.trim() || createProspect.isPending}>
+                        {createProspect.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Analyzing...</> : "Create & Analyze"}
+                      </Button>
+                    </DialogFooter>
                   </div>
-                </div>
-                <DialogFooter>
-                  <Button onClick={() => createProspect.mutate()} disabled={!newProspectName.trim()}>Create Chat</Button>
-                </DialogFooter>
+                )}
+
+                {/* Existing Conversation Flow */}
+                {chatType === "existing" && (
+                  <div className="space-y-4 py-4">
+                    <Button variant="ghost" size="sm" onClick={() => { setChatType(null); setUploadStep("info"); setScreenshotFiles([]); setScreenshotPreviews([]); }} className="mb-2">← Back</Button>
+
+                    {uploadStep === "info" && (
+                      <>
+                        <div>
+                          <Label>Prospect Name *</Label>
+                          <Input value={newProspectName} onChange={(e) => setNewProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
+                        </div>
+                        <div>
+                          <Label>Instagram URL</Label>
+                          <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username" />
+                        </div>
+                        <DialogFooter>
+                          <Button onClick={() => setUploadStep("upload")} disabled={!newProspectName.trim()}>Next: Upload Screenshots</Button>
+                        </DialogFooter>
+                      </>
+                    )}
+
+                    {uploadStep === "upload" && (
+                      <>
+                        <div className="text-center p-6 border-2 border-dashed rounded-lg">
+                          <input
+                            ref={bulkScreenshotInputRef}
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => { handleBulkScreenshotSelect(e.target.files); e.target.value = ""; }}
+                          />
+                          <Upload className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+                          <p className="text-sm font-medium mb-1">Upload conversation screenshots</p>
+                          <p className="text-xs text-muted-foreground mb-3">Upload all your DM screenshots in order. The AI will read and learn from them.</p>
+                          <Button variant="outline" onClick={() => bulkScreenshotInputRef.current?.click()}>
+                            <Image className="h-4 w-4 mr-2" />Add Screenshots
+                          </Button>
+                        </div>
+
+                        {screenshotPreviews.length > 0 && (
+                          <div>
+                            <p className="text-sm font-medium mb-2">{screenshotFiles.length} screenshot(s) selected</p>
+                            <div className="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto">
+                              {screenshotPreviews.map((preview, i) => (
+                                <div key={i} className="relative group">
+                                  <img src={preview} alt={`Screenshot ${i + 1}`} className="rounded border h-20 w-full object-cover" />
+                                  <button
+                                    onClick={() => removeScreenshot(i)}
+                                    className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <DialogFooter>
+                          <Button onClick={processExistingConversation} disabled={screenshotFiles.length === 0}>
+                            <Sparkles className="h-4 w-4 mr-2" />Process & Get AI Suggestions
+                          </Button>
+                        </DialogFooter>
+                      </>
+                    )}
+
+                    {uploadStep === "processing" && (
+                      <div className="text-center py-8 space-y-4">
+                        <Loader2 className="h-10 w-10 animate-spin mx-auto text-primary" />
+                        <div>
+                          <p className="font-medium">Processing screenshots...</p>
+                          <p className="text-sm text-muted-foreground">Reading your conversation and analyzing context</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {uploadStep === "done" && (
+                      <div className="text-center py-8 space-y-4">
+                        <Check className="h-10 w-10 mx-auto text-green-500" />
+                        <div>
+                          <p className="font-medium">Conversation analyzed!</p>
+                          <p className="text-sm text-muted-foreground">Redirecting to your chat with AI suggestions...</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </DialogContent>
             </Dialog>
           </div>
