@@ -17,14 +17,31 @@ const Install = () => {
     const ua = navigator.userAgent;
     setIsIOS(/iPad|iPhone|iPod/.test(ua) && !(window as any).MSStream);
 
+    // Check if prompt was already captured globally
+    if ((window as any).__pwaInstallPrompt) {
+      setDeferredPrompt((window as any).__pwaInstallPrompt as BeforeInstallPromptEvent);
+    }
+
+    // Listen for late-arriving prompt
     const handler = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
     };
 
+    // Listen for global signal
+    const readyHandler = () => {
+      if ((window as any).__pwaInstallPrompt) {
+        setDeferredPrompt((window as any).__pwaInstallPrompt as BeforeInstallPromptEvent);
+      }
+    };
+
     window.addEventListener("beforeinstallprompt", handler);
+    window.addEventListener("pwa-prompt-ready", readyHandler);
     window.addEventListener("appinstalled", () => setInstalled(true));
-    return () => window.removeEventListener("beforeinstallprompt", handler);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handler);
+      window.removeEventListener("pwa-prompt-ready", readyHandler);
+    };
   }, []);
 
   const handleInstall = async () => {
