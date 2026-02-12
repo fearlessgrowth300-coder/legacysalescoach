@@ -10,20 +10,20 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { email, newPassword, otpCode } = await req.json();
-    if (!email || !newPassword || !otpCode) throw new Error("Email, new password, and OTP code required");
+    const { email, code, type } = await req.json();
+    if (!email || !code || !type) throw new Error("email, code, and type required");
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Verify OTP server-side before allowing password reset
+    // Find valid OTP
     const { data: otpRecord, error: fetchErr } = await supabase
       .from("otp_codes")
       .select("*")
       .eq("email", email.toLowerCase().trim())
-      .eq("type", "reset")
+      .eq("type", type)
       .gte("expires_at", new Date().toISOString())
       .order("created_at", { ascending: false })
       .limit(1)
@@ -32,45 +32,37 @@ serve(async (req) => {
     if (fetchErr) throw fetchErr;
 
     if (!otpRecord) {
-      return new Response(JSON.stringify({ error: "OTP expired or not found. Request a new code." }), {
+      return new Response(JSON.stringify({ valid: false, error: "Code expired or not found" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
+    // Max 5 attempts
     if (otpRecord.attempts >= 5) {
+      // Delete the code to force requesting a new one
       await supabase.from("otp_codes").delete().eq("id", otpRecord.id);
-      return new Response(JSON.stringify({ error: "Too many attempts. Request a new code." }), {
+      return new Response(JSON.stringify({ valid: false, error: "Too many attempts. Request a new code." }), {
         status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
+    // Increment attempts
     await supabase.from("otp_codes").update({ attempts: otpRecord.attempts + 1 }).eq("id", otpRecord.id);
 
-    if (otpRecord.code !== otpCode) {
-      return new Response(JSON.stringify({ error: "Invalid code" }), {
+    if (otpRecord.code !== code) {
+      return new Response(JSON.stringify({ valid: false, error: "Invalid code" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // OTP valid — delete it
+    // Valid — delete used code
     await supabase.from("otp_codes").delete().eq("id", otpRecord.id);
 
-    // Find user by email
-    const { data: { users }, error: listError } = await supabase.auth.admin.listUsers();
-    if (listError) throw listError;
-
-    const user = users.find(u => u.email === email.toLowerCase().trim());
-    if (!user) throw new Error("User not found");
-
-    // Update password
-    const { error } = await supabase.auth.admin.updateUserById(user.id, { password: newPassword });
-    if (error) throw error;
-
-    return new Response(JSON.stringify({ success: true }), {
+    return new Response(JSON.stringify({ valid: true }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("reset-password error:", error);
+    console.error("verify-otp error:", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

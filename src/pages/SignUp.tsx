@@ -14,7 +14,6 @@ export default function SignUp() {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
 
-  // Redirect already-authenticated users away from signup
   useEffect(() => {
     if (!loading && user) {
       navigate("/chats", { replace: true });
@@ -29,8 +28,6 @@ export default function SignUp() {
   const [showOtp, setShowOtp] = useState(false);
   const [otpCode, setOtpCode] = useState("");
 
-  const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password !== confirmPassword) { toast.error("Passwords do not match"); return; }
@@ -38,16 +35,11 @@ export default function SignUp() {
 
     setIsLoading(true);
     try {
-      // Generate OTP and send via Resend
-      const otp = generateOtp();
-      sessionStorage.setItem("signup_otp", otp);
-      sessionStorage.setItem("signup_otp_time", Date.now().toString());
-
+      // Send OTP — generated server-side
       const res = await supabase.functions.invoke("send-otp", {
-        body: { email, otp, type: "signup" },
+        body: { email, type: "signup" },
       });
-      
-      // Handle both edge function errors and API errors
+
       if (res.error) {
         const msg = typeof res.error === 'object' && 'message' in res.error ? res.error.message : String(res.error);
         throw new Error(msg);
@@ -72,14 +64,21 @@ export default function SignUp() {
   const handleVerifyOtp = async () => {
     if (otpCode.length < 6) { toast.error("Please enter the 6-digit code"); return; }
 
-    const stored = sessionStorage.getItem("signup_otp");
-    const time = parseInt(sessionStorage.getItem("signup_otp_time") || "0");
-    if (Date.now() - time > 600000) { toast.error("Code expired. Please try again."); setShowOtp(false); return; }
-    if (otpCode !== stored) { toast.error("Invalid verification code"); return; }
-
     setIsLoading(true);
     try {
-      // OTP verified - now create the account with auto-confirm since we verified manually
+      // Verify OTP server-side
+      const { data: verifyResult, error: verifyErr } = await supabase.functions.invoke("verify-otp", {
+        body: { email, code: otpCode, type: "signup" },
+      });
+
+      if (verifyErr) throw verifyErr;
+      if (!verifyResult?.valid) {
+        toast.error(verifyResult?.error || "Invalid verification code");
+        setIsLoading(false);
+        return;
+      }
+
+      // OTP verified server-side — now create the account
       const { error } = await supabase.auth.signUp({
         email,
         password,
@@ -90,12 +89,7 @@ export default function SignUp() {
       });
       if (error) throw error;
 
-      // Clean up
-      sessionStorage.removeItem("signup_otp");
-      sessionStorage.removeItem("signup_otp_time");
-
       toast.success("Account created! Redirecting...");
-      // The auth state change will handle navigation
       navigate("/chats");
     } catch (error: any) {
       toast.error(error.message || "Failed to create account");
@@ -107,15 +101,11 @@ export default function SignUp() {
   const handleResendCode = async () => {
     setIsLoading(true);
     try {
-      const otp = generateOtp();
-      sessionStorage.setItem("signup_otp", otp);
-      sessionStorage.setItem("signup_otp_time", Date.now().toString());
-
-      const { data: sendData, error: sendError } = await supabase.functions.invoke("send-otp", {
-        body: { email, otp, type: "signup" },
+      const res = await supabase.functions.invoke("send-otp", {
+        body: { email, type: "signup" },
       });
-      if (sendError) throw sendError;
-      if (sendData?.error) throw new Error(sendData.error);
+      if (res.error) throw res.error;
+      if (res.data?.error) throw new Error(res.data.error);
 
       toast.success("New code sent!");
     } catch (error: any) {
@@ -125,7 +115,6 @@ export default function SignUp() {
     }
   };
 
-  // Show spinner while checking auth
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-muted/30">

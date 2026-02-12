@@ -326,6 +326,36 @@ export type Database = {
           },
         ]
       }
+      otp_codes: {
+        Row: {
+          attempts: number
+          code: string
+          created_at: string
+          email: string
+          expires_at: string
+          id: string
+          type: string
+        }
+        Insert: {
+          attempts?: number
+          code: string
+          created_at?: string
+          email: string
+          expires_at: string
+          id?: string
+          type: string
+        }
+        Update: {
+          attempts?: number
+          code?: string
+          created_at?: string
+          email?: string
+          expires_at?: string
+          id?: string
+          type?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
