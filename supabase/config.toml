@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.practice-call]
 verify_jwt = false
+
+[functions.brain-chat]
+verify_jwt = false
