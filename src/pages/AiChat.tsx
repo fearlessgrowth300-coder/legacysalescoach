@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   Brain, Send, Loader2, BookOpen, Sparkles, Plus, MessageSquare,
-  Image, Link, FileText, Pencil, Trash2, Check, X, Menu,
+  Image, Link, FileText, Pencil, Trash2, Check, CheckCheck, X, Menu,
   Mic, MicOff, Pin, PinOff, Search, Star
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "@/integrations/supabase/client";
 
-type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url?: string | null; is_edited?: boolean; is_pinned?: boolean };
+type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url?: string | null; is_edited?: boolean; is_pinned?: boolean; status?: "sending" | "sent" | "delivered" | "read" };
 type Conversation = { id: string; title: string; created_at: string; updated_at: string };
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/brain-chat`;
@@ -142,6 +142,9 @@ export default function AiChat() {
 
   // Follow-up suggestions
   const [followUps, setFollowUps] = useState<string[]>([]);
+
+  // Typing indicator state
+  const [isTyping, setIsTyping] = useState(false);
 
   const scrollToBottom = () => {
     setTimeout(() => {
@@ -386,7 +389,7 @@ export default function AiChat() {
       imageUrl = await uploadImage(attachedImage);
     }
 
-    const userMsg: Msg = { role: "user", content: text || "Analyze this image", image_url: imageUrl };
+    const userMsg: Msg = { role: "user", content: text || "Analyze this image", image_url: imageUrl, status: "sending" };
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setAttachedImage(null);
@@ -405,13 +408,23 @@ export default function AiChat() {
       })
       .select()
       .single();
-    if (savedMsg) userMsg.id = savedMsg.id;
+    if (savedMsg) {
+      userMsg.id = savedMsg.id;
+      // Mark as sent
+      setMessages(prev => prev.map((m, i) => i === prev.length - 1 && m.role === "user" ? { ...m, id: savedMsg.id, status: "sent" as const } : m));
+    }
 
     // Update conversation title if it's the first message
     if (messages.length === 0 && text) {
       await supabase.from("ai_conversations").update({ title: text.substring(0, 60) }).eq("id", convId);
       setConversations(prev => prev.map(c => c.id === convId ? { ...c, title: text.substring(0, 60) } : c));
     }
+
+    // Mark as delivered (AI received the message)
+    setMessages(prev => prev.map(m => m.id === savedMsg?.id ? { ...m, status: "delivered" as const } : m));
+
+    // Show typing indicator
+    setIsTyping(true);
 
     // Build messages for AI
     const aiMessages = [...messages, userMsg].map(m => {
@@ -429,6 +442,7 @@ export default function AiChat() {
 
     let assistantSoFar = "";
     const upsert = (chunk: string) => {
+      setIsTyping(false);
       assistantSoFar += chunk;
       setMessages(prev => {
         const last = prev[prev.length - 1];
@@ -445,6 +459,11 @@ export default function AiChat() {
         onDelta: upsert,
         onDone: async () => {
           setIsLoading(false);
+          setIsTyping(false);
+          // Mark user message as "read" since AI responded
+          if (savedMsg?.id) {
+            setMessages(prev => prev.map(m => m.id === savedMsg.id ? { ...m, status: "read" as const } : m));
+          }
           if (assistantSoFar && convId) {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: convId,
@@ -459,6 +478,7 @@ export default function AiChat() {
         onError: (err) => {
           toast.error(err);
           setIsLoading(false);
+          setIsTyping(false);
         },
       });
     } catch (e) {
@@ -498,6 +518,7 @@ export default function AiChat() {
     setFollowUps([]);
 
     setIsLoading(true);
+    setIsTyping(true);
     const aiMessages = truncated.map(m => {
       if (m.image_url && m.role === "user") {
         return {
@@ -513,6 +534,7 @@ export default function AiChat() {
 
     let assistantSoFar = "";
     const upsert = (chunk: string) => {
+      setIsTyping(false);
       assistantSoFar += chunk;
       setMessages(prev => {
         const last = prev[prev.length - 1];
@@ -529,6 +551,7 @@ export default function AiChat() {
         onDelta: upsert,
         onDone: async () => {
           setIsLoading(false);
+          setIsTyping(false);
           if (assistantSoFar && activeConvId) {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: activeConvId,
@@ -539,7 +562,7 @@ export default function AiChat() {
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
-        onError: (err) => { toast.error(err); setIsLoading(false); },
+        onError: (err) => { toast.error(err); setIsLoading(false); setIsTyping(false); },
       });
     } catch {
       setIsLoading(false);
@@ -786,6 +809,23 @@ export default function AiChat() {
                       {msg.is_edited && (
                         <span className="text-[10px] opacity-60 mt-1 block">edited</span>
                       )}
+                      {/* Read receipts for user messages */}
+                      {msg.role === "user" && (
+                        <span className="flex items-center justify-end gap-0.5 mt-1">
+                          {msg.status === "sending" && (
+                            <span className="text-[10px] opacity-50">●</span>
+                          )}
+                          {msg.status === "sent" && (
+                            <Check className="h-3 w-3 opacity-50" />
+                          )}
+                          {msg.status === "delivered" && (
+                            <CheckCheck className="h-3 w-3 opacity-50" />
+                          )}
+                          {(msg.status === "read" || (!msg.status && msg.id)) && (
+                            <CheckCheck className="h-3 w-3 text-blue-400" />
+                          )}
+                        </span>
+                      )}
                       {/* Action buttons on hover */}
                       <div className={`absolute ${msg.role === "user" ? "-left-16" : "-right-16"} top-1/2 -translate-y-1/2 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity`}>
                         {msg.role === "user" && !isLoading && (
@@ -814,11 +854,13 @@ export default function AiChat() {
               </div>
             ))}
 
-            {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
+            {/* Typing indicator - WhatsApp style animated dots */}
+            {isTyping && (
               <div className="flex justify-start">
-                <div className="bg-muted rounded-lg p-3 flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                  <span className="text-sm text-muted-foreground">Thinking...</span>
+                <div className="bg-muted rounded-lg px-4 py-3 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "300ms" }} />
                 </div>
               </div>
             )}
