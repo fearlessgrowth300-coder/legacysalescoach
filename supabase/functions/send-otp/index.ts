@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { Resend } from "npm:resend@2.0.0";
 
 const corsHeaders = {
@@ -10,9 +11,46 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { email, otp, type } = await req.json();
-    if (!email || !otp) throw new Error("Email and OTP required");
+    const { email, type } = await req.json();
+    if (!email) throw new Error("Email required");
 
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
+    // Rate limiting: max 3 OTP requests per email per 10 minutes
+    const tenMinAgo = new Date(Date.now() - 600_000).toISOString();
+    const { data: recentCodes, error: rlErr } = await supabase
+      .from("otp_codes")
+      .select("id")
+      .eq("email", normalizedEmail)
+      .gte("created_at", tenMinAgo);
+
+    if (rlErr) throw rlErr;
+
+    if (recentCodes && recentCodes.length >= 3) {
+      return new Response(JSON.stringify({ error: "Too many requests. Please wait a few minutes." }), {
+        status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Generate OTP server-side
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 600_000).toISOString(); // 10 min
+
+    // Store in database
+    const { error: insertErr } = await supabase.from("otp_codes").insert({
+      email: normalizedEmail,
+      code: otp,
+      type: type || "signup",
+      expires_at: expiresAt,
+    });
+    if (insertErr) throw insertErr;
+
+    // Send email
     const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
 
     const subject = type === "reset"
@@ -27,9 +65,9 @@ serve(async (req) => {
       ? "You requested to reset your password. Use the code below:"
       : "Welcome to Sales Reply Coach! Use the code below to verify your email:";
 
-    const { data, error } = await resend.emails.send({
+    const { error: sendErr } = await resend.emails.send({
       from: "Sales Reply Coach <noreply@ordersstan.store>",
-      to: [email],
+      to: [normalizedEmail],
       subject,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
@@ -43,9 +81,9 @@ serve(async (req) => {
       `,
     });
 
-    if (error) {
-      console.error("Resend error:", error);
-      throw new Error(error.message || "Failed to send email");
+    if (sendErr) {
+      console.error("Resend error:", sendErr);
+      throw new Error(sendErr.message || "Failed to send email");
     }
 
     return new Response(JSON.stringify({ success: true }), {

@@ -40,22 +40,16 @@ export default function Login() {
     }
   };
 
-  const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
-
   const handleForgotSendCode = async () => {
     if (!resetEmail.trim()) { toast.error("Enter your email"); return; }
     setIsLoading(true);
     try {
-      const otp = generateOtp();
-      // Store OTP in sessionStorage for verification
-      sessionStorage.setItem("reset_otp", otp);
-      sessionStorage.setItem("reset_otp_time", Date.now().toString());
-
-      const { data, error } = await supabase.functions.invoke("send-otp", {
-        body: { email: resetEmail, otp, type: "reset" },
+      // OTP generated server-side
+      const res = await supabase.functions.invoke("send-otp", {
+        body: { email: resetEmail, type: "reset" },
       });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
+      if (res.error) throw res.error;
+      if (res.data?.error) throw new Error(res.data.error);
 
       toast.success("Reset code sent to your email!");
       setForgotMode("otp");
@@ -67,10 +61,8 @@ export default function Login() {
   };
 
   const handleVerifyResetOtp = () => {
-    const stored = sessionStorage.getItem("reset_otp");
-    const time = parseInt(sessionStorage.getItem("reset_otp_time") || "0");
-    if (Date.now() - time > 600000) { toast.error("Code expired. Request a new one."); return; }
-    if (resetOtp !== stored) { toast.error("Invalid code"); return; }
+    if (resetOtp.length < 6) { toast.error("Enter the 6-digit code"); return; }
+    // We don't verify here — the reset-password function verifies the OTP server-side
     setForgotMode("newpass");
   };
 
@@ -79,8 +71,9 @@ export default function Login() {
     if (newPassword !== confirmNewPassword) { toast.error("Passwords don't match"); return; }
     setIsLoading(true);
     try {
+      // Send OTP + new password to server for verification and reset
       const { data, error } = await supabase.functions.invoke("reset-password", {
-        body: { email: resetEmail, newPassword },
+        body: { email: resetEmail, newPassword, otpCode: resetOtp },
       });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
@@ -88,8 +81,7 @@ export default function Login() {
       toast.success("Password reset! You can now sign in.");
       setForgotMode("none");
       setEmail(resetEmail);
-      sessionStorage.removeItem("reset_otp");
-      sessionStorage.removeItem("reset_otp_time");
+      setResetOtp("");
     } catch (error: any) {
       toast.error(error.message || "Failed to reset password");
     } finally {
