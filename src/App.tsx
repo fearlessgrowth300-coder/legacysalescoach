@@ -15,6 +15,7 @@ import Workspaces from "./pages/Workspaces";
 import Analytics from "./pages/Analytics";
 import BrainStats from "./pages/BrainStats";
 import PracticeCall from "./pages/PracticeCall";
+import AiChat from "./pages/AiChat";
 import DashboardLayout from "./components/DashboardLayout";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
@@ -66,6 +67,7 @@ const App = () => {
             <Route path="/analytics" element={<AuthenticatedRoute><Analytics /></AuthenticatedRoute>} />
             <Route path="/brain" element={<AuthenticatedRoute><BrainStats /></AuthenticatedRoute>} />
             <Route path="/practice" element={<AuthenticatedRoute><PracticeCall /></AuthenticatedRoute>} />
+            <Route path="/ai-chat" element={<AuthenticatedRoute><AiChat /></AuthenticatedRoute>} />
             <Route path="/settings" element={<AuthenticatedRoute><Settings /></AuthenticatedRoute>} />
             <Route path="/dashboard" element={<Navigate to="/chats" replace />} />
             <Route path="*" element={<NotFound />} />
