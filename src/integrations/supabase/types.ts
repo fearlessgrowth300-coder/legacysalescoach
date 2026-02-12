@@ -22,6 +22,7 @@ export type Database = {
           id: string
           image_url: string | null
           is_edited: boolean
+          is_pinned: boolean
           role: string
           user_id: string
         }
@@ -32,6 +33,7 @@ export type Database = {
           id?: string
           image_url?: string | null
           is_edited?: boolean
+          is_pinned?: boolean
           role?: string
           user_id: string
         }
@@ -42,6 +44,7 @@ export type Database = {
           id?: string
           image_url?: string | null
           is_edited?: boolean
+          is_pinned?: boolean
           role?: string
           user_id?: string
         }
