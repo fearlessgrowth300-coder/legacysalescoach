@@ -994,9 +994,9 @@ export default function Chats() {
               </div>
             </div>
 
-            {/* Thread Type Header + Conversation Stage */}
+            {/* Thread Type Header + Conversation Stage Progress Bar */}
             <div className={`px-4 py-2 border-b ${currentThreadType === "expert" ? "bg-blue-50 dark:bg-blue-950/20" : "bg-pink-50 dark:bg-pink-950/20"}`}>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                   {currentThreadType === "expert" ? (
                     <>
@@ -1010,15 +1010,41 @@ export default function Chats() {
                     </>
                   )}
                 </div>
-                {(conversationStage || selectedProspect?.conversation_stage) && (
-                  <div className="flex items-center gap-1.5">
-                    <TrendingUp className="h-3 w-3 text-muted-foreground" />
-                    <span className="text-xs text-muted-foreground capitalize">
-                      {(conversationStage || selectedProspect?.conversation_stage)?.replace(/_/g, " ")}
-                    </span>
-                  </div>
-                )}
               </div>
+              {/* Stage Progress Bar */}
+              {(() => {
+                const stages = ["opener", "rapport", "pain", "offer", "close"];
+                const stageLabels: Record<string, string> = { opener: "Opener", rapport: "Rapport", pain: "Pain", offer: "Offer", close: "Close" };
+                const currentStageRaw = (conversationStage || selectedProspect?.conversation_stage || "first_contact").toLowerCase().replace(/[\s_-]/g, "");
+                const stageMap: Record<string, string> = {
+                  firstcontact: "opener", opener: "opener", continuing: "rapport",
+                  rapport: "rapport", rapportbuilding: "rapport",
+                  pain: "pain", paindiscovery: "pain", problem: "pain",
+                  offer: "offer", solution: "offer", presenting: "offer",
+                  close: "close", closing: "close", ghosted: "rapport",
+                };
+                const activeStage = stageMap[currentStageRaw] || "opener";
+                const activeIdx = stages.indexOf(activeStage);
+                return (
+                  <div className="flex items-center gap-1">
+                    {stages.map((stage, i) => {
+                      const isCompleted = i < activeIdx;
+                      const isActive = i === activeIdx;
+                      return (
+                        <div key={stage} className="flex items-center flex-1">
+                          <div className="flex flex-col items-center flex-1">
+                            <div className={`h-2 w-full rounded-full transition-all ${isCompleted ? "bg-primary" : isActive ? "bg-primary/70 animate-pulse" : "bg-muted-foreground/20"}`} />
+                            <span className={`text-[10px] mt-1 font-medium ${isActive ? "text-primary" : isCompleted ? "text-primary/70" : "text-muted-foreground/50"}`}>
+                              {stageLabels[stage]}
+                            </span>
+                          </div>
+                          {i < stages.length - 1 && <div className="w-1 shrink-0" />}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Messages */}
