@@ -3,11 +3,13 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import {
   Brain, BookOpen, MessageSquare, Target, Shield,
-  Sparkles, TrendingUp, Zap, Heart, Briefcase, FileText, Link
+  Sparkles, TrendingUp, Zap, Heart, Briefcase, FileText, Link,
+  ThumbsUp, Lightbulb, Calendar
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
+import { format, isToday, isThisWeek } from "date-fns";
 
 export default function BrainStats() {
   const { user } = useAuth();
@@ -26,6 +28,36 @@ export default function BrainStats() {
     queryKey: ["kb-items"],
     queryFn: async () => {
       const { data, error } = await supabase.from("knowledge_base_items").select("*");
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!user,
+  });
+
+  // Fetch learned insights
+  const { data: insights } = useQuery({
+    queryKey: ["learned-insights"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("learned_insights")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!user,
+  });
+
+  // Fetch positive feedback stats
+  const { data: feedbackStats } = useQuery({
+    queryKey: ["feedback-stats"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("suggestion_feedback")
+        .select("feedback, created_at")
+        .order("created_at", { ascending: false })
+        .limit(100);
       if (error) throw error;
       return data;
     },
@@ -169,6 +201,102 @@ export default function BrainStats() {
               <div className="text-2xl font-bold text-purple-600">{byBrain.both}</div>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* What I Learned Section */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Lightbulb className="h-5 w-5 text-primary" />What I Learned
+          </CardTitle>
+          <CardDescription>Key insights extracted from your conversations and uploads</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {insights && insights.length > 0 ? (
+            <div className="space-y-2">
+              {/* Today's insights */}
+              {insights.filter(i => isToday(new Date(i.created_at))).length > 0 && (
+                <div className="mb-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Calendar className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-xs font-medium text-muted-foreground uppercase">Today</span>
+                  </div>
+                  {insights.filter(i => isToday(new Date(i.created_at))).map(insight => (
+                    <div key={insight.id} className="p-3 rounded-lg border bg-card mb-1.5">
+                      <p className="text-sm">{insight.insight}</p>
+                      <p className="text-xs text-muted-foreground mt-1">{insight.source} • {insight.insight_type}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* This week's insights */}
+              {insights.filter(i => isThisWeek(new Date(i.created_at)) && !isToday(new Date(i.created_at))).length > 0 && (
+                <div className="mb-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Calendar className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-xs font-medium text-muted-foreground uppercase">This Week</span>
+                  </div>
+                  {insights.filter(i => isThisWeek(new Date(i.created_at)) && !isToday(new Date(i.created_at))).slice(0, 10).map(insight => (
+                    <div key={insight.id} className="p-3 rounded-lg border bg-card mb-1.5">
+                      <p className="text-sm">{insight.insight}</p>
+                      <p className="text-xs text-muted-foreground mt-1">{insight.source} • {format(new Date(insight.created_at), "MMM d")}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Older */}
+              {insights.filter(i => !isThisWeek(new Date(i.created_at))).length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Calendar className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-xs font-medium text-muted-foreground uppercase">Earlier</span>
+                  </div>
+                  {insights.filter(i => !isThisWeek(new Date(i.created_at))).slice(0, 10).map(insight => (
+                    <div key={insight.id} className="p-3 rounded-lg border bg-card mb-1.5">
+                      <p className="text-sm">{insight.insight}</p>
+                      <p className="text-xs text-muted-foreground mt-1">{insight.source} • {format(new Date(insight.created_at), "MMM d")}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              <Lightbulb className="h-12 w-12 mx-auto mb-4 opacity-50" />
+              <p>No insights yet</p>
+              <p className="text-sm">Start chatting with prospects — the AI will learn and log insights automatically</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Feedback Loop Stats */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ThumbsUp className="h-5 w-5 text-primary" />Feedback Loop
+          </CardTitle>
+          <CardDescription>Your feedback shapes future AI suggestions</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="p-4 rounded-lg border bg-green-500/5 border-green-500/20 text-center">
+              <div className="text-2xl font-bold text-green-600">
+                {feedbackStats?.filter(f => f.feedback === "positive").length || 0}
+              </div>
+              <div className="text-xs text-muted-foreground">👍 Liked Replies</div>
+            </div>
+            <div className="p-4 rounded-lg border bg-red-500/5 border-red-500/20 text-center">
+              <div className="text-2xl font-bold text-red-600">
+                {feedbackStats?.filter(f => f.feedback === "negative").length || 0}
+              </div>
+              <div className="text-xs text-muted-foreground">👎 Disliked Replies</div>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground mt-3 text-center">
+            Thumbs-up replies are used to boost similar patterns in future suggestions
+          </p>
         </CardContent>
       </Card>
 

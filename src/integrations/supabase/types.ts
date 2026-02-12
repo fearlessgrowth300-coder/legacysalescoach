@@ -210,6 +210,54 @@ export type Database = {
           },
         ]
       }
+      learned_insights: {
+        Row: {
+          created_at: string
+          id: string
+          insight: string
+          insight_type: string
+          prospect_id: string | null
+          source: string | null
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          insight: string
+          insight_type?: string
+          prospect_id?: string | null
+          source?: string | null
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          insight?: string
+          insight_type?: string
+          prospect_id?: string | null
+          source?: string | null
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "learned_insights_prospect_id_fkey"
+            columns: ["prospect_id"]
+            isOneToOne: false
+            referencedRelation: "prospects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "learned_insights_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           created_at: string
@@ -240,6 +288,7 @@ export type Database = {
       prospects: {
         Row: {
           conversation_stage: string
+          conversation_summary: string | null
           created_at: string
           detected_interests: string | null
           id: string
@@ -258,6 +307,7 @@ export type Database = {
         }
         Insert: {
           conversation_stage?: string
+          conversation_summary?: string | null
           created_at?: string
           detected_interests?: string | null
           id?: string
@@ -276,6 +326,7 @@ export type Database = {
         }
         Update: {
           conversation_stage?: string
+          conversation_summary?: string | null
           created_at?: string
           detected_interests?: string | null
           id?: string
@@ -295,6 +346,63 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "prospects_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      suggestion_feedback: {
+        Row: {
+          conversation_stage: string | null
+          created_at: string
+          feedback: string
+          framework_used: string | null
+          id: string
+          prospect_id: string
+          suggestion_text: string
+          suggestion_type: string
+          thread_type: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          conversation_stage?: string | null
+          created_at?: string
+          feedback: string
+          framework_used?: string | null
+          id?: string
+          prospect_id: string
+          suggestion_text: string
+          suggestion_type?: string
+          thread_type?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          conversation_stage?: string | null
+          created_at?: string
+          feedback?: string
+          framework_used?: string | null
+          id?: string
+          prospect_id?: string
+          suggestion_text?: string
+          suggestion_type?: string
+          thread_type?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "suggestion_feedback_prospect_id_fkey"
+            columns: ["prospect_id"]
+            isOneToOne: false
+            referencedRelation: "prospects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "suggestion_feedback_workspace_id_fkey"
             columns: ["workspace_id"]
             isOneToOne: false
             referencedRelation: "workspaces"
