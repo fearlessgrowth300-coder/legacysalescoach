@@ -15,14 +15,15 @@ import {
   MessageSquare, Plus, Send, User, Sparkles,
   Copy, Check, AlertTriangle,
   Heart, Briefcase, MoreVertical, Trash2, Camera, Loader2, Image, Upload, X,
-  Ghost, PenLine, RotateCcw
+  Ghost, PenLine, RotateCcw, ThumbsUp, ThumbsDown, Zap, BookOpen, TrendingUp
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
-type Suggestion = { id: number; type: string; text: string; whyThisWorks?: string };
+type Suggestion = { id: number; type: string; text: string; whyThisWorks?: string; frameworkUsed?: string };
+type FeedbackMap = Record<number, "positive" | "negative">;
 
 export default function Chats() {
   const { prospectId } = useParams();
@@ -52,6 +53,8 @@ export default function Chats() {
   const [isGeneratingFirst, setIsGeneratingFirst] = useState(false);
   const [isRefineMode, setIsRefineMode] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
+  const [feedbackMap, setFeedbackMap] = useState<FeedbackMap>({});
+  const [conversationStage, setConversationStage] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -486,6 +489,8 @@ export default function Chats() {
       if (error) throw error;
       setSuggestions(data.suggestions || []);
       setPushyWarning(data.pushyWarning || null);
+      setFeedbackMap({});
+      if (data.conversationStage) setConversationStage(data.conversationStage);
     } catch (e: any) {
       console.error("AI suggestion error:", e);
       toast.error("Failed to get suggestions");
@@ -493,6 +498,7 @@ export default function Chats() {
 
     setMessageInput("");
     queryClient.invalidateQueries({ queryKey: ["messages"] });
+    queryClient.invalidateQueries({ queryKey: ["prospects"] });
     setIsAnalyzing(false);
   };
 
@@ -508,8 +514,54 @@ export default function Chats() {
     });
     setSuggestions([]);
     setPushyWarning(null);
+    setFeedbackMap({});
     queryClient.invalidateQueries({ queryKey: ["messages"] });
     toast.success("Response recorded!");
+  };
+
+  const handleFeedback = async (suggestion: Suggestion, feedback: "positive" | "negative") => {
+    if (!selectedProspectId || !activeWorkspace) return;
+    setFeedbackMap((prev) => ({ ...prev, [suggestion.id]: feedback }));
+    try {
+      await supabase.from("suggestion_feedback").insert({
+        user_id: user!.id,
+        prospect_id: selectedProspectId,
+        workspace_id: activeWorkspace.id,
+        suggestion_text: suggestion.text,
+        suggestion_type: suggestion.type,
+        feedback,
+        thread_type: currentThreadType,
+        conversation_stage: conversationStage || selectedProspect?.conversation_stage,
+        framework_used: suggestion.frameworkUsed || null,
+      });
+      toast.success(feedback === "positive" ? "👍 Got it! Will generate more like this" : "👎 Noted! Will adjust future suggestions");
+    } catch (e) {
+      console.error("Feedback error:", e);
+    }
+  };
+
+  const handleEmotionalReply = async (style: string) => {
+    if (!selectedProspectId) return;
+    setIsAnalyzing(true);
+    try {
+      const lastInbound = messages?.filter(m => m.direction === "inbound").pop();
+      const { data, error } = await supabase.functions.invoke("chat-suggest", {
+        body: {
+          prospectId: selectedProspectId,
+          message: `STYLE REQUEST: Make reply more ${style}. Last prospect message: ${lastInbound?.content || "N/A"}`,
+          threadType: currentThreadType,
+          mode: "refine",
+        },
+      });
+      if (error) throw error;
+      setSuggestions(data.suggestions || []);
+      setPushyWarning(data.pushyWarning || null);
+      setFeedbackMap({});
+      if (data.conversationStage) setConversationStage(data.conversationStage);
+    } catch (e: any) {
+      toast.error("Failed to generate reply");
+    }
+    setIsAnalyzing(false);
   };
 
   const handleCopy = (id: number, text: string) => {
@@ -942,19 +994,29 @@ export default function Chats() {
               </div>
             </div>
 
-            {/* Thread Type Header */}
+            {/* Thread Type Header + Conversation Stage */}
             <div className={`px-4 py-2 border-b ${currentThreadType === "expert" ? "bg-blue-50 dark:bg-blue-950/20" : "bg-pink-50 dark:bg-pink-950/20"}`}>
-              <div className="flex items-center gap-2">
-                {currentThreadType === "expert" ? (
-                  <>
-                    <Briefcase className="h-4 w-4 text-blue-600" />
-                    <span className="text-sm font-medium text-blue-900 dark:text-blue-100">Expert Team Mode - Professional & Direct</span>
-                  </>
-                ) : (
-                  <>
-                    <Heart className="h-4 w-4 text-pink-600" />
-                    <span className="text-sm font-medium text-pink-900 dark:text-pink-100">Friend Mode - Warm & Casual</span>
-                  </>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {currentThreadType === "expert" ? (
+                    <>
+                      <Briefcase className="h-4 w-4 text-blue-600" />
+                      <span className="text-sm font-medium text-blue-900 dark:text-blue-100">Expert Team Mode</span>
+                    </>
+                  ) : (
+                    <>
+                      <Heart className="h-4 w-4 text-pink-600" />
+                      <span className="text-sm font-medium text-pink-900 dark:text-pink-100">Friend Mode</span>
+                    </>
+                  )}
+                </div>
+                {(conversationStage || selectedProspect?.conversation_stage) && (
+                  <div className="flex items-center gap-1.5">
+                    <TrendingUp className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-xs text-muted-foreground capitalize">
+                      {(conversationStage || selectedProspect?.conversation_stage)?.replace(/_/g, " ")}
+                    </span>
+                  </div>
                 )}
               </div>
             </div>
@@ -984,9 +1046,22 @@ export default function Chats() {
                     <AlertTriangle className="h-4 w-4" /><span>{pushyWarning}</span>
                   </div>
                 )}
-                <p className="text-sm font-medium mb-3 flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-primary" />Suggested Replies
-                </p>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm font-medium flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-primary" />Suggested Replies
+                  </p>
+                  <div className="flex gap-1">
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleEmotionalReply("emotional with a personal story")} disabled={isAnalyzing}>
+                      <Heart className="h-3 w-3 mr-1" />+ Story
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleEmotionalReply("softer, more casual and low-pressure")} disabled={isAnalyzing}>
+                      <Zap className="h-3 w-3 mr-1" />Softer
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleEmotionalReply("more direct and push toward next step")} disabled={isAnalyzing}>
+                      <TrendingUp className="h-3 w-3 mr-1" />Push
+                    </Button>
+                  </div>
+                </div>
                 <div className="space-y-2">
                   {suggestions.map((s) => (
                     <Card key={s.id} className="p-3">
@@ -998,11 +1073,33 @@ export default function Chats() {
                           <p className="text-sm">{s.text}</p>
                           {s.whyThisWorks && <p className="text-xs text-muted-foreground mt-2">💡 {s.whyThisWorks}</p>}
                         </div>
-                        <div className="flex gap-1">
-                          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleCopy(s.id, s.text)}>
-                            {copiedId === s.id ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                          </Button>
-                          <Button size="sm" onClick={() => handleUseSuggestion(s)}>Use</Button>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex gap-1">
+                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleCopy(s.id, s.text)}>
+                              {copiedId === s.id ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                            <Button size="sm" onClick={() => handleUseSuggestion(s)}>Use</Button>
+                          </div>
+                          <div className="flex gap-1 justify-end">
+                            <Button
+                              size="icon"
+                              variant={feedbackMap[s.id] === "positive" ? "default" : "ghost"}
+                              className="h-7 w-7"
+                              onClick={() => handleFeedback(s, "positive")}
+                              disabled={!!feedbackMap[s.id]}
+                            >
+                              <ThumbsUp className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant={feedbackMap[s.id] === "negative" ? "destructive" : "ghost"}
+                              className="h-7 w-7"
+                              onClick={() => handleFeedback(s, "negative")}
+                              disabled={!!feedbackMap[s.id]}
+                            >
+                              <ThumbsDown className="h-3 w-3" />
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </Card>

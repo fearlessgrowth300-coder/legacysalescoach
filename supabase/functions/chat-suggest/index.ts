@@ -150,14 +150,50 @@ serve(async (req) => {
       });
     }
 
-    // Get conversation history
-    const { data: history } = await supabase
+    // Get ALL conversation history for summarization
+    const { data: allHistory } = await supabase
       .from("chat_messages")
       .select("*")
       .eq("prospect_id", prospectId)
       .eq("thread_type", threadType)
-      .order("created_at", { ascending: true })
-      .limit(20);
+      .order("created_at", { ascending: true });
+
+    const history = allHistory || [];
+    
+    // Build conversation memory: summarize older messages, keep recent ones verbatim
+    const recentCount = 10;
+    const recentMessages = history.slice(-recentCount);
+    const olderMessages = history.slice(0, -recentCount);
+    
+    let conversationMemory = "";
+    if (olderMessages.length > 0) {
+      const olderSummary = olderMessages
+        .map((m: any) => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content.substring(0, 150)}`)
+        .join("\n");
+      conversationMemory = `EARLIER CONVERSATION SUMMARY (${olderMessages.length} older messages):\n${olderSummary}\n\n`;
+    }
+    
+    // Use existing conversation_summary from prospect if available
+    if (prospect.conversation_summary) {
+      conversationMemory = `CONVERSATION CONTEXT (AI summary):\n${prospect.conversation_summary}\n\n` + conversationMemory;
+    }
+
+    // ===== FEEDBACK-BOOSTED PATTERNS =====
+    const { data: positiveFeedback } = await supabase
+      .from("suggestion_feedback")
+      .select("suggestion_text, suggestion_type, conversation_stage, framework_used")
+      .eq("user_id", user.id)
+      .eq("feedback", "positive")
+      .order("created_at", { ascending: false })
+      .limit(15);
+
+    let feedbackSection = "";
+    if (positiveFeedback && positiveFeedback.length > 0) {
+      const examples = positiveFeedback.slice(0, 5).map((f: any) => 
+        `- "${f.suggestion_text.substring(0, 200)}" (${f.suggestion_type}, stage: ${f.conversation_stage || "unknown"}, framework: ${f.framework_used || "none"})`
+      ).join("\n");
+      feedbackSection = `\nUSER-APPROVED REPLY PATTERNS (these got thumbs up — generate similar styles):\n${examples}\nMimic the tone, structure, and approach of these proven replies.`;
+    }
 
     // ===== TONALITY LEARNING =====
     const toneHistory = (history || [])
@@ -217,8 +253,8 @@ serve(async (req) => {
 
     const knowledgeContext = knowledge?.map((k: any) => `[${k.category}]: ${k.content}`).join("\n") || "";
     
-    const conversationHistory = history
-      ?.map((m: any) => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content}`)
+    const conversationHistory = recentMessages
+      .map((m: any) => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content}`)
       .join("\n") || "";
 
     const systemPrompt = threadType === "expert" ? EXPERT_MODE_INSTRUCTIONS : FRIEND_MODE_INSTRUCTIONS;
@@ -333,7 +369,9 @@ ${FRAMEWORK_DETECTION_PROMPT}
 ${OBJECTION_DETECTION_PROMPT}
 ${tonalitySection}
 ${winningPatternsSection}
+${feedbackSection}
 
+${conversationMemory}
 YOUR KNOWLEDGE BASE:
 ${knowledgeContext}
 
@@ -454,6 +492,45 @@ ${jsonFormat}`;
         })
         .then(() => {});
     }
+
+    // ===== AUTO-ADVANCE CONVERSATION STAGE =====
+    const stageMap: Record<string, string> = {
+      situation: "rapport",
+      problem: "pain_discovery",
+      implication: "pain_discovery",
+      need_payoff: "offer",
+      emotional_trigger: "offer",
+      closing: "closing",
+    };
+    const newStage = stageMap[detectedPattern];
+    if (newStage && prospect.conversation_stage !== newStage) {
+      supabase.from("prospects").update({ conversation_stage: newStage }).eq("id", prospectId).then(() => {});
+    }
+
+    // ===== SAVE CONVERSATION SUMMARY (every 10 messages) =====
+    if (history.length > 0 && history.length % 10 === 0) {
+      const summaryLines = history.slice(-20).map((m: any) => 
+        `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content.substring(0, 100)}`
+      );
+      const summary = `Conversation with ${prospect.name} (${history.length} messages). Stage: ${newStage || prospect.conversation_stage}. Recent topics: ${summaryLines.slice(-5).join(" | ")}`;
+      supabase.from("prospects").update({ conversation_summary: summary }).eq("id", prospectId).then(() => {});
+    }
+
+    // ===== EXTRACT & SAVE INSIGHT =====
+    if (parsed.detectedTone && message && mode !== "refine") {
+      const insightText = `${prospect.name}: Tone=${parsed.detectedTone}, Stage=${detectedPattern}, Pattern=${parsed.frameworkApplied || "none"}`;
+      supabase.from("learned_insights").insert({
+        user_id: user.id,
+        workspace_id: prospect.workspace_id,
+        prospect_id: prospectId,
+        insight_type: "conversation",
+        insight: insightText,
+        source: `Chat with ${prospect.name}`,
+      }).then(() => {});
+    }
+
+    // Include detected stage in response
+    parsed.conversationStage = newStage || prospect.conversation_stage;
 
     return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
