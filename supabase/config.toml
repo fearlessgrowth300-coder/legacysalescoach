@@ -27,6 +27,9 @@ verify_jwt = false
 [functions.reset-password]
 verify_jwt = false
 
+[functions.manage-api-keys]
+verify_jwt = false
+
 [functions.practice-call]
 verify_jwt = false
 

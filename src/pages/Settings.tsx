@@ -15,14 +15,16 @@ export default function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [currentKeyMasked, setCurrentKeyMasked] = useState("");
 
-  // Load saved key from user profile metadata
+  // Check if key exists via edge function
   useEffect(() => {
     if (user) {
-      const meta = (user as any)?.user_metadata;
-      if (meta?.supadata_api_key) {
-        const key = meta.supadata_api_key;
-        setCurrentKeyMasked(key.substring(0, 8) + "..." + key.substring(key.length - 4));
-      }
+      supabase.functions.invoke("manage-api-keys", {
+        body: { action: "check", service: "supadata" },
+      }).then(({ data }) => {
+        if (data?.exists) {
+          setCurrentKeyMasked(data.masked);
+        }
+      });
     }
   }, [user]);
 
@@ -33,13 +35,17 @@ export default function Settings() {
     }
     setIsSaving(true);
     try {
-      const { error } = await supabase.auth.updateUser({
-        data: { supadata_api_key: supadataKey.trim() },
+      const { data, error } = await supabase.functions.invoke("manage-api-keys", {
+        body: { action: "save", service: "supadata", apiKey: supadataKey.trim() },
       });
       if (error) throw error;
-      setCurrentKeyMasked(supadataKey.substring(0, 8) + "..." + supadataKey.substring(supadataKey.length - 4));
+      if (data?.error) throw new Error(data.error);
+
+      // Update masked display
+      const key = supadataKey.trim();
+      setCurrentKeyMasked(key.substring(0, 8) + "..." + key.substring(key.length - 4));
       setSupadataKey("");
-      toast.success("API key saved successfully!");
+      toast.success("API key saved securely!");
     } catch (error: any) {
       toast.error(error.message || "Failed to save API key");
     } finally {
@@ -76,7 +82,7 @@ export default function Settings() {
                 <a href="https://transcriptapi.com" target="_blank" rel="noopener noreferrer" className="text-primary underline">
                   transcriptapi.com
                 </a>
-                . Sign up for free to get started.
+                . Sign up for free to get started. Your key is stored securely on the server and never sent back to the browser.
               </AlertDescription>
             </Alert>
 
