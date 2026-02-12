@@ -6,14 +6,15 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   Brain, Send, Loader2, BookOpen, Sparkles, Plus, MessageSquare,
-  Image, Link, FileText, Pencil, Trash2, Check, X, Menu
+  Image, Link, FileText, Pencil, Trash2, Check, X, Menu,
+  Mic, MicOff, Pin, PinOff, Search, Star
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "@/integrations/supabase/client";
 
-type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url?: string | null; is_edited?: boolean };
+type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url?: string | null; is_edited?: boolean; is_pinned?: boolean };
 type Conversation = { id: string; title: string; created_at: string; updated_at: string };
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/brain-chat`;
@@ -82,6 +83,33 @@ async function streamChat({
   onDone();
 }
 
+// Generate follow-up suggestions from the last assistant message
+function generateFollowUps(content: string): string[] {
+  const suggestions: string[] = [];
+  if (content.includes("objection") || content.includes("price")) {
+    suggestions.push("What are the top 5 objection handling techniques?");
+    suggestions.push("How do I reframe price discussions?");
+  }
+  if (content.includes("rapport") || content.includes("relationship")) {
+    suggestions.push("Give me more rapport-building scripts");
+    suggestions.push("How to transition from rapport to pitch?");
+  }
+  if (content.includes("close") || content.includes("closing")) {
+    suggestions.push("What closing techniques have the highest conversion?");
+    suggestions.push("How do I create urgency without being pushy?");
+  }
+  if (content.includes("follow") || content.includes("up")) {
+    suggestions.push("Best follow-up message templates?");
+  }
+  // Generic fallbacks
+  if (suggestions.length === 0) {
+    suggestions.push("Tell me more about this topic");
+    suggestions.push("How can I apply this in practice?");
+    suggestions.push("What mistakes should I avoid?");
+  }
+  return suggestions.slice(0, 3);
+}
+
 export default function AiChat() {
   const { user } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -98,6 +126,22 @@ export default function AiChat() {
   const [showLinkInput, setShowLinkInput] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Voice-to-text state
+  const [isRecording, setIsRecording] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<{ conv_title: string; conv_id: string; content: string; role: string }[]>([]);
+  const [showSearch, setShowSearch] = useState(false);
+
+  // Pinned messages view
+  const [showPinned, setShowPinned] = useState(false);
+  const [pinnedMessages, setPinnedMessages] = useState<(Msg & { conv_title?: string })[]>([]);
+
+  // Follow-up suggestions
+  const [followUps, setFollowUps] = useState<string[]>([]);
 
   const scrollToBottom = () => {
     setTimeout(() => {
@@ -124,7 +168,7 @@ export default function AiChat() {
 
   // Load messages when conversation changes
   useEffect(() => {
-    if (!activeConvId) { setMessages([]); return; }
+    if (!activeConvId) { setMessages([]); setFollowUps([]); return; }
     loadMessages(activeConvId);
   }, [activeConvId]);
 
@@ -135,19 +179,25 @@ export default function AiChat() {
       .eq("conversation_id", convId)
       .order("created_at", { ascending: true });
     if (data) {
-      setMessages(data.map((m: any) => ({
+      const mapped = data.map((m: any) => ({
         id: m.id,
         role: m.role as "user" | "assistant",
         content: m.content,
         image_url: m.image_url,
         is_edited: m.is_edited,
-      })));
+        is_pinned: m.is_pinned,
+      }));
+      setMessages(mapped);
+      // Generate follow-ups from last assistant message
+      const lastAssistant = [...mapped].reverse().find(m => m.role === "assistant");
+      if (lastAssistant) setFollowUps(generateFollowUps(lastAssistant.content));
+      else setFollowUps([]);
     }
   };
 
   const createNewChat = async () => {
     if (!user) return;
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("ai_conversations")
       .insert({ user_id: user.id, title: "New Chat" })
       .select()
@@ -156,6 +206,7 @@ export default function AiChat() {
       setConversations(prev => [data as Conversation, ...prev]);
       setActiveConvId(data.id);
       setMessages([]);
+      setFollowUps([]);
     }
   };
 
@@ -165,6 +216,92 @@ export default function AiChat() {
     if (activeConvId === convId) {
       setActiveConvId(null);
       setMessages([]);
+    }
+  };
+
+  // ─── Voice-to-Text ───
+  const toggleVoice = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) { toast.error("Speech recognition not supported in this browser"); return; }
+
+    if (isRecording) {
+      recognitionRef.current?.stop();
+      setIsRecording(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    let finalTranscript = input;
+    recognition.onresult = (event: any) => {
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += (finalTranscript ? " " : "") + t;
+        } else {
+          interim += t;
+        }
+      }
+      setInput(finalTranscript + (interim ? " " + interim : ""));
+    };
+    recognition.onerror = () => { setIsRecording(false); toast.error("Voice recognition error"); };
+    recognition.onend = () => { setIsRecording(false); };
+    recognition.start();
+    recognitionRef.current = recognition;
+    setIsRecording(true);
+    toast.info("Listening... speak your question");
+  };
+
+  // ─── Pin / Bookmark ───
+  const togglePin = async (msgIdx: number) => {
+    const msg = messages[msgIdx];
+    if (!msg.id) return;
+    const newPinned = !msg.is_pinned;
+    await supabase.from("ai_chat_messages").update({ is_pinned: newPinned } as any).eq("id", msg.id);
+    setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, is_pinned: newPinned } : m));
+    toast.success(newPinned ? "Answer pinned!" : "Pin removed");
+  };
+
+  const loadPinnedMessages = async () => {
+    if (!user) return;
+    const { data } = await supabase
+      .from("ai_chat_messages")
+      .select("*, ai_conversations!ai_chat_messages_conversation_id_fkey(title)")
+      .eq("is_pinned", true)
+      .order("created_at", { ascending: false });
+    if (data) {
+      setPinnedMessages(data.map((m: any) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        is_pinned: true,
+        conv_title: m.ai_conversations?.title || "Untitled",
+      })));
+    }
+    setShowPinned(true);
+    setShowSearch(false);
+  };
+
+  // ─── Search across conversations ───
+  const handleSearch = async () => {
+    if (!searchQuery.trim() || !user) return;
+    const { data } = await supabase
+      .from("ai_chat_messages")
+      .select("content, role, conversation_id, ai_conversations!ai_chat_messages_conversation_id_fkey(title)")
+      .ilike("content", `%${searchQuery}%`)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (data) {
+      setSearchResults(data.map((m: any) => ({
+        content: m.content,
+        role: m.role,
+        conv_id: m.conversation_id,
+        conv_title: m.ai_conversations?.title || "Untitled",
+      })));
     }
   };
 
@@ -210,7 +347,7 @@ export default function AiChat() {
         });
         toast.success("Link fed to AI Brain! Knowledge is being processed.");
       }
-    } catch (e) {
+    } catch {
       toast.error("Failed to feed link to brain");
     }
   };
@@ -220,6 +357,14 @@ export default function AiChat() {
     if (!text && !attachedImage) return;
     if (isLoading) return;
     if (!user) return;
+
+    // Stop recording if active
+    if (isRecording) {
+      recognitionRef.current?.stop();
+      setIsRecording(false);
+    }
+
+    setFollowUps([]);
 
     // Create conversation if none active
     let convId = activeConvId;
@@ -268,7 +413,7 @@ export default function AiChat() {
       setConversations(prev => prev.map(c => c.id === convId ? { ...c, title: text.substring(0, 60) } : c));
     }
 
-    // Build messages for AI - include image as multimodal content if present
+    // Build messages for AI
     const aiMessages = [...messages, userMsg].map(m => {
       if (m.image_url && m.role === "user") {
         return {
@@ -300,7 +445,6 @@ export default function AiChat() {
         onDelta: upsert,
         onDone: async () => {
           setIsLoading(false);
-          // Save assistant message
           if (assistantSoFar && convId) {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: convId,
@@ -309,6 +453,8 @@ export default function AiChat() {
               content: assistantSoFar,
             });
           }
+          // Generate follow-up suggestions
+          setFollowUps(generateFollowUps(assistantSoFar));
         },
         onError: (err) => {
           toast.error(err);
@@ -332,16 +478,13 @@ export default function AiChat() {
     if (editingMsgIdx === null) return;
     const msg = messages[editingMsgIdx];
 
-    // Update in DB
     if (msg.id) {
       await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true }).eq("id", msg.id);
     }
 
-    // Remove all messages after the edited one and resend
     const truncated = messages.slice(0, editingMsgIdx);
     truncated.push({ ...msg, content: editText, is_edited: true });
 
-    // Delete subsequent DB messages
     if (activeConvId) {
       const idsToDelete = messages.slice(editingMsgIdx + 1).filter(m => m.id).map(m => m.id!);
       if (idsToDelete.length > 0) {
@@ -352,8 +495,8 @@ export default function AiChat() {
     setMessages(truncated);
     setEditingMsgIdx(null);
     setEditText("");
+    setFollowUps([]);
 
-    // Resend with edited message
     setIsLoading(true);
     const aiMessages = truncated.map(m => {
       if (m.image_url && m.role === "user") {
@@ -394,6 +537,7 @@ export default function AiChat() {
               content: assistantSoFar,
             });
           }
+          setFollowUps(generateFollowUps(assistantSoFar));
         },
         onError: (err) => { toast.error(err); setIsLoading(false); },
       });
@@ -405,7 +549,6 @@ export default function AiChat() {
   const handleFeedLink = async () => {
     if (!linkInput.trim()) return;
     await feedLinkToBrain(linkInput.trim());
-    // Also send as a message context
     setInput(`I just fed this link to my brain: ${linkInput.trim()} - Can you tell me what you know about this topic?`);
     setLinkInput("");
     setShowLinkInput(false);
@@ -458,12 +601,78 @@ export default function AiChat() {
     <div className="flex h-[calc(100vh-4rem)]">
       {/* Sidebar */}
       <div className={`${sidebarOpen ? "w-72" : "w-0"} transition-all duration-200 border-r bg-muted/30 flex flex-col overflow-hidden`}>
-        <div className="p-3 border-b flex items-center justify-between">
+        <div className="p-3 border-b flex items-center justify-between gap-1">
           <h3 className="font-semibold text-sm">Chats</h3>
-          <Button size="sm" variant="ghost" onClick={createNewChat}>
-            <Plus className="h-4 w-4" />
-          </Button>
+          <div className="flex gap-1">
+            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setShowSearch(!showSearch); setShowPinned(false); }} title="Search chats">
+              <Search className="h-3.5 w-3.5" />
+            </Button>
+            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={loadPinnedMessages} title="Pinned answers">
+              <Star className="h-3.5 w-3.5" />
+            </Button>
+            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={createNewChat}>
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
+
+        {/* Search panel */}
+        {showSearch && (
+          <div className="p-2 border-b space-y-2">
+            <div className="flex gap-1">
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search all conversations..."
+                className="h-8 text-xs"
+                onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
+              />
+              <Button size="sm" className="h-8 px-2" onClick={handleSearch}>
+                <Search className="h-3 w-3" />
+              </Button>
+            </div>
+            {searchResults.length > 0 && (
+              <ScrollArea className="max-h-60">
+                <div className="space-y-1">
+                  {searchResults.map((r, i) => (
+                    <div
+                      key={i}
+                      className="p-2 rounded-md bg-background hover:bg-muted cursor-pointer text-xs"
+                      onClick={() => { setActiveConvId(r.conv_id); setShowSearch(false); setSearchResults([]); setSearchQuery(""); }}
+                    >
+                      <p className="font-medium text-[10px] text-muted-foreground mb-0.5">{r.conv_title} • {r.role}</p>
+                      <p className="line-clamp-2">{r.content}</p>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </div>
+        )}
+
+        {/* Pinned panel */}
+        {showPinned && (
+          <div className="p-2 border-b">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-medium flex items-center gap-1"><Star className="h-3 w-3 text-primary" /> Pinned Answers</p>
+              <Button size="sm" variant="ghost" className="h-6" onClick={() => setShowPinned(false)}>
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+            <ScrollArea className="max-h-60">
+              <div className="space-y-1">
+                {pinnedMessages.length === 0 && <p className="text-xs text-muted-foreground p-2">No pinned answers yet</p>}
+                {pinnedMessages.map((m, i) => (
+                  <div key={i} className="p-2 rounded-md bg-background text-xs">
+                    <p className="font-medium text-[10px] text-muted-foreground mb-0.5">{m.conv_title}</p>
+                    <p className="line-clamp-3">{m.content}</p>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+        )}
+
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-1">
             {conversations.map(conv => (
@@ -472,7 +681,7 @@ export default function AiChat() {
                 className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${
                   activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"
                 }`}
-                onClick={() => setActiveConvId(conv.id)}
+                onClick={() => { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); }}
               >
                 <MessageSquare className="h-4 w-4 shrink-0" />
                 <span className="truncate flex-1">{conv.title}</span>
@@ -577,13 +786,27 @@ export default function AiChat() {
                       {msg.is_edited && (
                         <span className="text-[10px] opacity-60 mt-1 block">edited</span>
                       )}
-                      {msg.role === "user" && !isLoading && (
-                        <button
-                          onClick={() => startEdit(i)}
-                          className="absolute -left-8 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <Pencil className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
-                        </button>
+                      {/* Action buttons on hover */}
+                      <div className={`absolute ${msg.role === "user" ? "-left-16" : "-right-16"} top-1/2 -translate-y-1/2 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity`}>
+                        {msg.role === "user" && !isLoading && (
+                          <button onClick={() => startEdit(i)} title="Edit">
+                            <Pencil className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+                          </button>
+                        )}
+                        {msg.role === "assistant" && msg.id && (
+                          <button onClick={() => togglePin(i)} title={msg.is_pinned ? "Unpin" : "Pin"}>
+                            {msg.is_pinned ? (
+                              <PinOff className="h-3.5 w-3.5 text-primary" />
+                            ) : (
+                              <Pin className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                      {msg.is_pinned && (
+                        <span className="text-[10px] text-primary flex items-center gap-0.5 mt-1">
+                          <Pin className="h-2.5 w-2.5" /> Pinned
+                        </span>
                       )}
                     </>
                   )}
@@ -597,6 +820,21 @@ export default function AiChat() {
                   <Loader2 className="h-4 w-4 animate-spin text-primary" />
                   <span className="text-sm text-muted-foreground">Thinking...</span>
                 </div>
+              </div>
+            )}
+
+            {/* Follow-up suggestions */}
+            {!isLoading && followUps.length > 0 && messages.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-2">
+                {followUps.map((q, i) => (
+                  <button
+                    key={i}
+                    onClick={() => send(q)}
+                    className="text-xs px-3 py-1.5 rounded-full border border-primary/30 text-primary hover:bg-primary/10 transition-colors"
+                  >
+                    {q}
+                  </button>
+                ))}
               </div>
             )}
           </div>
@@ -650,12 +888,21 @@ export default function AiChat() {
               <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => pdfInputRef.current?.click()} title="Upload PDF to brain">
                 <FileText className="h-4 w-4" />
               </Button>
+              <Button
+                size="icon"
+                variant={isRecording ? "destructive" : "ghost"}
+                className="h-8 w-8"
+                onClick={toggleVoice}
+                title={isRecording ? "Stop recording" : "Voice input"}
+              >
+                {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </Button>
             </div>
 
             <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask your AI Brain anything..."
+              placeholder={isRecording ? "Listening... speak now" : "Ask your AI Brain anything..."}
               className="min-h-[50px] max-h-[150px] resize-none flex-1"
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
               disabled={isLoading}
@@ -665,7 +912,7 @@ export default function AiChat() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-            <BookOpen className="h-3 w-3" /> Answers from your Knowledge Base • Upload screenshots, PDFs, or links to teach me more
+            <BookOpen className="h-3 w-3" /> Answers from your Knowledge Base • Upload screenshots, PDFs, links, or use voice
           </p>
         </div>
 
