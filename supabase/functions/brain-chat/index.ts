@@ -34,9 +34,7 @@ serve(async (req) => {
       });
     }
 
-    const userMessage = messages[messages.length - 1]?.content || "";
-
-    // Fetch ALL knowledge chunks for this user
+    // Fetch knowledge chunks
     const { data: chunks } = await supabase
       .from("knowledge_chunks")
       .select("content, category, source_type")
@@ -75,10 +73,18 @@ RULES:
 5. Be conversational, helpful, and encouraging. You're their personal AI coach.
 6. For sales questions, always tie back to frameworks and techniques from the knowledge base.
 7. Keep responses focused and actionable — not too long unless they ask for detail.
+8. If the user shares an image/screenshot, analyze it thoroughly — describe what you see, extract any text, and provide insights or suggestions based on the content.
 ${!hasKnowledge ? "\nIMPORTANT: The user hasn't uploaded any content to their Knowledge Base yet. Encourage them to upload sales books, training videos, scripts, or any learning material so you can become smarter and more helpful." : ""}`;
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+    // Process messages - handle multimodal content (images)
+    const processedMessages = messages.map((m: any) => {
+      // If content is an array (multimodal), pass through as-is
+      if (Array.isArray(m.content)) return m;
+      return m;
+    });
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -90,7 +96,7 @@ ${!hasKnowledge ? "\nIMPORTANT: The user hasn't uploaded any content to their Kn
         model: "google/gemini-3-flash-preview",
         messages: [
           { role: "system", content: systemPrompt },
-          ...messages,
+          ...processedMessages,
         ],
         stream: true,
       }),
