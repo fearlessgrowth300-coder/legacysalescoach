@@ -107,13 +107,6 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
       setAnalysisResult(data);
       toast.success("Profile analyzed! Comment generated.");
       queryClient.invalidateQueries({ queryKey: ["tiktok-prospects"] });
-
-      // Close after short delay
-      setTimeout(() => {
-        setAddOpen(false);
-        setTiktokUrl("");
-        setAnalysisResult(null);
-      }, 3000);
     } catch (e: any) {
       console.error("TikTok analyze error:", e);
       toast.error(e.message || "Failed to analyze TikTok profile");
@@ -270,6 +263,12 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
                     <Check className="h-4 w-4" />
                     <span>Added to your TikTok outreach list!</span>
                   </div>
+
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => { setAddOpen(false); setTiktokUrl(""); setAnalysisResult(null); }}>
+                      Done
+                    </Button>
+                  </DialogFooter>
                 </div>
               )}
 
