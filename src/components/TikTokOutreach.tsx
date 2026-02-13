@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import {
   Plus, Copy, Check, Loader2, ExternalLink, UserCheck, MessageSquare, Sparkles,
-  Eye, Heart, MessageCircle, Share2, Video
+  Eye, Heart, MessageCircle, Share2, Video, Trash2
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -42,6 +42,7 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
 
   // Converting follow-back state
   const [convertingId, setConvertingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const { data: workspace } = useQuery({
     queryKey: ["workspace", workspaceId],
@@ -153,6 +154,20 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
       toast.error("Failed to create chat");
     } finally {
       setConvertingId(null);
+    }
+  };
+
+  const handleDelete = async (prospectId: string) => {
+    setDeletingId(prospectId);
+    try {
+      await supabase.from("chat_messages").delete().eq("prospect_id", prospectId);
+      await supabase.from("prospects").delete().eq("id", prospectId);
+      queryClient.invalidateQueries({ queryKey: ["tiktok-prospects"] });
+      toast.success("Prospect removed");
+    } catch (e: any) {
+      toast.error("Failed to delete");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -359,6 +374,15 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
                               <UserCheck className="h-3 w-3 mr-1" />
                             )}
                             Follow Back
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            onClick={() => handleDelete(prospect.id)}
+                            disabled={deletingId === prospect.id}
+                          >
+                            {deletingId === prospect.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                           </Button>
                         </div>
                       </div>

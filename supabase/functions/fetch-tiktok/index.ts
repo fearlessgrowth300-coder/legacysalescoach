@@ -74,8 +74,12 @@ serve(async (req) => {
     }
 
     // Separate profile data from video data
+    // Some scrapers return a single merged object with both profile + video fields
     const profileItem = results.find((r: any) => r.type === "profile" || r.profileUrl || r.fans !== undefined) || results[0];
-    const videos = results.filter((r: any) => r.type === "video" || r.videoUrl || r.text);
+    const videos = results.filter((r: any) => r.type === "video" || r.videoUrl || r.text || r.desc || r.playCount);
+    
+    // If no separate videos found, treat all results as potential videos (scrapers sometimes merge everything)
+    const videoItems = videos.length > 0 ? videos : results.filter((r: any) => r.text || r.desc || r.playCount);
 
     const profileData = {
       username: profileItem.uniqueId || profileItem.username || username,
@@ -87,7 +91,7 @@ serve(async (req) => {
       videoCount: profileItem.video || profileItem.videoCount || 0,
       profilePicUrl: profileItem.avatarLarger || profileItem.avatarMedium || profileItem.profilePicUrl || "",
       verified: profileItem.verified || false,
-      recentVideos: videos.slice(0, 5).map((v: any) => ({
+      recentVideos: videoItems.slice(0, 5).map((v: any) => ({
         caption: (v.text || v.desc || v.caption || "").substring(0, 500),
         likes: v.diggCount || v.likes || v.likesCount || 0,
         comments: v.commentCount || v.comments || v.commentsCount || 0,
@@ -113,7 +117,7 @@ serve(async (req) => {
 
     // Generate suggested comment using AI
     let suggestedComment = "";
-    if (workspaceId && profileData.recentVideos.length > 0) {
+    if (workspaceId) {
       const { data: workspace } = await supabase
         .from("workspaces")
         .select("*")
@@ -124,8 +128,12 @@ serve(async (req) => {
       if (workspace) {
         const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
         if (LOVABLE_API_KEY) {
-          const mostRecentVideo = profileData.recentVideos[0];
-          const aiPrompt = `You are a TikTok engagement strategist. Your goal is to craft a comment on a prospect's recent TikTok video that will make them curious about you and trigger them to check your profile, follow you, or DM you.
+          const mostRecentVideo = profileData.recentVideos[0] || null;
+          const videoContext = mostRecentVideo
+            ? `MOST RECENT VIDEO TO COMMENT ON:\nCaption: "${mostRecentVideo.caption}"\nViews: ${mostRecentVideo.views}, Likes: ${mostRecentVideo.likes}\n${mostRecentVideo.hashtags?.length ? `Hashtags: #${mostRecentVideo.hashtags.join(" #")}` : ""}`
+            : `No specific videos found. Use their bio and profile info to craft a comment that would work on any of their posts.`;
+
+          const aiPrompt = `You are a TikTok engagement strategist. Your goal is to craft a comment on a prospect's TikTok content that will make them curious about you and trigger them to check your profile, follow you, or DM you.
 
 MY BUSINESS CONTEXT:
 - Business: ${workspace.name}
@@ -135,14 +143,11 @@ MY BUSINESS CONTEXT:
 PROSPECT'S PROFILE:
 ${summary}
 
-MOST RECENT VIDEO TO COMMENT ON:
-Caption: "${mostRecentVideo.caption}"
-Views: ${mostRecentVideo.views}, Likes: ${mostRecentVideo.likes}
-${mostRecentVideo.hashtags?.length ? `Hashtags: #${mostRecentVideo.hashtags.join(" #")}` : ""}
+${videoContext}
 
 RULES:
 1. The comment must feel natural, not salesy or spammy
-2. Reference something SPECIFIC from their video caption or content
+2. Reference something SPECIFIC from their content, bio, or niche
 3. Add genuine value or a relatable insight from the same niche
 4. Create curiosity that makes them want to check your profile
 5. Keep it 1-3 sentences max
