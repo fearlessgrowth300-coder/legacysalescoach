@@ -577,22 +577,62 @@ ${jsonFormat}
       supabase.from("prospects").update({ conversation_summary: summary }).eq("id", prospectId).then(() => {});
     }
 
-    // ===== EXTRACT & SAVE INSIGHT =====
-    if (parsed.detectedTone && message && mode !== "refine") {
-      const prospectType = parsed.prospectType || "unknown";
-      const insightText = `${prospect.name}: Type=${prospectType}, Tone=${parsed.detectedTone}, Stage=${detectedPattern}, Pattern=${parsed.frameworkApplied || "none"}, Urgency=${parsed.detectedObjection || "none"}`;
-      supabase.from("learned_insights").insert({
+    // ===== EXTRACT & SAVE INSIGHT + KNOWLEDGE CHUNKING =====
+    let learningResult: any = null;
+    if (message && mode !== "refine") {
+      const detectedProspectType = parsed.prospectType || "unknown";
+      const urgencyCreated = parsed.detectedObjection || parsed.frameworkApplied || "none";
+      
+      // Save insight
+      const insightText = `${prospect.name}: Type=${detectedProspectType}, Tone=${parsed.detectedTone || "neutral"}, Stage=${detectedPattern}, Pattern=${parsed.frameworkApplied || "none"}, Urgency=${urgencyCreated}`;
+      await supabase.from("learned_insights").insert({
         user_id: user.id,
         workspace_id: prospect.workspace_id,
         prospect_id: prospectId,
         insight_type: "conversation",
         insight: insightText,
         source: `Chat with ${prospect.name}`,
-      }).then(() => {});
+      });
+
+      // Chunk conversation into knowledge base
+      const bestSuggestion = parsed.suggestions?.[0]?.text || "";
+      if (bestSuggestion.length > 20) {
+        const chunks = [];
+
+        // Chunk 1: The exchange pattern (prospect message → best reply)
+        chunks.push({
+          user_id: user.id,
+          source_type: "conversation",
+          category: detectedPattern === "general" ? "rapport_building" : detectedPattern === "problem" ? "pain_discovery" : detectedPattern === "closing" ? "closing_techniques" : detectedPattern === "emotional_trigger" ? "trust_building" : "general",
+          content: `PROSPECT (${detectedProspectType}): "${message.substring(0, 500)}"\n\nBEST REPLY: "${bestSuggestion.substring(0, 500)}"\n\nFramework: ${parsed.frameworkApplied || "natural conversation"}\nUrgency trigger: ${urgencyCreated}\nTone: ${parsed.detectedTone || "neutral"}`,
+          brain_type: threadType || "both",
+          trigger_phrases: `${detectedProspectType}, ${parsed.detectedTone || "neutral"}, ${detectedPattern}`,
+          relevance_score: 80,
+        });
+
+        // Chunk 2: If objection was detected, save the handling pattern
+        if (parsed.detectedObjection) {
+          chunks.push({
+            user_id: user.id,
+            source_type: "conversation",
+            category: "objection_handling",
+            content: `OBJECTION (${parsed.detectedObjection}) from ${detectedProspectType}: "${message.substring(0, 300)}"\n\nHANDLING: "${bestSuggestion.substring(0, 500)}"\n\nFramework: ${parsed.frameworkApplied || "tactical empathy"}`,
+            brain_type: threadType || "both",
+            trigger_phrases: `${parsed.detectedObjection}, objection, ${detectedProspectType}`,
+            relevance_score: 85,
+          });
+        }
+
+        const { error: chunkError } = await supabase.from("knowledge_chunks").insert(chunks);
+        if (!chunkError) {
+          learningResult = { chunksAdded: chunks.length, prospectType: detectedProspectType, urgencyCreated };
+        }
+      }
     }
 
     // Include detected stage in response
     parsed.conversationStage = newStage || prospect.conversation_stage;
+    parsed.learningResult = learningResult;
 
     return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
