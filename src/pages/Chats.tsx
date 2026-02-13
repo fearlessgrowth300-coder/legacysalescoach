@@ -99,7 +99,8 @@ export default function Chats() {
         .eq("workspace_id", activeWorkspace!.id)
         .order("updated_at", { ascending: false });
       if (error) throw error;
-      return data;
+      // Filter to only show instagram prospects in the main chat sidebar
+      return (data as any[]).filter((p: any) => p.platform !== "tiktok");
     },
     enabled: !!activeWorkspace?.id,
   });
