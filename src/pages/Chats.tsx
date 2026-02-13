@@ -58,6 +58,7 @@ export default function Chats() {
   const [isRefining, setIsRefining] = useState(false);
   const [feedbackMap, setFeedbackMap] = useState<FeedbackMap>({});
   const [conversationStage, setConversationStage] = useState<string | null>(null);
+  const [prospectType, setProspectType] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -509,6 +510,7 @@ export default function Chats() {
       setPushyWarning(data.pushyWarning || null);
       setFeedbackMap({});
       if (data.conversationStage) setConversationStage(data.conversationStage);
+      if (data.prospectType) setProspectType(data.prospectType);
     } catch (e: any) {
       console.error("AI suggestion error:", e);
       toast.error("Failed to get suggestions");
@@ -576,6 +578,7 @@ export default function Chats() {
       setPushyWarning(data.pushyWarning || null);
       setFeedbackMap({});
       if (data.conversationStage) setConversationStage(data.conversationStage);
+      if (data.prospectType) setProspectType(data.prospectType);
     } catch (e: any) {
       toast.error("Failed to generate reply");
     }
@@ -1012,7 +1015,14 @@ export default function Chats() {
                   </AvatarFallback>
                 </Avatar>
                 <div>
-                  <h3 className="font-medium">{selectedProspect?.name} {(selectedProspect as any)?.instagram_username ? <span className="text-xs text-muted-foreground font-normal">@{(selectedProspect as any).instagram_username}</span> : null}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-medium">{selectedProspect?.name} {(selectedProspect as any)?.instagram_username ? <span className="text-xs text-muted-foreground font-normal">@{(selectedProspect as any).instagram_username}</span> : null}</h3>
+                    {prospectType && prospectType !== "unknown" && (
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                        {prospectType.replace(/_/g, " ")}
+                      </Badge>
+                    )}
+                  </div>
                   <p className="text-xs text-muted-foreground">{selectedProspect?.detected_interests || "Paste a message to get AI suggestions"}</p>
                 </div>
               </div>
