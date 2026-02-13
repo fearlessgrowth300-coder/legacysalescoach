@@ -461,9 +461,20 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                           <p className="font-medium text-sm truncate">{prospect.name}</p>
                           <p className="text-xs text-muted-foreground truncate">{prospect.detected_interests || "Active conversation"}</p>
                         </div>
-                        <Badge variant="outline" className="text-xs shrink-0">
-                          <UserCheck className="h-3 w-3 mr-1" />Followed Back
-                        </Badge>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Badge variant="outline" className="text-xs">
+                            <UserCheck className="h-3 w-3 mr-1" />Followed Back
+                          </Badge>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            onClick={(e) => { e.stopPropagation(); handleDelete(prospect.id); }}
+                            disabled={deletingId === prospect.id}
+                          >
+                            {deletingId === prospect.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                          </Button>
+                        </div>
                       </div>
                     </Card>
                   ))}

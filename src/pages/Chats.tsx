@@ -121,7 +121,21 @@ export default function Chats() {
     enabled: !!selectedProspectId,
   });
 
-  const selectedProspect = prospects?.find((p) => p.id === selectedProspectId);
+  // Fetch selected prospect directly (handles TikTok prospects not in sidebar)
+  const { data: selectedProspectData } = useQuery({
+    queryKey: ["selected-prospect", selectedProspectId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("prospects")
+        .select("*")
+        .eq("id", selectedProspectId!)
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!selectedProspectId,
+  });
+  const selectedProspect = selectedProspectData || prospects?.find((p) => p.id === selectedProspectId);
 
   useEffect(() => {
     scrollToBottom();
