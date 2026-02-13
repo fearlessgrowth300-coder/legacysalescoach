@@ -511,6 +511,11 @@ export default function Chats() {
       setFeedbackMap({});
       if (data.conversationStage) setConversationStage(data.conversationStage);
       if (data.prospectType) setProspectType(data.prospectType);
+      // Show learning notification
+      if (data.learningResult) {
+        const lr = data.learningResult;
+        toast.success(`🧠 Your AI friend just learned ${lr.chunksAdded || 1} new way${(lr.chunksAdded || 1) > 1 ? 's' : ''} to handle "${(data.prospectType || "prospects").replace(/_/g, " ")}" and added it to the brain`, { duration: 5000 });
+      }
     } catch (e: any) {
       console.error("AI suggestion error:", e);
       toast.error("Failed to get suggestions");
@@ -579,6 +584,10 @@ export default function Chats() {
       setFeedbackMap({});
       if (data.conversationStage) setConversationStage(data.conversationStage);
       if (data.prospectType) setProspectType(data.prospectType);
+      if (data.learningResult) {
+        const lr = data.learningResult;
+        toast.success(`🧠 Your AI friend just learned ${lr.chunksAdded || 1} new way${(lr.chunksAdded || 1) > 1 ? 's' : ''} to handle "${(data.prospectType || "prospects").replace(/_/g, " ")}" and added it to the brain`, { duration: 5000 });
+      }
     } catch (e: any) {
       toast.error("Failed to generate reply");
     }
@@ -1018,7 +1027,19 @@ export default function Chats() {
                   <div className="flex items-center gap-2">
                     <h3 className="font-medium">{selectedProspect?.name} {(selectedProspect as any)?.instagram_username ? <span className="text-xs text-muted-foreground font-normal">@{(selectedProspect as any).instagram_username}</span> : null}</h3>
                     {prospectType && prospectType !== "unknown" && (
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                      <Badge 
+                        variant="secondary" 
+                        className={`text-[10px] px-1.5 py-0 border ${
+                          prospectType === "just_started" ? "bg-emerald-500/15 text-emerald-700 border-emerald-500/30 dark:text-emerald-400" :
+                          prospectType === "no_sales" ? "bg-amber-500/15 text-amber-700 border-amber-500/30 dark:text-amber-400" :
+                          prospectType === "crickets" ? "bg-orange-500/15 text-orange-700 border-orange-500/30 dark:text-orange-400" :
+                          prospectType === "bad_mentor" ? "bg-red-500/15 text-red-700 border-red-500/30 dark:text-red-400" :
+                          prospectType === "lone_wolf" ? "bg-purple-500/15 text-purple-700 border-purple-500/30 dark:text-purple-400" :
+                          prospectType === "scam_skeptic" ? "bg-rose-500/15 text-rose-700 border-rose-500/30 dark:text-rose-400" :
+                          prospectType === "plateaued" ? "bg-yellow-500/15 text-yellow-700 border-yellow-500/30 dark:text-yellow-400" :
+                          "bg-muted text-muted-foreground border-border"
+                        }`}
+                      >
                         {prospectType.replace(/_/g, " ")}
                       </Badge>
                     )}
