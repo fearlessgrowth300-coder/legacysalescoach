@@ -9,18 +9,20 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   MessageSquare, Plus, Send, User, Sparkles,
   Copy, Check, AlertTriangle,
   Heart, Briefcase, MoreVertical, Trash2, Camera, Loader2, Image, Upload, X,
-  Ghost, PenLine, RotateCcw, ThumbsUp, ThumbsDown, Zap, BookOpen, TrendingUp
+  Ghost, PenLine, RotateCcw, ThumbsUp, ThumbsDown, Zap, BookOpen, TrendingUp, Video
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import TikTokOutreach from "@/components/TikTokOutreach";
 
 type Suggestion = { id: number; type: string; text: string; whyThisWorks?: string; frameworkUsed?: string };
 type FeedbackMap = Record<number, "positive" | "negative">;
@@ -32,6 +34,7 @@ export default function Chats() {
   const queryClient = useQueryClient();
   const selectedProspectId = prospectId || null;
 
+  const [platformTab, setPlatformTab] = useState<"instagram" | "tiktok">("instagram");
   const [newProspectOpen, setNewProspectOpen] = useState(false);
   const [chatType, setChatType] = useState<"new" | "existing" | "reengage" | null>(null);
   const [newProspectName, setNewProspectName] = useState("");
@@ -605,12 +608,38 @@ export default function Chats() {
     );
   }
 
+  if (platformTab === "tiktok") {
+    return (
+      <div className="flex h-[calc(100vh-4rem)]">
+        <div className="w-80 border-r flex flex-col bg-muted/30">
+          <div className="p-4 border-b">
+            <Tabs value={platformTab} onValueChange={(v) => setPlatformTab(v as any)}>
+              <TabsList className="w-full">
+                <TabsTrigger value="instagram" className="flex-1 text-xs gap-1"><MessageSquare className="h-3 w-3" />Instagram</TabsTrigger>
+                <TabsTrigger value="tiktok" className="flex-1 text-xs gap-1"><Video className="h-3 w-3" />TikTok</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+        </div>
+        <div className="flex-1">
+          <TikTokOutreach workspaceId={activeWorkspace!.id} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-[calc(100vh-4rem)]">
       {/* Sidebar - Prospect List */}
       <div className="w-80 border-r flex flex-col bg-muted/30">
-        <div className="p-4 border-b">
-          <div className="flex items-center justify-between mb-2">
+        <div className="p-4 border-b space-y-3">
+          <Tabs value={platformTab} onValueChange={(v) => setPlatformTab(v as any)}>
+            <TabsList className="w-full">
+              <TabsTrigger value="instagram" className="flex-1 text-xs gap-1"><MessageSquare className="h-3 w-3" />Instagram</TabsTrigger>
+              <TabsTrigger value="tiktok" className="flex-1 text-xs gap-1"><Video className="h-3 w-3" />TikTok</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <div className="flex items-center justify-between">
             <h2 className="font-semibold">Chats</h2>
             <Dialog open={newProspectOpen} onOpenChange={handleDialogChange}>
               <DialogTrigger asChild>
