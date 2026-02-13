@@ -133,7 +133,7 @@ serve(async (req) => {
             ? `MOST RECENT VIDEO TO COMMENT ON:\nCaption: "${mostRecentVideo.caption}"\nViews: ${mostRecentVideo.views}, Likes: ${mostRecentVideo.likes}\n${mostRecentVideo.hashtags?.length ? `Hashtags: #${mostRecentVideo.hashtags.join(" #")}` : ""}`
             : `No specific videos found. Use their bio and profile info to craft a comment that would work on any of their posts.`;
 
-          const aiPrompt = `You are a TikTok engagement strategist. Your goal is to craft a comment on a prospect's TikTok content that will make them curious about you and trigger them to check your profile, follow you, or DM you.
+          const aiPrompt = `You are a TikTok engagement strategist and DM funnel expert. Your goal is to craft a comment that is SO compelling the prospect HAS to reply, DM you, or follow you. The comment must act as a MAGNET that pulls them into your inbox.
 
 MY BUSINESS CONTEXT:
 - Business: ${workspace.name}
@@ -143,18 +143,37 @@ MY BUSINESS CONTEXT:
 PROSPECT'S PROFILE:
 ${summary}
 
-${videoContext}
+AVAILABLE VIDEOS TO COMMENT ON:
+${profileData.recentVideos.map((v: any, i: number) => `${i + 1}. Caption: "${v.caption}" | Views: ${v.views} | Likes: ${v.likes} | Comments: ${v.comments} | URL: ${v.url}`).join("\n")}
+
+STEP 1 — CHOOSE THE BEST VIDEO TO COMMENT ON:
+Analyze ALL their videos above. Pick the ONE video that:
+- Is most relevant to my niche/business
+- Has good engagement (not dead, but not so viral that my comment gets buried)
+- Has content that gives you the best opening to write a compelling, niche-specific comment
+- Allows you to naturally position yourself as someone they'd want to connect with
+
+STEP 2 — WRITE A KILLER COMMENT WITH CTA:
+The comment MUST include:
+1. **Specific Reference**: Mention something SPECIFIC from that video's caption or content
+2. **Peer Positioning**: Show you're in the same space, not a fan — you're an equal
+3. **Value Hook**: Share a quick insight, relatable experience, or bold take that adds value
+4. **STRONG CTA**: End with a clear call-to-action that drives them to DM you or check your profile. Examples:
+   - "I've been testing something similar — can you DM me? Would love to compare notes 🤝"
+   - "I actually have some ideas on this that might help — shoot me a DM if you're open to it"
+   - "This is exactly what I've been working on too — let's connect, DM me!"
+   - "Would love to pick your brain on this — mind if we chat in DMs?"
 
 RULES:
-1. The comment must feel natural, not salesy or spammy
-2. Reference something SPECIFIC from their content, bio, or niche
-3. Add genuine value or a relatable insight from the same niche
-4. Create curiosity that makes them want to check your profile
-5. Keep it 1-3 sentences max
-6. Don't use excessive emojis (max 1-2)
-7. Position yourself as a peer in the same space, not a fan
+- The comment must feel natural, not spammy — like a peer genuinely engaging
+- The CTA must feel like a BENEFIT to them, not just for you
+- Keep it 2-4 sentences max
+- Max 1-2 emojis
+- NO generic praise like "great content!" or "love this!"
+- The comment should make OTHER viewers curious about you too
+- Position the DM request as mutually beneficial
 
-Return JSON: { "comment": "...", "strategy": "brief explanation of why this works", "targetVideoCaption": "..." }`;
+Return JSON: { "comment": "the full comment with CTA", "strategy": "why this comment + CTA will work on this specific prospect", "targetVideoCaption": "exact caption of the chosen video", "targetVideoUrl": "URL of the chosen video", "whyThisVideo": "why you picked this specific video over others" }`;
 
           try {
             const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -179,11 +198,12 @@ Return JSON: { "comment": "...", "strategy": "brief explanation of why this work
               try {
                 const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
-                  const parsed = JSON.parse(jsonMatch[0]);
+                const parsed = JSON.parse(jsonMatch[0]);
                   suggestedComment = parsed.comment || "";
                   profileData.commentStrategy = parsed.strategy || "";
-                  profileData.targetVideoCaption = parsed.targetVideoCaption || mostRecentVideo.caption;
-                  profileData.targetVideoUrl = mostRecentVideo.url;
+                  profileData.targetVideoCaption = parsed.targetVideoCaption || "";
+                  profileData.targetVideoUrl = parsed.targetVideoUrl || "";
+                  profileData.whyThisVideo = parsed.whyThisVideo || "";
                 }
               } catch { suggestedComment = aiContent.substring(0, 300); }
             }
@@ -200,6 +220,8 @@ Return JSON: { "comment": "...", "strategy": "brief explanation of why this work
         tiktok_url: `https://tiktok.com/@${profileData.username}`,
         name: profileData.nickname || profileData.username,
         suggested_comment: suggestedComment || null,
+        target_video_url: profileData.targetVideoUrl || null,
+        target_video_caption: profileData.targetVideoCaption || null,
       }).eq("id", prospectId);
     }
 
