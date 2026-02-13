@@ -401,6 +401,8 @@ export type Database = {
           store_url: string | null
           suggested_comment: string | null
           suggested_first_message: string | null
+          target_video_caption: string | null
+          target_video_url: string | null
           tiktok_url: string | null
           updated_at: string
           user_id: string
@@ -423,6 +425,8 @@ export type Database = {
           store_url?: string | null
           suggested_comment?: string | null
           suggested_first_message?: string | null
+          target_video_caption?: string | null
+          target_video_url?: string | null
           tiktok_url?: string | null
           updated_at?: string
           user_id: string
@@ -445,6 +449,8 @@ export type Database = {
           store_url?: string | null
           suggested_comment?: string | null
           suggested_first_message?: string | null
+          target_video_caption?: string | null
+          target_video_url?: string | null
           tiktok_url?: string | null
           updated_at?: string
           user_id?: string

@@ -27,6 +27,8 @@ type TikTokProspect = {
   has_followed_back: boolean;
   created_at: string;
   conversation_stage: string;
+  target_video_url: string | null;
+  target_video_caption: string | null;
 };
 
 export default function TikTokOutreach({ workspaceId }: { workspaceId: string }) {
@@ -138,7 +140,17 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
       const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
         body: {
           prospectId: prospect.id,
-          message: `TikTok prospect @${prospect.name} has followed me back. Their bio: ${prospect.detected_interests || "N/A"}. TikTok URL: ${prospect.tiktok_url}. Generate a first DM message that feels like a peer in the same niche reaching out casually. Be friendly, reference their content, and create a conversation starter.`,
+          message: `TikTok prospect @${prospect.name} has followed me back or engaged with my comment. Their bio: ${prospect.detected_interests || "N/A"}. TikTok URL: ${prospect.tiktok_url}. 
+
+CRITICAL CONTEXT: I commented on their TikTok post and they responded (followed back or engaged). Now I need to slide into their DMs with a message that:
+1. References the interaction we already had (the comment on their post)
+2. Feels like a natural continuation — NOT a cold DM
+3. Creates curiosity about what I do and makes them WANT to reply
+4. Positions me as someone valuable in their niche, not a random follower
+5. Keeps it short (2-3 sentences max) — long DMs get ignored
+6. Has a question or hook at the end that makes NOT replying feel like they're missing out
+
+The goal is to start a genuine conversation that leads to them wanting to know more about what I do. Make the message impossible to ignore.`,
           threadType: "friend",
           mode: "first_message",
         },
@@ -251,6 +263,21 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
                   {analysisResult.suggestedComment && (
                     <Card className="border-primary/30 bg-primary/5">
                       <CardContent className="p-3 space-y-2">
+                        {/* Target Video */}
+                        {(analysisResult.targetVideoCaption || analysisResult.targetVideoUrl) && (
+                          <div className="bg-muted/40 rounded p-2 mb-2">
+                            <p className="text-xs font-medium text-muted-foreground mb-1">🎯 Comment on this specific post:</p>
+                            <p className="text-sm italic truncate">"{analysisResult.targetVideoCaption}"</p>
+                            {analysisResult.targetVideoUrl && (
+                              <a href={analysisResult.targetVideoUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1 hover:underline">
+                                <ExternalLink className="h-3 w-3" />Open this video on TikTok
+                              </a>
+                            )}
+                            {analysisResult.whyThisVideo && (
+                              <p className="text-xs text-muted-foreground mt-1">📌 {analysisResult.whyThisVideo}</p>
+                            )}
+                          </div>
+                        )}
                         <div className="flex items-center justify-between">
                           <p className="text-sm font-medium flex items-center gap-2">
                             <Sparkles className="h-4 w-4 text-primary" />
@@ -387,8 +414,17 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
                         </div>
                       </div>
                       {(prospect as any).suggested_comment && (
-                        <div className="mt-2 pl-13 bg-muted/30 rounded p-2">
-                          <p className="text-xs text-muted-foreground mb-1">💬 Suggested comment:</p>
+                        <div className="mt-2 pl-13 bg-muted/30 rounded p-2 space-y-1">
+                          {(prospect as any).target_video_url && (
+                            <div className="flex items-center gap-1">
+                              <p className="text-xs text-muted-foreground">🎯 Comment on:</p>
+                              <a href={(prospect as any).target_video_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1">
+                                {(prospect as any).target_video_caption ? `"${(prospect as any).target_video_caption.substring(0, 60)}..."` : "Open video"}
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                            </div>
+                          )}
+                          <p className="text-xs text-muted-foreground">💬 Suggested comment:</p>
                           <p className="text-sm">{(prospect as any).suggested_comment}</p>
                         </div>
                       )}
