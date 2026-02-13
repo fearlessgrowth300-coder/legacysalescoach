@@ -389,14 +389,17 @@ export type Database = {
           conversation_summary: string | null
           created_at: string
           detected_interests: string | null
+          has_followed_back: boolean
           id: string
           instagram_url: string | null
           instagram_username: string | null
           name: string
           outcome: string
+          platform: string
           profile_pic_url: string | null
           reply_mode: string
           store_url: string | null
+          suggested_comment: string | null
           suggested_first_message: string | null
           tiktok_url: string | null
           updated_at: string
@@ -408,14 +411,17 @@ export type Database = {
           conversation_summary?: string | null
           created_at?: string
           detected_interests?: string | null
+          has_followed_back?: boolean
           id?: string
           instagram_url?: string | null
           instagram_username?: string | null
           name: string
           outcome?: string
+          platform?: string
           profile_pic_url?: string | null
           reply_mode?: string
           store_url?: string | null
+          suggested_comment?: string | null
           suggested_first_message?: string | null
           tiktok_url?: string | null
           updated_at?: string
@@ -427,14 +433,17 @@ export type Database = {
           conversation_summary?: string | null
           created_at?: string
           detected_interests?: string | null
+          has_followed_back?: boolean
           id?: string
           instagram_url?: string | null
           instagram_username?: string | null
           name?: string
           outcome?: string
+          platform?: string
           profile_pic_url?: string | null
           reply_mode?: string
           store_url?: string | null
+          suggested_comment?: string | null
           suggested_first_message?: string | null
           tiktok_url?: string | null
           updated_at?: string
