@@ -235,8 +235,9 @@ Make each chunk detailed enough to be useful on its own.`
         brain_type: item.brain_type,
         trigger_phrases: chunk.triggerPhrases || "",
         relevance_score: 70,
-        source_type: "content",
+        source_type: "core_knowledge",
         embedding: embedding,
+        workspace_id: null,
       });
     }
 
@@ -258,7 +259,7 @@ Make each chunk detailed enough to be useful on its own.`
         what_i_learned: learning.what_i_learned || "",
         how_to_apply: learning.how_to_apply || "",
         source_name: sourceName,
-        source_type: type || "content",
+        source_type: "sales_principle",
         brain_type: item.brain_type,
         category: learning.category || "general",
         metadata: {
@@ -269,6 +270,7 @@ Make each chunk detailed enough to be useful on its own.`
           source: sourceName,
         },
         embedding: embedding,
+        workspace_id: null,
       }).select().single();
 
       if (!insertErr && inserted) {
@@ -297,8 +299,9 @@ Make each chunk detailed enough to be useful on its own.`
           brain_type: item.brain_type,
           trigger_phrases: "",
           relevance_score: 60,
-          source_type: "raw_chunk",
+          source_type: "core_knowledge",
           embedding: embedding,
+          workspace_id: null,
         });
         embeddedChunkCount++;
       }
