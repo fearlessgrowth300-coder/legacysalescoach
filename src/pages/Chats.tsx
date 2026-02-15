@@ -1027,63 +1027,56 @@ export default function Chats() {
         ) : (
           <>
             {/* Chat Header */}
-            <div className="p-2 md:p-4 border-b flex items-center justify-between" style={{ height: "var(--chat-header-h)" }}>
-              <div className="flex items-center gap-3">
-                {isMobile && (
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => navigate("/chats")}>
-                    <ArrowLeft className="h-4 w-4" />
-                  </Button>
-                )}
-                <Avatar className="h-10 w-10 shrink-0">
-                  {(selectedProspect as any)?.profile_pic_url ? (
-                    <AvatarImage
-                      src={(selectedProspect as any).profile_pic_url}
-                      alt={selectedProspect?.name}
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        e.currentTarget.style.display = "none";
-                      }}
-                    />
-                  ) : null}
-                  <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
-                    {selectedProspect?.name ? getInitials(selectedProspect.name) : "?"}
-                  </AvatarFallback>
-                </Avatar>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-medium">{selectedProspect?.name} {(selectedProspect as any)?.instagram_username ? <span className="text-xs text-muted-foreground font-normal">@{(selectedProspect as any).instagram_username}</span> : null}</h3>
-                    {prospectType && prospectType !== "unknown" && (
-                      <Badge 
-                        variant="secondary" 
-                        className={`text-[10px] px-1.5 py-0 border ${
-                          prospectType === "just_started" ? "bg-emerald-500/15 text-emerald-700 border-emerald-500/30 dark:text-emerald-400" :
-                          prospectType === "no_sales" ? "bg-amber-500/15 text-amber-700 border-amber-500/30 dark:text-amber-400" :
-                          prospectType === "crickets" ? "bg-orange-500/15 text-orange-700 border-orange-500/30 dark:text-orange-400" :
-                          prospectType === "bad_mentor" ? "bg-red-500/15 text-red-700 border-red-500/30 dark:text-red-400" :
-                          prospectType === "lone_wolf" ? "bg-purple-500/15 text-purple-700 border-purple-500/30 dark:text-purple-400" :
-                          prospectType === "scam_skeptic" ? "bg-rose-500/15 text-rose-700 border-rose-500/30 dark:text-rose-400" :
-                          prospectType === "plateaued" ? "bg-yellow-500/15 text-yellow-700 border-yellow-500/30 dark:text-yellow-400" :
-                          "bg-muted text-muted-foreground border-border"
-                        }`}
-                      >
-                        {prospectType.replace(/_/g, " ")}
-                      </Badge>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">{selectedProspect?.detected_interests || "Paste a message to get AI suggestions"}</p>
-                </div>
+            <div className="p-2 md:p-4 border-b flex items-center gap-2 overflow-hidden" style={{ minHeight: "var(--chat-header-h)" }}>
+              {isMobile && (
+                <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => navigate("/chats")}>
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+              )}
+              <Avatar className="h-8 w-8 md:h-10 md:w-10 shrink-0">
+                {(selectedProspect as any)?.profile_pic_url ? (
+                  <AvatarImage
+                    src={(selectedProspect as any).profile_pic_url}
+                    alt={selectedProspect?.name}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      e.currentTarget.style.display = "none";
+                    }}
+                  />
+                ) : null}
+                <AvatarFallback className="bg-primary/10 text-primary text-xs md:text-sm font-medium">
+                  {selectedProspect?.name ? getInitials(selectedProspect.name) : "?"}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-medium text-sm md:text-base truncate">
+                  {selectedProspect?.name}
+                  {!isMobile && (selectedProspect as any)?.instagram_username && (
+                    <span className="text-xs text-muted-foreground font-normal ml-1">@{(selectedProspect as any).instagram_username}</span>
+                  )}
+                </h3>
+                <p className="text-xs text-muted-foreground truncate">
+                  {isMobile
+                    ? ((selectedProspect as any)?.instagram_username ? `@${(selectedProspect as any).instagram_username}` : (selectedProspect?.detected_interests || "Paste a message"))
+                    : (selectedProspect?.detected_interests || "Paste a message to get AI suggestions")
+                  }
+                </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 shrink-0">
                 <Select value={currentThreadType} onValueChange={(v: "friend" | "expert") => { setCurrentThreadType(v); setSuggestions([]); }}>
-                  <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-24 md:w-32 h-8"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="friend"><div className="flex items-center gap-2"><Heart className="h-3 w-3 text-pink-500" />Friend</div></SelectItem>
                     <SelectItem value="expert"><div className="flex items-center gap-2"><Briefcase className="h-3 w-3 text-blue-500" />Expert</div></SelectItem>
                   </SelectContent>
                 </Select>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
+                <DropdownMenu modal={false}>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" side="bottom" className="z-[100]">
                     <DropdownMenuItem onClick={() => { updateOutcome.mutate({ id: selectedProspectId!, outcome: "won" }); toast.success("Marked as won!"); }}>Mark as Won</DropdownMenuItem>
                     <DropdownMenuItem onClick={() => { updateOutcome.mutate({ id: selectedProspectId!, outcome: "lost" }); toast.success("Marked as lost"); }}>Mark as Lost</DropdownMenuItem>
                     <DropdownMenuItem onClick={() => { updateOutcome.mutate({ id: selectedProspectId!, outcome: "ghosted" }); toast.success("Marked as ghosted"); }}>Mark as Ghosted</DropdownMenuItem>
@@ -1094,6 +1087,30 @@ export default function Chats() {
                 </DropdownMenu>
               </div>
             </div>
+
+            {/* Prospect Type Badge (shown below header on mobile) */}
+            {isMobile && prospectType && prospectType !== "unknown" && (
+              <div className="px-3 py-1 border-b">
+                <Badge 
+                  variant="secondary" 
+                  className={`text-[10px] px-1.5 py-0 border ${
+                    prospectType === "just_started" ? "bg-emerald-500/15 text-emerald-700 border-emerald-500/30 dark:text-emerald-400" :
+                    prospectType === "no_sales" ? "bg-amber-500/15 text-amber-700 border-amber-500/30 dark:text-amber-400" :
+                    prospectType === "crickets" ? "bg-orange-500/15 text-orange-700 border-orange-500/30 dark:text-orange-400" :
+                    prospectType === "bad_mentor" ? "bg-red-500/15 text-red-700 border-red-500/30 dark:text-red-400" :
+                    prospectType === "lone_wolf" ? "bg-purple-500/15 text-purple-700 border-purple-500/30 dark:text-purple-400" :
+                    prospectType === "scam_skeptic" ? "bg-rose-500/15 text-rose-700 border-rose-500/30 dark:text-rose-400" :
+                    prospectType === "plateaued" ? "bg-yellow-500/15 text-yellow-700 border-yellow-500/30 dark:text-yellow-400" :
+                    "bg-muted text-muted-foreground border-border"
+                  }`}
+                >
+                  {prospectType.replace(/_/g, " ")}
+                </Badge>
+              </div>
+            )}
+
+            {/* Desktop prospect type badge inline */}
+            {!isMobile && prospectType && prospectType !== "unknown" && null}
 
             {/* Thread Type Header + Conversation Stage Progress Bar */}
             <div className={`px-4 py-2 border-b ${currentThreadType === "expert" ? "bg-blue-50 dark:bg-blue-950/20" : "bg-pink-50 dark:bg-pink-950/20"}`}>
