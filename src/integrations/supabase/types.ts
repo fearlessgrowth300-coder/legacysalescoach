@@ -244,6 +244,7 @@ export type Database = {
           source_type: string
           trigger_phrases: string | null
           user_id: string
+          workspace_id: string | null
         }
         Insert: {
           brain_type?: string
@@ -257,6 +258,7 @@ export type Database = {
           source_type?: string
           trigger_phrases?: string | null
           user_id: string
+          workspace_id?: string | null
         }
         Update: {
           brain_type?: string
@@ -270,6 +272,7 @@ export type Database = {
           source_type?: string
           trigger_phrases?: string | null
           user_id?: string
+          workspace_id?: string | null
         }
         Relationships: [
           {
@@ -277,6 +280,13 @@ export type Database = {
             columns: ["source_id"]
             isOneToOne: false
             referencedRelation: "knowledge_base_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "knowledge_chunks_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
         ]
@@ -484,6 +494,7 @@ export type Database = {
           source_type: string
           user_id: string
           what_i_learned: string
+          workspace_id: string | null
         }
         Insert: {
           brain_type?: string
@@ -499,6 +510,7 @@ export type Database = {
           source_type?: string
           user_id: string
           what_i_learned: string
+          workspace_id?: string | null
         }
         Update: {
           brain_type?: string
@@ -514,6 +526,7 @@ export type Database = {
           source_type?: string
           user_id?: string
           what_i_learned?: string
+          workspace_id?: string | null
         }
         Relationships: [
           {
@@ -521,6 +534,13 @@ export type Database = {
             columns: ["source_id"]
             isOneToOne: false
             referencedRelation: "knowledge_base_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_brain_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
         ]

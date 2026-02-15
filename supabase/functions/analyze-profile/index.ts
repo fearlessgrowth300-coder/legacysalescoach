@@ -22,7 +22,6 @@ async function scrapeUrl(url: string): Promise<string> {
     });
     if (!res.ok) return `[Could not fetch ${url}: HTTP ${res.status}]`;
     const html = await res.text();
-    // Strip scripts/styles and extract text
     return html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
@@ -36,6 +35,29 @@ async function scrapeUrl(url: string): Promise<string> {
       .substring(0, 8000);
   } catch (e) {
     return `[Error fetching ${url}: ${e instanceof Error ? e.message : "timeout"}]`;
+  }
+}
+
+async function generateEmbedding(text: string, apiKey: string): Promise<number[] | null> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: text.substring(0, 8000),
+        dimensions: 768,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.data?.[0]?.embedding || null;
+  } catch {
+    return null;
   }
 }
 
@@ -97,6 +119,7 @@ serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
+    // ===== STEP 1: Profile Analysis (existing) =====
     const prompt = `Analyze this business/creator profile and provide:
 1. A concise profile analysis (2-3 sentences about what they do, their niche, and target audience)
 2. Products/services detected (comma-separated list)
@@ -162,7 +185,100 @@ Return JSON: { "profile_analysis": "...", "products_detected": "..." }`;
       .update({ profile_analysis: profileAnalysis, products_detected: productsDetected })
       .eq("id", workspaceId);
 
-    return new Response(JSON.stringify({ success: true, profileAnalysis, productsDetected }), {
+    // ===== STEP 2: Extract & Save Structured Persona (workspace_persona) =====
+    const personaPrompt = `Based on this business profile, create a structured persona object for this workspace.
+
+Workspace name: ${workspace.name}
+Niche description: ${workspace.niche_description || "Not provided"}
+Profile Analysis: ${profileAnalysis}
+Products: ${productsDetected}
+
+Scraped content:
+${scrapedParts.join("\n\n")}
+
+Return a JSON object with these exact fields:
+{
+  "workspace_name": "short persona name, e.g. 'Digital Mom Friend'",
+  "tone": "e.g. Warm, relatable / Professional, authoritative / Energetic, motivational",
+  "audience": "e.g. Beginner moms / Aspiring entrepreneurs / Fitness enthusiasts",
+  "positioning": "e.g. Peer who succeeded / Authority expert / Relatable mentor",
+  "energy": "e.g. Calm, encouraging / High-energy, motivational / Direct, no-nonsense",
+  "allowed_close_style": "e.g. Soft invitation / Direct ask / Consultative close",
+  "niche_detected": "the specific niche detected",
+  "audience_type": "the type of audience (beginner/intermediate/advanced)",
+  "key_themes": "3-5 main themes from their content, comma-separated"
+}
+
+Return ONLY the JSON object.`;
+
+    const personaResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          { role: "system", content: "You are a persona analyzer. Return valid JSON only." },
+          { role: "user", content: personaPrompt },
+        ],
+        temperature: 0.3,
+      }),
+    });
+
+    let personaData: any = null;
+    if (personaResponse.ok) {
+      const pData = await personaResponse.json();
+      const pContent = pData.choices?.[0]?.message?.content || "";
+      try {
+        const pMatch = pContent.match(/\{[\s\S]*\}/);
+        if (pMatch) personaData = JSON.parse(pMatch[0]);
+      } catch {
+        console.error("Failed to parse persona JSON");
+      }
+    }
+
+    // Save persona to sales_brain as workspace_persona
+    if (personaData) {
+      // Delete existing workspace_persona entries for this workspace
+      await supabase
+        .from("sales_brain")
+        .delete()
+        .eq("user_id", user.id)
+        .eq("workspace_id", workspaceId)
+        .eq("source_type", "workspace_persona");
+
+      const personaSummary = `Workspace Persona: ${personaData.workspace_name || workspace.name}
+Tone: ${personaData.tone || "Not detected"}
+Audience: ${personaData.audience || "Not detected"}
+Positioning: ${personaData.positioning || "Not detected"}
+Energy: ${personaData.energy || "Not detected"}
+Close Style: ${personaData.allowed_close_style || "Not detected"}
+Niche: ${personaData.niche_detected || "Not detected"}
+Audience Type: ${personaData.audience_type || "Not detected"}
+Key Themes: ${personaData.key_themes || "Not detected"}`;
+
+      const embedding = await generateEmbedding(personaSummary, LOVABLE_API_KEY);
+
+      await supabase.from("sales_brain").insert({
+        user_id: user.id,
+        workspace_id: workspaceId,
+        principle_name: `Workspace Persona: ${personaData.workspace_name || workspace.name}`,
+        what_i_learned: personaSummary,
+        how_to_apply: `Use this persona when chatting with prospects in the ${workspace.name} workspace. Match the tone (${personaData.tone}), target the audience (${personaData.audience}), and use the close style (${personaData.allowed_close_style}).`,
+        source_name: workspace.name,
+        source_type: "workspace_persona",
+        brain_type: "both",
+        category: "general",
+        metadata: personaData,
+        embedding,
+      });
+
+      console.log("Saved workspace persona to sales_brain");
+    }
+
+    return new Response(JSON.stringify({ success: true, profileAnalysis, productsDetected, persona: personaData }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {

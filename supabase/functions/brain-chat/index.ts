@@ -83,22 +83,26 @@ serve(async (req) => {
         ? lastUserMsg.content.filter((p: any) => p.type === "text").map((p: any) => p.text).join(" ")
         : "";
 
-    // Fetch knowledge chunks (text search fallback - keyword matching)
-    const searchTerms = queryText.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3).slice(0, 8);
-    
-    const { data: chunks } = await supabase
+    // Fetch CORE KNOWLEDGE chunks (global — no workspace_id, source_type = core_knowledge)
+    const { data: coreChunks } = await supabase
       .from("knowledge_chunks")
       .select("content, category, source_type, source_id")
       .eq("user_id", user.id)
+      .is("workspace_id", null)
       .order("relevance_score", { ascending: false })
       .limit(20);
 
-    // Fetch sales_brain principles
-    const { data: principles } = await supabase
+    // Fetch CORE sales_brain principles (global — no workspace_id)
+    const { data: corePrinciples } = await supabase
       .from("sales_brain")
       .select("principle_name, what_i_learned, how_to_apply, source_name, category, source_type")
       .eq("user_id", user.id)
+      .is("workspace_id", null)
       .limit(20);
+
+    // Combine as the main brain data
+    const chunks = coreChunks || [];
+    const principles = corePrinciples || [];
 
     // No longer fetching learned_insights — brain only uses uploaded content (videos, PDFs)
     const insights: any[] = [];
@@ -116,7 +120,7 @@ serve(async (req) => {
       }
     }
 
-    // Build brain context
+    // Build brain context from CORE KNOWLEDGE only
     const chunksContext = (chunks || []).map((c: any) => {
       const sourceName = c.source_id ? sourceMap[c.source_id] || c.source_type : c.source_type;
       return `[Source: ${sourceName}] [Category: ${c.category}]\n${c.content}`;
