@@ -479,12 +479,12 @@ export default function PracticeCall() {
   // ========================
   if (callState === "idle") {
     return (
-      <div className="container py-8 max-w-5xl">
+      <div className="px-4 py-6 md:py-8 max-w-5xl mx-auto overflow-x-hidden">
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center justify-between mb-2">
-            <h1 className="text-3xl font-bold flex items-center gap-3">
-              Practice <Gamepad2 className="h-8 w-8 text-primary" />
+            <h1 className="text-xl md:text-3xl font-bold flex items-center gap-2 md:gap-3">
+              Practice <Gamepad2 className="h-6 w-6 md:h-8 md:w-8 text-primary" />
             </h1>
             <div className="flex items-center gap-3">
               <Button variant="outline" size="sm" onClick={() => setShowBusinessSetup(true)}>
@@ -616,7 +616,7 @@ export default function PracticeCall() {
   // ========================
   if (callState === "scenario_detail" && selectedScenario) {
     return (
-      <div className="container py-8 max-w-5xl">
+      <div className="px-4 py-6 md:py-8 max-w-5xl mx-auto overflow-x-hidden">
         <button onClick={backToScenarios} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-6 transition-colors">
           <ArrowLeft className="h-4 w-4" />Back to scenarios
         </button>
@@ -849,7 +849,7 @@ export default function PracticeCall() {
     const userMsgCount = messages.filter(m => m.role === "user").length;
 
     return (
-      <div className="container py-8 max-w-3xl">
+      <div className="px-4 py-6 md:py-8 max-w-3xl mx-auto overflow-x-hidden">
         <div className="text-center mb-8">
           <Trophy className={`h-12 w-12 mx-auto mb-3 ${getScoreColor(avgScore)}`} />
           <h1 className="text-3xl font-bold mb-1">Practice Complete</h1>

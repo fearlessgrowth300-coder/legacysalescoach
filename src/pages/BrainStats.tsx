@@ -126,10 +126,10 @@ export default function BrainStats() {
   };
 
   return (
-    <div className="container py-8 max-w-4xl">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Brain className="h-6 w-6 text-primary" />AI Brain Intelligence
+    <div className="px-4 py-6 md:py-8 max-w-4xl mx-auto overflow-x-hidden">
+      <div className="mb-6 md:mb-8">
+        <h1 className="text-xl md:text-2xl font-bold flex items-center gap-2">
+          <Brain className="h-5 w-5 md:h-6 md:w-6 text-primary" />AI Brain Intelligence
         </h1>
         <p className="text-muted-foreground">See how smart your Sales AI has become</p>
       </div>
@@ -169,7 +169,7 @@ export default function BrainStats() {
       <Card className="mb-6">
         <CardHeader><CardTitle>Knowledge by Category</CardTitle></CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4">
             {Object.entries(byCategory).map(([cat, count]) => (
               <div key={cat} className="p-4 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
                 <div className="flex items-center gap-2 mb-2">
@@ -187,7 +187,7 @@ export default function BrainStats() {
       <Card className="mb-6">
         <CardHeader><CardTitle>Knowledge by Mode</CardTitle></CardHeader>
         <CardContent>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-3 gap-2 md:gap-4">
             <div className="p-4 rounded-lg border bg-pink-500/5 border-pink-500/20">
               <div className="flex items-center gap-2 mb-2"><Heart className="h-4 w-4 text-pink-500" /><span className="font-medium">Friend</span></div>
               <div className="text-2xl font-bold text-pink-600">{byBrain.friend}</div>
