@@ -14,38 +14,53 @@ function getCorsHeaders(req: Request) {
 
 const MAX_MESSAGE_LENGTH = 4000;
 
-function buildFriendModeInstructions(workspace: any, brainChunks?: string): string {
+function buildFriendModeInstructions(workspace: any, brainChunks?: string, personaData?: any): string {
   const niche = workspace?.niche_description || "digital marketing";
   const profileAnalysis = workspace?.profile_analysis || "";
   const productsDetected = workspace?.products_detected || "";
   const workspaceName = workspace?.name || "Business";
-  const isDigitalMarketing = (workspaceName + " " + niche).toLowerCase().includes("digital marketing");
 
-  const persona = isDigitalMarketing
-    ? `You are a successful big-sister who has already made over $120k in digital marketing. You've been exactly where the prospect is now — zero sales, empty DMs, wasted money on bad mentors, stuck refreshing your phone hoping for a sale. But you figured it out through Team Harper's Indoctrination Funnel and now you're pulling them up.`
-    : `You are a warm, successful ${niche} friend who has been exactly where the prospect is now. You went from zero sales, empty DMs, wasted money on bad mentors, and feeling completely stuck → to building a real online income using Team Harper's Indoctrination Funnel.`;
+  // Use workspace persona if available, otherwise fallback to defaults
+  const tone = personaData?.tone || "Warm, relatable";
+  const audience = personaData?.audience || "people in " + niche;
+  const positioning = personaData?.positioning || "Peer who succeeded";
+  const energy = personaData?.energy || "Calm, encouraging";
+  const closeStyle = personaData?.allowed_close_style || "Soft invitation";
+  const personaName = personaData?.workspace_name || workspaceName;
+  const keyThemes = personaData?.key_themes || niche;
+
+  const persona = `You are "${personaName}" — acting as the user who owns this workspace.
+Tone: ${tone}
+Audience: ${audience}
+Positioning: ${positioning}
+Energy: ${energy}
+Close Style: ${closeStyle}
+Key Themes: ${keyThemes}
+
+You have been exactly where the prospect is now — zero sales, empty DMs, wasted money on bad mentors, stuck and frustrated. But you figured it out and now you're pulling them up as a friend who made it.`;
 
   const brainGroundingInstructions = brainChunks ? `
 
 ===== MANDATORY: BRAIN-GROUNDED REPLIES =====
-You have retrieved the following knowledge from your brain (uploaded videos, PDFs, past conversations, Instagram/TikTok transcripts). You MUST weave these naturally into your reply:
+You have retrieved the following knowledge from the user's uploaded videos, PDFs, and structured principles. You MUST weave these naturally into your reply:
 
 ${brainChunks}
 
 HOW TO REFERENCE BRAIN KNOWLEDGE:
-- Reference video content: "This reminds me of that exact part in the [source name] video you know..."
-- Reference PDF content: "Just like in that guide about [topic]..."
-- Reference past conversations: "From our conversation with [name] where we handled the same thing..."
-- Reference Instagram/TikTok transcripts: "Like that post where [specific detail]..."
-- General: "From everything I've learned so far..."
+- "From the video I uploaded about objection handling..."
+- "This is what the book taught us to do when they say..."
+- "One of the principles I extracted from your Grant Cardone training says..."
+- "Pulling from 3 principles I learned from your uploads..."
+- "This reminds me of that exact part in the [source name] video..."
 
 RULES:
-- You MUST use at least 1-2 retrieved chunks in EVERY reply
-- Reference them NATURALLY — like a friend recalling something, not reading a textbook
+- You MUST use at least 1-2 retrieved principles/chunks in EVERY reply
+- Reference them NATURALLY — like recalling something you learned, not reading a textbook
 - Pull specific phrases, examples, or frameworks from the chunks
 - If chunks contain objection handling, USE those exact techniques
 - If chunks contain success stories, WEAVE them into your vulnerability stories
 - NEVER say "according to the knowledge base" — speak as if this is YOUR lived experience
+- NEVER mention other workspaces, other niches, or conversations from other prospects
 ` : "";
 
   return `ROLE & IDENTITY:
@@ -392,23 +407,38 @@ serve(async (req) => {
     ].filter(Boolean).join(" ");
     const brainQuery = `${message} ${prospectProfile} ${last3Messages}`.substring(0, 500);
 
-    // Retrieve from knowledge_chunks — search across ALL source types (videos, PDFs, conversations, transcripts)
+    // 1. Pull WORKSPACE PERSONA from sales_brain (workspace-specific)
+    const { data: workspacePersonaRows } = await supabase
+      .from("sales_brain")
+      .select("principle_name, what_i_learned, how_to_apply, metadata")
+      .eq("user_id", user.id)
+      .eq("workspace_id", prospect.workspace_id)
+      .eq("source_type", "workspace_persona")
+      .limit(1);
+
+    const personaData = workspacePersonaRows?.[0]?.metadata || null;
+
+    // 2. Pull CORE KNOWLEDGE chunks (global — no workspace_id, uploaded content only)
     const { data: brainKnowledge } = await supabase
       .from("knowledge_chunks")
-      .select("content, category, source_type, trigger_phrases")
+      .select("content, category, source_type, trigger_phrases, source_id")
       .eq("user_id", user.id)
+      .is("workspace_id", null)
+      .in("source_type", ["core_knowledge", "content", "video", "pdf"])
       .order("relevance_score", { ascending: false })
       .limit(20);
 
-    // Also retrieve structured sales principles from sales_brain
+    // 3. Pull CORE sales principles (global — no workspace_id)
     const { data: salesPrinciples } = await supabase
       .from("sales_brain")
-      .select("principle_name, what_i_learned, how_to_apply, source_name, category")
+      .select("principle_name, what_i_learned, how_to_apply, source_name, category, source_type")
       .eq("user_id", user.id)
+      .is("workspace_id", null)
+      .in("source_type", ["core_knowledge", "sales_principle", "content"])
       .order("created_at", { ascending: false })
-      .limit(10);
+      .limit(15);
 
-    // Also retrieve learned insights from past conversations
+    // 4. Pull workspace-specific conversation insights (private to this workspace)
     const { data: brainInsights } = await supabase
       .from("learned_insights")
       .select("insight, insight_type, source")
@@ -417,9 +447,20 @@ serve(async (req) => {
       .order("created_at", { ascending: false })
       .limit(10);
 
-    // Score and rank chunks by relevance to current context
+    // 5. Pull workspace conversation chunks (private to this workspace)
+    const { data: wsConvoChunks } = await supabase
+      .from("knowledge_chunks")
+      .select("content, category, source_type, trigger_phrases")
+      .eq("user_id", user.id)
+      .eq("workspace_id", prospect.workspace_id)
+      .eq("source_type", "conversation")
+      .order("relevance_score", { ascending: false })
+      .limit(10);
+
+    // Score and rank CORE chunks by relevance to current context
     const queryTerms = brainQuery.toLowerCase().split(/\s+/).filter(t => t.length > 3);
-    const scoredChunks = (brainKnowledge || []).map((chunk: any) => {
+    const allChunks = [...(brainKnowledge || []), ...(wsConvoChunks || [])];
+    const scoredChunks = allChunks.map((chunk: any) => {
       const text = (chunk.content + " " + (chunk.trigger_phrases || "")).toLowerCase();
       let score = 0;
       queryTerms.forEach(term => { if (text.includes(term)) score++; });
@@ -432,41 +473,32 @@ serve(async (req) => {
     const sourceTypes = new Set<string>();
     topChunks.forEach((c: any) => sourceTypes.add(c.source_type || "unknown"));
     
-    // Build brain context string for friend mode grounding
+    // Build brain context string
     let brainChunksFormatted = "";
     if (topChunks.length > 0) {
       brainChunksFormatted = topChunks.map((c: any, i: number) => 
         `[BRAIN CHUNK ${i + 1}] (Source: ${c.source_type || "unknown"}, Category: ${c.category}):\n${c.content.substring(0, 600)}`
       ).join("\n\n");
-      
-      // Add structured sales principles
-      if (salesPrinciples && salesPrinciples.length > 0) {
-        brainChunksFormatted += "\n\n[SALES PRINCIPLES FROM YOUR BRAIN]:\n" + 
-          salesPrinciples.map((sp: any) => `• ${sp.principle_name}: ${sp.what_i_learned}\n  How to apply: ${sp.how_to_apply}\n  (From: ${sp.source_name})`).join("\n");
-      }
-
-      if (brainInsights && brainInsights.length > 0) {
-        brainChunksFormatted += "\n\n[LEARNED INSIGHTS FROM PAST CONVERSATIONS]:\n" + 
-          brainInsights.slice(0, 5).map((ins: any) => `- ${ins.insight} (from: ${ins.source || "conversation"})`).join("\n");
-      }
     }
 
-    // Get relevant knowledge chunks (general context)
-    const { data: knowledge } = await supabase
-      .from("knowledge_chunks")
-      .select("content, category")
-      .eq("user_id", user.id)
-      .in("brain_type", [threadType, "both"])
-      .order("relevance_score", { ascending: false })
-      .limit(10);
+    // Add structured CORE sales principles
+    if (salesPrinciples && salesPrinciples.length > 0) {
+      brainChunksFormatted += "\n\n[CORE PRINCIPLES FROM UPLOADED VIDEOS & PDFs]:\n" + 
+        salesPrinciples.map((sp: any) => `• ${sp.principle_name}: ${sp.what_i_learned}\n  How to apply: ${sp.how_to_apply}\n  (From: ${sp.source_name})`).join("\n");
+    }
 
-    const knowledgeContext = knowledge?.map((k: any) => `[${k.category}]: ${k.content}`).join("\n") || "";
+    if (brainInsights && brainInsights.length > 0) {
+      brainChunksFormatted += "\n\n[LEARNED INSIGHTS FROM THIS WORKSPACE'S CONVERSATIONS]:\n" + 
+        brainInsights.slice(0, 5).map((ins: any) => `- ${ins.insight} (from: ${ins.source || "conversation"})`).join("\n");
+    }
+
+    const knowledgeContext = "";
     
     const conversationHistory = recentMessages
       .map((m: any) => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content}`)
       .join("\n") || "";
 
-    const systemPrompt = threadType === "expert" ? EXPERT_MODE_INSTRUCTIONS : buildFriendModeInstructions(workspace, brainChunksFormatted || undefined);
+    const systemPrompt = threadType === "expert" ? EXPERT_MODE_INSTRUCTIONS : buildFriendModeInstructions(workspace, brainChunksFormatted || undefined, personaData);
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
@@ -762,6 +794,7 @@ ${jsonFormat}
         // Chunk 1: The exchange pattern (prospect message → best reply)
         chunks.push({
           user_id: user.id,
+          workspace_id: prospect.workspace_id,
           source_type: "conversation",
           category: detectedPattern === "general" ? "rapport_building" : detectedPattern === "problem" ? "pain_discovery" : detectedPattern === "closing" ? "closing_techniques" : detectedPattern === "emotional_trigger" ? "trust_building" : "general",
           content: `PROSPECT (${detectedProspectType}): "${message.substring(0, 500)}"\n\nBEST REPLY: "${bestSuggestion.substring(0, 500)}"\n\nFramework: ${parsed.frameworkApplied || "natural conversation"}\nUrgency trigger: ${urgencyCreated}\nTone: ${parsed.detectedTone || "neutral"}`,
@@ -774,6 +807,7 @@ ${jsonFormat}
         if (parsed.detectedObjection) {
           chunks.push({
             user_id: user.id,
+            workspace_id: prospect.workspace_id,
             source_type: "conversation",
             category: "objection_handling",
             content: `OBJECTION (${parsed.detectedObjection}) from ${detectedProspectType}: "${message.substring(0, 300)}"\n\nHANDLING: "${bestSuggestion.substring(0, 500)}"\n\nFramework: ${parsed.frameworkApplied || "tactical empathy"}`,
