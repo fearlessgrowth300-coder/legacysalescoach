@@ -10,6 +10,96 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+// ===== EMBEDDING GENERATION =====
+async function generateEmbedding(text: string, apiKey: string): Promise<number[] | null> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: text.substring(0, 8000),
+        dimensions: 768,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) {
+      console.error("Embedding API error:", response.status);
+      return null;
+    }
+    const data = await response.json();
+    return data.data?.[0]?.embedding || null;
+  } catch (e) {
+    console.error("Embedding generation failed:", e);
+    return null;
+  }
+}
+
+// ===== STRUCTURED LEARNINGS EXTRACTION =====
+async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          {
+            role: "system",
+            content: `You are a master sales coach. Extract 8-12 clear, actionable learnings from this sales training material.
+
+For each learning, output in this exact JSON format:
+[
+  {
+    "principle_name": "Short name, e.g. Speak Calm & Slow",
+    "what_i_learned": "1-2 sentence explanation of the principle",
+    "how_to_apply": "Specific example of how to use this when replying to a prospect in a friends chat",
+    "category": "one of: opening_lines, rapport_building, pain_discovery, objection_handling, closing_techniques, trust_building, prospecting, network_marketing, general"
+  }
+]
+
+RULES:
+- Extract EXACTLY 8-12 learnings, no more, no less
+- Each principle must be ACTIONABLE and SPECIFIC
+- "how_to_apply" must give a concrete example of what to say/do in a DM conversation
+- Focus on psychological techniques, specific phrases, frameworks, and word-for-word scripts when available
+- Categories should accurately reflect the type of sales skill
+- Return ONLY the JSON array, no other text`,
+          },
+          {
+            role: "user",
+            content: `Extract sales learnings from this material titled "${sourceName}":\n\n${content.substring(0, 40000)}`,
+          },
+        ],
+        temperature: 0.3,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+
+    if (!response.ok) {
+      console.error("Structured learnings API error:", response.status);
+      return [];
+    }
+
+    const data = await response.json();
+    const aiContent = data.choices?.[0]?.message?.content || "";
+    const jsonMatch = aiContent.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    return [];
+  } catch (e) {
+    console.error("Structured learnings extraction failed:", e);
+    return [];
+  }
+}
+
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") {
@@ -23,6 +113,8 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     const token = authHeader?.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
@@ -39,129 +131,8 @@ serve(async (req) => {
       content = manualTranscript.trim();
       console.log("Using manual transcript, length:", content.length);
     } else if (type === "pdf" && filePath) {
-      try {
-        const { data: fileData, error: fileError } = await supabase.storage
-          .from("knowledge-files")
-          .download(filePath);
-        
-        if (fileError || !fileData) {
-          console.error("File download error:", fileError);
-          await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-          return new Response(JSON.stringify({ error: "Could not download file" }), {
-            status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        const arrayBuffer = await fileData.arrayBuffer();
-        const fileSizeKB = arrayBuffer.byteLength / 1024;
-        const fileSizeMB = fileSizeKB / 1024;
-        console.log(`PDF file size: ${fileSizeMB.toFixed(2)} MB`);
-
-        // For files over 25MB, reject gracefully
-        if (arrayBuffer.byteLength > 25 * 1024 * 1024) {
-          await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-          return new Response(JSON.stringify({ error: "PDF too large. Max 25MB. Please split into smaller files." }), {
-            status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        // Convert PDF to base64 and send to Gemini which natively supports PDF
-        const bytes = new Uint8Array(arrayBuffer);
-        const CHUNK_SIZE = 32768;
-        let binary = "";
-        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-          const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
-          binary += String.fromCharCode(...chunk);
-        }
-        const base64Pdf = btoa(binary);
-        
-        console.log("Sending PDF to Gemini for direct reading...");
-        
-        const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-        if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
-
-        const pdfReadResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash",
-            messages: [
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "text",
-                    text: "Read this entire PDF document and extract ALL the text content from it. Return the full text content exactly as it appears in the document. Do not summarize - return the complete text.",
-                  },
-                  {
-                    type: "image_url",
-                    image_url: { url: `data:application/pdf;base64,${base64Pdf}` },
-                  },
-                ],
-              },
-            ],
-            temperature: 0.1,
-          }),
-          signal: AbortSignal.timeout(120000),
-        });
-
-        if (pdfReadResponse.ok) {
-          try {
-            const pdfData = await pdfReadResponse.json();
-            const extractedText = pdfData.choices?.[0]?.message?.content || "";
-            console.log("Gemini PDF extraction length:", extractedText.length);
-            if (extractedText.length > 100) {
-              content = extractedText.substring(0, 50000);
-            }
-          } catch (jsonErr) {
-            console.error("Gemini response JSON parse failed, using fallback:", jsonErr);
-          }
-        } else {
-          console.error("Gemini PDF read failed:", pdfReadResponse.status);
-          try { await pdfReadResponse.text(); } catch {}
-        }
-
-        // Fallback: manual binary text extraction if Gemini failed
-        if (!content || content.length < 100) {
-          console.log("Falling back to manual PDF text extraction...");
-          const rawText = new TextDecoder("latin1").decode(bytes);
-          const textParts: string[] = [];
-          const tjMatches = rawText.matchAll(/\(([^\\)]*(?:\\.[^\\)]*)*)\)\s*Tj/g);
-          for (const match of tjMatches) {
-            textParts.push(match[1].replace(/\\n/g, '\n').replace(/\\\\/g, '\\'));
-          }
-          const tjArrayMatches = rawText.matchAll(/\[([^\]]*)\]\s*TJ/gi);
-          for (const match of tjArrayMatches) {
-            const parts = match[1].match(/\(([^\\)]*(?:\\.[^\\)]*)*)\)/g) || [];
-            for (const p of parts) {
-              textParts.push(p.slice(1, -1));
-            }
-          }
-          let extractedText = textParts.join(' ').replace(/\s+/g, ' ').trim();
-          if (extractedText.length < 200) {
-            const readable = rawText.match(/[A-Za-z0-9\s,.!?;:'"()\-]{15,}/g) || [];
-            extractedText = readable.join(' ').substring(0, 50000);
-          }
-          if (extractedText.length > 100) {
-            content = extractedText.substring(0, 50000);
-          } else {
-            content = `PDF file uploaded: ${filePath}. The text could not be extracted automatically. Please paste the content manually.`;
-          }
-        }
-      } catch (e) {
-        console.error("PDF processing error:", e);
-        // Don't fail entirely - if we got some content from fallback, continue
-        if (!content || content.length < 100) {
-          await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-          return new Response(JSON.stringify({ error: `PDF processing failed: ${e instanceof Error ? e.message : "Unknown error"}. Try a smaller file or paste text manually.` }), {
-            status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-        console.log("PDF had errors but fallback content available, continuing...");
-      }
+      content = await extractPdfContent(filePath, supabase, itemId, corsHeaders, LOVABLE_API_KEY);
+      if (content === "__ERROR__") return; // error response already sent
     } else if (url) {
       content = await extractUrlContent(url, supabaseUrl, supabaseKey, supabase);
     }
@@ -186,15 +157,13 @@ serve(async (req) => {
       });
     }
 
-    // For very long content, process in chunks to avoid AI token limits
     const MAX_CONTENT_LENGTH = 50000;
     const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
-    
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    const sourceName = item.title || "Uploaded Content";
 
     console.log(`Processing ${contentToProcess.length} chars of content...`);
 
+    // ===== STEP 1: Extract raw knowledge chunks (existing behavior) =====
     const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -255,8 +224,9 @@ Make each chunk detailed enough to be useful on its own.`
       chunks = [{ category: "general", content: aiContent.substring(0, 500), triggerPhrases: "" }];
     }
 
-    // Store chunks
+    // Store chunks with embeddings
     for (const chunk of chunks) {
+      const embedding = await generateEmbedding(chunk.content, LOVABLE_API_KEY);
       await supabase.from("knowledge_chunks").insert({
         user_id: user.id,
         source_id: itemId,
@@ -266,14 +236,85 @@ Make each chunk detailed enough to be useful on its own.`
         trigger_phrases: chunk.triggerPhrases || "",
         relevance_score: 70,
         source_type: "content",
+        embedding: embedding,
       });
     }
+
+    console.log(`Stored ${chunks.length} knowledge chunks with embeddings`);
+
+    // ===== STEP 2: Extract STRUCTURED LEARNINGS =====
+    console.log("Extracting structured sales learnings...");
+    const learnings = await extractStructuredLearnings(contentToProcess, sourceName, LOVABLE_API_KEY);
+
+    const storedLearnings: any[] = [];
+    for (const learning of learnings) {
+      const embeddingText = `${learning.principle_name}: ${learning.what_i_learned} ${learning.how_to_apply}`;
+      const embedding = await generateEmbedding(embeddingText, LOVABLE_API_KEY);
+      
+      const { data: inserted, error: insertErr } = await supabase.from("sales_brain").insert({
+        user_id: user.id,
+        source_id: itemId,
+        principle_name: learning.principle_name || "Untitled Principle",
+        what_i_learned: learning.what_i_learned || "",
+        how_to_apply: learning.how_to_apply || "",
+        source_name: sourceName,
+        source_type: type || "content",
+        brain_type: item.brain_type,
+        category: learning.category || "general",
+        metadata: {
+          type: "sales_principle",
+          principle_name: learning.principle_name,
+          what_i_learned: learning.what_i_learned,
+          how_to_apply: learning.how_to_apply,
+          source: sourceName,
+        },
+        embedding: embedding,
+      }).select().single();
+
+      if (!insertErr && inserted) {
+        storedLearnings.push({
+          principle_name: learning.principle_name,
+          what_i_learned: learning.what_i_learned,
+          how_to_apply: learning.how_to_apply,
+          category: learning.category,
+        });
+      }
+    }
+
+    console.log(`Stored ${storedLearnings.length} structured learnings in sales_brain`);
+
+    // ===== STEP 3: Break text into vector chunks (500-1000 tokens) =====
+    const textChunks = breakIntoChunks(contentToProcess, 800);
+    let embeddedChunkCount = 0;
+    for (const textChunk of textChunks) {
+      const embedding = await generateEmbedding(textChunk, LOVABLE_API_KEY);
+      if (embedding) {
+        await supabase.from("knowledge_chunks").insert({
+          user_id: user.id,
+          source_id: itemId,
+          category: "general",
+          content: textChunk,
+          brain_type: item.brain_type,
+          trigger_phrases: "",
+          relevance_score: 60,
+          source_type: "raw_chunk",
+          embedding: embedding,
+        });
+        embeddedChunkCount++;
+      }
+    }
+    console.log(`Stored ${embeddedChunkCount} raw embedded chunks`);
 
     // Update item status
     await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
 
-    console.log(`Successfully processed ${chunks.length} knowledge chunks`);
-    return new Response(JSON.stringify({ success: true, chunks: chunks.length }), {
+    return new Response(JSON.stringify({ 
+      success: true, 
+      chunks: chunks.length,
+      learnings: storedLearnings,
+      embeddedChunks: embeddedChunkCount,
+      sourceName,
+    }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
@@ -285,7 +326,141 @@ Make each chunk detailed enough to be useful on its own.`
   }
 });
 
-// Extract content from URLs (YouTube, Instagram, regular web pages)
+// ===== CHUNKING UTILITY =====
+function breakIntoChunks(text: string, targetTokens: number): string[] {
+  const avgCharsPerToken = 4;
+  const chunkSize = targetTokens * avgCharsPerToken;
+  const overlap = Math.floor(chunkSize * 0.1);
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < text.length) {
+    let end = start + chunkSize;
+    if (end >= text.length) {
+      chunks.push(text.substring(start).trim());
+      break;
+    }
+    // Try to break at sentence boundary
+    const lastPeriod = text.lastIndexOf(". ", end);
+    const lastNewline = text.lastIndexOf("\n", end);
+    const breakPoint = Math.max(lastPeriod, lastNewline);
+    if (breakPoint > start + chunkSize * 0.5) {
+      end = breakPoint + 1;
+    }
+    const chunk = text.substring(start, end).trim();
+    if (chunk.length > 50) chunks.push(chunk);
+    start = end - overlap;
+  }
+
+  return chunks.filter(c => c.length > 50);
+}
+
+// ===== PDF EXTRACTION =====
+async function extractPdfContent(filePath: string, supabase: any, itemId: string, corsHeaders: any, apiKey: string): Promise<string> {
+  try {
+    const { data: fileData, error: fileError } = await supabase.storage
+      .from("knowledge-files")
+      .download(filePath);
+    
+    if (fileError || !fileData) {
+      console.error("File download error:", fileError);
+      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+      return "";
+    }
+
+    const arrayBuffer = await fileData.arrayBuffer();
+    const fileSizeMB = arrayBuffer.byteLength / 1024 / 1024;
+    console.log(`PDF file size: ${fileSizeMB.toFixed(2)} MB`);
+
+    if (arrayBuffer.byteLength > 25 * 1024 * 1024) {
+      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+      return "";
+    }
+
+    // Convert PDF to base64 for Gemini
+    const bytes = new Uint8Array(arrayBuffer);
+    const CHUNK_SIZE = 32768;
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+      const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
+      binary += String.fromCharCode(...chunk);
+    }
+    const base64Pdf = btoa(binary);
+    
+    console.log("Sending PDF to Gemini for reading...");
+    
+    const pdfReadResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Read this entire PDF document and extract ALL the text content from it. Return the full text content exactly as it appears in the document. Do not summarize - return the complete text.",
+              },
+              {
+                type: "image_url",
+                image_url: { url: `data:application/pdf;base64,${base64Pdf}` },
+              },
+            ],
+          },
+        ],
+        temperature: 0.1,
+      }),
+      signal: AbortSignal.timeout(120000),
+    });
+
+    if (pdfReadResponse.ok) {
+      try {
+        const pdfData = await pdfReadResponse.json();
+        const extractedText = pdfData.choices?.[0]?.message?.content || "";
+        console.log("Gemini PDF extraction length:", extractedText.length);
+        if (extractedText.length > 100) {
+          return extractedText.substring(0, 50000);
+        }
+      } catch (jsonErr) {
+        console.error("Gemini response JSON parse failed:", jsonErr);
+      }
+    }
+
+    // Fallback: manual binary text extraction
+    console.log("Falling back to manual PDF text extraction...");
+    const rawText = new TextDecoder("latin1").decode(bytes);
+    const textParts: string[] = [];
+    const tjMatches = rawText.matchAll(/\(([^\\)]*(?:\\.[^\\)]*)*)\)\s*Tj/g);
+    for (const match of tjMatches) {
+      textParts.push(match[1].replace(/\\n/g, '\n').replace(/\\\\/g, '\\'));
+    }
+    const tjArrayMatches = rawText.matchAll(/\[([^\]]*)\]\s*TJ/gi);
+    for (const match of tjArrayMatches) {
+      const parts = match[1].match(/\(([^\\)]*(?:\\.[^\\)]*)*)\)/g) || [];
+      for (const p of parts) {
+        textParts.push(p.slice(1, -1));
+      }
+    }
+    let extractedText = textParts.join(' ').replace(/\s+/g, ' ').trim();
+    if (extractedText.length < 200) {
+      const readable = rawText.match(/[A-Za-z0-9\s,.!?;:'"()\-]{15,}/g) || [];
+      extractedText = readable.join(' ').substring(0, 50000);
+    }
+    if (extractedText.length > 100) {
+      return extractedText.substring(0, 50000);
+    }
+    return `PDF file uploaded: ${filePath}. The text could not be extracted automatically.`;
+  } catch (e) {
+    console.error("PDF processing error:", e);
+    return "";
+  }
+}
+
+// ===== URL CONTENT EXTRACTION =====
 async function extractUrlContent(url: string, supabaseUrl: string, supabaseKey: string, supabase: any): Promise<string> {
   const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
   const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
@@ -353,7 +528,7 @@ async function extractInstagramContent(url: string, supabaseUrl: string, supabas
   }
 
   if (!content || content.length < 50) {
-    content = `Instagram URL: ${url}. Please analyze this Instagram profile/post based on the URL and extract any sales-relevant knowledge.`;
+    content = `Instagram URL: ${url}. Please analyze this Instagram profile/post based on the URL.`;
   }
   return content;
 }
@@ -422,7 +597,7 @@ async function extractYouTubeContent(url: string): Promise<string> {
   }
 
   if (!content || content.length < 50) {
-    content = `YouTube video URL: ${url}. Please analyze this video based on the URL and any knowledge you have about it.`;
+    content = `YouTube video URL: ${url}. Please analyze this video based on the URL.`;
   }
   return content;
 }

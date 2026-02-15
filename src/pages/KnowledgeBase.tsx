@@ -12,7 +12,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import {
   Brain, FileText, Plus, Trash2, Loader2, CheckCircle2, AlertCircle, RefreshCw,
-  Link as LinkIcon, Globe, Youtube, Sparkles, Heart, Briefcase, Upload, Instagram, ListPlus, Eye, ArrowRight
+  Link as LinkIcon, Globe, Youtube, Sparkles, Heart, Briefcase, Upload, Instagram, ListPlus, Eye, ArrowRight, BookOpen, Lightbulb
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -111,6 +111,30 @@ export default function KnowledgeBase() {
     }
   };
 
+  // State for showing learnings after processing
+  const [processedLearnings, setProcessedLearnings] = useState<any[] | null>(null);
+  const [learningsDialogOpen, setLearningsDialogOpen] = useState(false);
+  const [learningsSourceName, setLearningsSourceName] = useState("");
+
+  // Query for all brain learnings
+  const { data: allBrainLearnings } = useQuery({
+    queryKey: ["brain-learnings"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("sales_brain").select("*").order("created_at", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!user,
+  });
+
+  const [viewAllLearningsOpen, setViewAllLearningsOpen] = useState(false);
+
+  const showLearnings = (learnings: any[], sourceName: string) => {
+    setProcessedLearnings(learnings);
+    setLearningsSourceName(sourceName);
+    setLearningsDialogOpen(true);
+  };
+
   const addUrl = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.from("knowledge_base_items").insert({
@@ -123,14 +147,17 @@ export default function KnowledgeBase() {
       }).select().single();
       if (error) throw error;
 
-      // Pass manual transcript if auto-extraction failed
       const transcript = urlPreview?.hasTranscript ? undefined : manualTranscript.trim() || undefined;
 
       supabase.functions.invoke("process-knowledge", {
         body: { itemId: data.id, url: urlValue, type: "url", manualTranscript: transcript },
-      }).then(() => {
+      }).then((result) => {
         queryClient.invalidateQueries({ queryKey: ["kb-items"] });
         queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+        queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
+        if (result.data?.learnings?.length > 0) {
+          showLearnings(result.data.learnings, result.data.sourceName || urlTitle);
+        }
       }).catch(console.error);
 
       return data;
@@ -167,7 +194,7 @@ export default function KnowledgeBase() {
 
       setPdfProgress({ step: "Processing PDF in background...", percent: 50 });
 
-      // Fire edge function in background — don't await it (avoids timeout on large PDFs)
+      // Fire edge function in background
       supabase.functions.invoke("process-knowledge", {
         body: { itemId: data.id, type: "pdf", filePath },
       }).then((result) => {
@@ -176,6 +203,10 @@ export default function KnowledgeBase() {
         }
         queryClient.invalidateQueries({ queryKey: ["kb-items"] });
         queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+        queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
+        if (result.data?.learnings?.length > 0) {
+          showLearnings(result.data.learnings, result.data.sourceName || pdfTitle || pdfFile?.name || "PDF");
+        }
       }).catch((e) => {
         console.error("PDF edge function error:", e);
         queryClient.invalidateQueries({ queryKey: ["kb-items"] });
@@ -320,6 +351,81 @@ export default function KnowledgeBase() {
 
   return (
     <div className="container py-8 max-w-4xl">
+      {/* Learnings Result Dialog */}
+      <Dialog open={learningsDialogOpen} onOpenChange={setLearningsDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-green-500" />
+              ✅ Brain updated!
+            </DialogTitle>
+            <DialogDescription>
+              Here's what I learned from <strong>{learningsSourceName}</strong>:
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {processedLearnings?.map((learning: any, idx: number) => (
+              <div key={idx} className="p-4 rounded-lg border bg-card space-y-2">
+                <div className="flex items-center gap-2">
+                  <Lightbulb className="h-4 w-4 text-amber-500 shrink-0" />
+                  <span className="font-semibold text-sm">Principle: {learning.principle_name}</span>
+                  <Badge variant="outline" className="text-[10px] ml-auto">{learning.category?.replace(/_/g, " ")}</Badge>
+                </div>
+                <div className="pl-6 space-y-1">
+                  <p className="text-sm"><span className="font-medium text-muted-foreground">What I Learned:</span> {learning.what_i_learned}</p>
+                  <p className="text-sm"><span className="font-medium text-muted-foreground">How to Apply:</span> {learning.how_to_apply}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLearningsDialogOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View All Brain Learnings Dialog */}
+      <Dialog open={viewAllLearningsOpen} onOpenChange={setViewAllLearningsOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Brain className="h-5 w-5 text-primary" />
+              All Brain Learnings ({allBrainLearnings?.length || 0})
+            </DialogTitle>
+            <DialogDescription>Every sales principle your AI has ever learned</DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="max-h-[60vh]">
+            <div className="space-y-3 py-2 pr-4">
+              {allBrainLearnings && allBrainLearnings.length > 0 ? (
+                allBrainLearnings.map((learning: any) => (
+                  <div key={learning.id} className="p-4 rounded-lg border bg-card space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Lightbulb className="h-4 w-4 text-amber-500 shrink-0" />
+                      <span className="font-semibold text-sm">{learning.principle_name}</span>
+                      <Badge variant="outline" className="text-[10px] ml-auto">{learning.category?.replace(/_/g, " ")}</Badge>
+                    </div>
+                    <div className="pl-6 space-y-1">
+                      <p className="text-sm"><span className="font-medium text-muted-foreground">What I Learned:</span> {learning.what_i_learned}</p>
+                      <p className="text-sm"><span className="font-medium text-muted-foreground">How to Apply:</span> {learning.how_to_apply}</p>
+                      <p className="text-xs text-muted-foreground mt-1">Source: {learning.source_name} • {learning.brain_type} mode</p>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Brain className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <p>No learnings yet</p>
+                  <p className="text-sm">Upload videos or PDFs to start building your sales brain</p>
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewAllLearningsOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -328,6 +434,9 @@ export default function KnowledgeBase() {
           <p className="text-muted-foreground">Upload sales training content to make your AI smarter</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setViewAllLearningsOpen(true)}>
+            <BookOpen className="h-4 w-4 mr-2" />View All Brain Learnings
+          </Button>
           {/* Batch Import Dialog */}
           <Dialog open={batchDialogOpen} onOpenChange={setBatchDialogOpen}>
             <DialogTrigger asChild>
