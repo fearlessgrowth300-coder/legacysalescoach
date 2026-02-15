@@ -651,7 +651,7 @@ export default function Chats() {
 
   if (platformTab === "tiktok") {
     return (
-      <div className="flex h-[calc(100vh-4rem)]">
+      <div className="flex h-[calc(100dvh-4rem)]">
         <div className={`${isMobile ? "w-full" : "w-80"} border-r flex flex-col bg-muted/30`}>
           <div className="p-4 border-b">
             <Tabs value={platformTab} onValueChange={(v) => setPlatformTab(v as any)}>
@@ -674,7 +674,7 @@ export default function Chats() {
   const showChat = !isMobile || !!selectedProspectId;
 
   return (
-    <div className="flex h-[calc(100vh-4rem)]">
+    <div className="flex h-[calc(100dvh-4rem)] overflow-x-hidden" style={{ touchAction: "pan-y" }}>
       {/* Sidebar - Prospect List */}
       {showSidebar && (
       <div className={`${isMobile ? "w-full" : "w-80"} border-r flex flex-col bg-muted/30`}>
@@ -1027,7 +1027,7 @@ export default function Chats() {
         ) : (
           <>
             {/* Chat Header */}
-            <div className="p-4 border-b flex items-center justify-between">
+            <div className="p-2 md:p-4 border-b flex items-center justify-between" style={{ height: "var(--chat-header-h)" }}>
               <div className="flex items-center gap-3">
                 {isMobile && (
                   <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => navigate("/chats")}>
@@ -1236,7 +1236,7 @@ export default function Chats() {
             )}
 
             {/* Input Area */}
-            <div className="p-4 border-t">
+            <div className="p-3 md:p-4 border-t chat-input-safe">
               <input
                 ref={screenshotInputRef}
                 type="file"

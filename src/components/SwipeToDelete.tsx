@@ -36,6 +36,9 @@ export default function SwipeToDelete({ onDelete, children, className = "" }: Sw
 
     if (!isHorizontal.current) return;
 
+    // Prevent page-level horizontal scroll when swiping a row
+    e.stopPropagation();
+
     // Only allow left swipe (negative)
     const clamped = Math.min(0, Math.max(-THRESHOLD - 20, dx));
     setOffsetX(clamped);
@@ -56,7 +59,11 @@ export default function SwipeToDelete({ onDelete, children, className = "" }: Sw
   const deleteProgress = Math.min(1, Math.abs(offsetX) / THRESHOLD);
 
   return (
-    <div className={`relative overflow-hidden rounded-lg ${className}`} ref={containerRef}>
+    <div
+      className={`relative overflow-hidden rounded-lg ${className}`}
+      ref={containerRef}
+      style={{ touchAction: "pan-y", overflowX: "hidden" }}
+    >
       {/* Delete background */}
       <div
         className="absolute inset-y-0 right-0 flex items-center justify-end px-4 rounded-lg transition-colors"
@@ -77,6 +84,8 @@ export default function SwipeToDelete({ onDelete, children, className = "" }: Sw
         style={{
           transform: `translateX(${offsetX}px)`,
           transition: swiping ? "none" : "transform 0.25s ease-out",
+          willChange: "transform",
+          touchAction: "pan-y",
         }}
       >
         {children}

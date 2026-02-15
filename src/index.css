@@ -97,9 +97,30 @@ All colors MUST be HSL.
 @layer base {
   * {
     @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html, body {
+    overflow-x: hidden;
+    max-width: 100vw;
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
     @apply bg-background text-foreground;
   }
+
+  :root {
+    --chat-header-h: 56px;
+    --chat-input-h: 56px;
+  }
+}
+
+/* Safe area support for PWA */
+.chat-input-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.chat-container-safe {
+  padding-top: env(safe-area-inset-top);
 }
