@@ -629,9 +629,49 @@ export type Database = {
         }
         Relationships: []
       }
+      workspace_links: {
+        Row: {
+          created_at: string
+          expert_workspace_id: string
+          friend_workspace_id: string
+          id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expert_workspace_id: string
+          friend_workspace_id: string
+          id?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expert_workspace_id?: string
+          friend_workspace_id?: string
+          id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_links_expert_workspace_id_fkey"
+            columns: ["expert_workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "workspace_links_friend_workspace_id_fkey"
+            columns: ["friend_workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       workspaces: {
         Row: {
           created_at: string
+          custom_framework: string | null
           default_reply_mode: string
           id: string
           instagram_url: string | null
@@ -644,9 +684,11 @@ export type Database = {
           tiktok_url: string | null
           updated_at: string
           user_id: string
+          workspace_type: string
         }
         Insert: {
           created_at?: string
+          custom_framework?: string | null
           default_reply_mode?: string
           id?: string
           instagram_url?: string | null
@@ -659,9 +701,11 @@ export type Database = {
           tiktok_url?: string | null
           updated_at?: string
           user_id: string
+          workspace_type?: string
         }
         Update: {
           created_at?: string
+          custom_framework?: string | null
           default_reply_mode?: string
           id?: string
           instagram_url?: string | null
@@ -674,6 +718,7 @@ export type Database = {
           tiktok_url?: string | null
           updated_at?: string
           user_id?: string
+          workspace_type?: string
         }
         Relationships: []
       }
