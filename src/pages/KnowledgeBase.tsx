@@ -426,16 +426,16 @@ export default function KnowledgeBase() {
         </DialogContent>
       </Dialog>
 
-      <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 md:mb-8 gap-4">
+      <div className="flex flex-col gap-3 sm:gap-4 mb-4 sm:mb-8">
         <div>
           <h1 className="text-xl md:text-2xl font-bold flex items-center gap-2">
             <Brain className="h-5 w-5 md:h-6 md:w-6 text-primary" />Knowledge Base
           </h1>
-          <p className="text-sm text-muted-foreground">Upload sales training content to make your AI smarter</p>
+          <p className="text-xs sm:text-sm text-muted-foreground">Upload sales training content to make your AI smarter</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" size="sm" onClick={() => setViewAllLearningsOpen(true)}>
-            <BookOpen className="h-4 w-4 mr-2" />View All Brain Learnings
+          <Button variant="outline" size="sm" className="text-xs sm:text-sm" onClick={() => setViewAllLearningsOpen(true)}>
+            <BookOpen className="h-4 w-4 mr-1 sm:mr-2" />Brain Learnings
           </Button>
           {/* Batch Import Dialog */}
           <Dialog open={batchDialogOpen} onOpenChange={setBatchDialogOpen}>
@@ -763,14 +763,14 @@ export default function KnowledgeBase() {
 
       {items?.length === 0 ? (
         <Card>
-          <CardContent className="py-12 text-center">
+          <CardContent className="py-8 sm:py-12 text-center">
             <Brain className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
             <h3 className="font-medium mb-2">Your Knowledge Base is empty</h3>
             <p className="text-muted-foreground mb-4">Add sales training content to make your AI smarter and more helpful</p>
-            <div className="flex gap-2 justify-center">
-              <Button variant="outline" onClick={() => setPdfDialogOpen(true)}><Upload className="h-4 w-4 mr-2" />Upload PDF</Button>
-              <Button variant="outline" onClick={() => setBatchDialogOpen(true)}><ListPlus className="h-4 w-4 mr-2" />Batch Import</Button>
-              <Button onClick={() => setUrlDialogOpen(true)}><Plus className="h-4 w-4 mr-2" />Add URL</Button>
+            <div className="flex gap-2 justify-center flex-wrap">
+              <Button variant="outline" size="sm" onClick={() => setPdfDialogOpen(true)}><Upload className="h-4 w-4 mr-1" />Upload PDF</Button>
+              <Button variant="outline" size="sm" onClick={() => setBatchDialogOpen(true)}><ListPlus className="h-4 w-4 mr-1" />Batch Import</Button>
+              <Button size="sm" onClick={() => setUrlDialogOpen(true)}><Plus className="h-4 w-4 mr-1" />Add URL</Button>
             </div>
           </CardContent>
         </Card>
@@ -781,28 +781,28 @@ export default function KnowledgeBase() {
             const thumbnail = getItemThumbnail(item);
             return (
               <Card key={item.id}>
-                <CardContent className="py-4">
-                  <div className="flex items-center gap-4">
+                <CardContent className="p-3 sm:py-4 sm:p-6">
+                  <div className="flex items-start sm:items-center gap-2 sm:gap-4">
                     {/* Thumbnail or Icon */}
                     {thumbnail ? (
-                      <img src={thumbnail} alt="" className="h-12 w-16 rounded object-cover shrink-0" />
+                      <img src={thumbnail} alt="" className="h-10 w-14 sm:h-12 sm:w-16 rounded object-cover shrink-0" />
                     ) : (
-                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                      <div className="h-8 w-8 sm:h-10 sm:w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                         {getPlatformIcon(item)}
                       </div>
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="font-medium truncate">{item.title}</p>
+                        <p className="font-medium text-sm truncate">{item.title}</p>
                         {getStatusIcon(item.status)}
                       </div>
-                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        <Badge variant="outline" className="text-xs">{item.type.toUpperCase()}</Badge>
-                        <Badge variant="outline" className="text-xs">{item.brain_type}</Badge>
-                        {item.url && <p className="text-xs text-muted-foreground truncate max-w-[200px] md:max-w-none">{item.url}</p>}
+                      <div className="flex items-center gap-1.5 sm:gap-2 mt-1 flex-wrap">
+                        <Badge variant="outline" className="text-[10px] sm:text-xs">{item.type.toUpperCase()}</Badge>
+                        <Badge variant="outline" className="text-[10px] sm:text-xs">{item.brain_type}</Badge>
+                        {item.url && <p className="text-[10px] sm:text-xs text-muted-foreground truncate max-w-[120px] sm:max-w-[200px] md:max-w-none">{item.url}</p>}
                       </div>
                     </div>
-                    <Button variant="ghost" size="icon" onClick={() => deleteItem.mutate(item.id)}>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => deleteItem.mutate(item.id)}>
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
                   </div>
