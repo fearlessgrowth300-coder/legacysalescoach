@@ -672,7 +672,7 @@ export default function AiChat() {
               <div key={conv.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} onClick={() => { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); }}>
                 <MessageSquare className="h-4 w-4 shrink-0" />
                 <span className="truncate flex-1">{conv.title}</span>
-                <Button size="icon" variant="ghost" className="h-6 w-6 md:opacity-0 md:group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}>
+                <Button size="icon" variant="ghost" className="h-6 w-6 opacity-100 md:opacity-0 md:group-hover:opacity-100 shrink-0" onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}>
                   <Trash2 className="h-3 w-3" />
                 </Button>
               </div>
