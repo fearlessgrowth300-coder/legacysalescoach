@@ -10,6 +10,7 @@ import {
   Image, Link, FileText, Pencil, Trash2, Check, CheckCheck, X, Menu,
   Mic, MicOff, Pin, PinOff, Search, Star, Zap, Video, File
 } from "lucide-react";
+import SwipeToDelete from "@/components/SwipeToDelete";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
@@ -669,13 +670,15 @@ export default function AiChat() {
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-1">
             {conversations.map(conv => (
-              <div key={conv.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} onClick={() => { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); }}>
-                <MessageSquare className="h-4 w-4 shrink-0" />
-                <span className="truncate flex-1">{conv.title}</span>
-                <Button size="icon" variant="ghost" className="h-6 w-6 opacity-100 md:opacity-0 md:group-hover:opacity-100 shrink-0" onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}>
-                  <Trash2 className="h-3 w-3" />
-                </Button>
-              </div>
+              <SwipeToDelete key={conv.id} onDelete={() => deleteConversation(conv.id)}>
+                <div className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} onClick={() => { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); }}>
+                  <MessageSquare className="h-4 w-4 shrink-0" />
+                  <span className="truncate flex-1">{conv.title}</span>
+                  <Button size="icon" variant="ghost" className="h-6 w-6 hidden md:opacity-0 md:group-hover:opacity-100 md:inline-flex shrink-0" onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              </SwipeToDelete>
             ))}
             {conversations.length === 0 && <p className="text-xs text-muted-foreground text-center p-4">No chats yet. Start a new one!</p>}
           </div>
