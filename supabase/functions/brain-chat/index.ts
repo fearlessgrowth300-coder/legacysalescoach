@@ -100,13 +100,8 @@ serve(async (req) => {
       .eq("user_id", user.id)
       .limit(20);
 
-    // Fetch learned insights
-    const { data: insights } = await supabase
-      .from("learned_insights")
-      .select("insight, insight_type, source")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(15);
+    // No longer fetching learned_insights — brain only uses uploaded content (videos, PDFs)
+    const insights: any[] = [];
 
     // Fetch source names for chunks
     const sourceIds = [...new Set((chunks || []).map((c: any) => c.source_id).filter(Boolean))];
