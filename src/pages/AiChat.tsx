@@ -370,13 +370,13 @@ export default function AiChat() {
         what_i_learned: answer.substring(0, 500),
         how_to_apply: `From a coaching Q&A session. Topics: ${topics.join(", ")}`,
         source_name: "AI Brain Coach Chat",
-        source_type: "coach_chat",
+        source_type: "ai_chat",
         category: topics[0] || "general",
         brain_type: "both",
-        metadata: { type: "coach_chat", question, topics },
+        metadata: { type: "ai_chat", question, topics },
       });
 
-      toast.success("✅ Added to brain: New learning from this question", { duration: 3000 });
+      toast.success(`✅ Added to brain: New learning from this question`, { duration: 3000 });
     } catch (err) {
       console.error("Failed to save to brain:", err);
     }
@@ -589,12 +589,12 @@ export default function AiChat() {
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
   const starterQuestions = [
+    "What's the best opening message?",
     "How should I handle price objections?",
-    "What's the best opening message for a cold prospect?",
-    "How do I build rapport quickly without being fake?",
-    "What closing techniques work best from what I've learned?",
-    "Give me a step-by-step script for my next DM",
-    "What mindset shifts do I need for sales success?",
+    "How do I build rapport quickly?",
+    "I need a script for prospecting to network marketers",
+    "What closing techniques work best?",
+    "How do I follow up without being annoying?",
   ];
 
   return (
@@ -685,9 +685,9 @@ export default function AiChat() {
           </div>
           <div className="min-w-0 flex-1">
             <h2 className="font-bold text-sm flex items-center gap-1.5 truncate">
-              Talk to your Sales Brain <Zap className="h-3.5 w-3.5 text-primary shrink-0" />
+              Your AI Brain is Ready <Zap className="h-3.5 w-3.5 text-primary shrink-0" />
             </h2>
-            <p className="text-xs text-muted-foreground truncate">Ask anything about sales, objections, mindset, funnels — it uses everything you've uploaded</p>
+            <p className="text-xs text-muted-foreground truncate">Ask me anything. I learn from every video, PDF, and principle you've ever uploaded.</p>
           </div>
           {/* Brain Status Badge */}
           <div className="flex items-center gap-1.5 shrink-0">
@@ -712,9 +712,9 @@ export default function AiChat() {
                   <Brain className="h-16 w-16 mx-auto text-primary/40" />
                   <Zap className="h-5 w-5 text-primary absolute -top-1 -right-1 animate-pulse" />
                 </div>
-                <h3 className="text-xl font-bold mb-1">Talk to your Sales Brain</h3>
+                <h3 className="text-xl font-bold mb-1">Your AI Brain is Ready 🧠</h3>
                 <p className="text-sm text-muted-foreground mb-2 max-w-md mx-auto">
-                  Ask anything about sales, objections, mindset, funnels — it uses everything you've uploaded
+                  Ask me anything. I learn from every video, PDF, and principle you've ever uploaded.
                 </p>
                 <div className="flex items-center justify-center gap-2 mb-6">
                   <Badge variant="outline" className="text-[10px] gap-1">
