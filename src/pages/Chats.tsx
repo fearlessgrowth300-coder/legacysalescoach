@@ -16,8 +16,10 @@ import {
   MessageSquare, Plus, Send, User, Sparkles,
   Copy, Check, AlertTriangle,
   Heart, Briefcase, MoreVertical, Trash2, Camera, Loader2, Image, Upload, X,
-  Ghost, PenLine, RotateCcw, ThumbsUp, ThumbsDown, Zap, BookOpen, TrendingUp, Video
+  Ghost, PenLine, RotateCcw, ThumbsUp, ThumbsDown, Zap, BookOpen, TrendingUp, Video,
+  ArrowLeft
 } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -32,6 +34,7 @@ export default function Chats() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
   const selectedProspectId = prospectId || null;
 
   const [platformTab, setPlatformTab] = useState<"instagram" | "tiktok">("instagram");
@@ -649,7 +652,7 @@ export default function Chats() {
   if (platformTab === "tiktok") {
     return (
       <div className="flex h-[calc(100vh-4rem)]">
-        <div className="w-80 border-r flex flex-col bg-muted/30">
+        <div className={`${isMobile ? "w-full" : "w-80"} border-r flex flex-col bg-muted/30`}>
           <div className="p-4 border-b">
             <Tabs value={platformTab} onValueChange={(v) => setPlatformTab(v as any)}>
               <TabsList className="w-full">
@@ -659,17 +662,22 @@ export default function Chats() {
             </Tabs>
           </div>
         </div>
-        <div className="flex-1">
+        <div className={`flex-1 ${isMobile ? "hidden" : ""}`}>
           <TikTokOutreach workspaceId={activeWorkspace!.id} />
         </div>
       </div>
     );
   }
 
+  // On mobile: show sidebar list when no prospect selected, show chat when prospect selected
+  const showSidebar = !isMobile || !selectedProspectId;
+  const showChat = !isMobile || !!selectedProspectId;
+
   return (
     <div className="flex h-[calc(100vh-4rem)]">
       {/* Sidebar - Prospect List */}
-      <div className="w-80 border-r flex flex-col bg-muted/30">
+      {showSidebar && (
+      <div className={`${isMobile ? "w-full" : "w-80"} border-r flex flex-col bg-muted/30`}>
         <div className="p-4 border-b space-y-3">
           <Tabs value={platformTab} onValueChange={(v) => setPlatformTab(v as any)}>
             <TabsList className="w-full">
@@ -1003,8 +1011,10 @@ export default function Chats() {
           )}
         </ScrollArea>
       </div>
+      )}
 
       {/* Main Chat Area */}
+      {showChat && (
       <div className="flex-1 flex flex-col">
         {!selectedProspectId ? (
           <div className="flex-1 flex items-center justify-center">
@@ -1019,6 +1029,11 @@ export default function Chats() {
             {/* Chat Header */}
             <div className="p-4 border-b flex items-center justify-between">
               <div className="flex items-center gap-3">
+                {isMobile && (
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => navigate("/chats")}>
+                    <ArrowLeft className="h-4 w-4" />
+                  </Button>
+                )}
                 <Avatar className="h-10 w-10 shrink-0">
                   {(selectedProspect as any)?.profile_pic_url ? (
                     <AvatarImage
@@ -1138,7 +1153,7 @@ export default function Chats() {
               <div className="space-y-4">
                 {messages?.map((message) => (
                   <div key={message.id} className={`flex ${message.direction === "outbound" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[70%] rounded-lg p-3 ${message.direction === "outbound" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                    <div className={`max-w-[85%] md:max-w-[70%] rounded-lg p-3 ${message.direction === "outbound" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
                       <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                       {message.direction === "inbound" && message.detected_tone && (
                         <p className="text-xs mt-1 opacity-70">Tone: {message.detected_tone}</p>
@@ -1158,11 +1173,11 @@ export default function Chats() {
                     <AlertTriangle className="h-4 w-4" /><span>{pushyWarning}</span>
                   </div>
                 )}
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                   <p className="text-sm font-medium flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-primary" />Suggested Replies
                   </p>
-                  <div className="flex gap-1">
+                  <div className="flex gap-1 flex-wrap">
                     <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleEmotionalReply("emotional with a personal story")} disabled={isAnalyzing}>
                       <Heart className="h-3 w-3 mr-1" />+ Story
                     </Button>
@@ -1294,6 +1309,7 @@ export default function Chats() {
           </>
         )}
       </div>
+      )}
     </div>
   );
 }
