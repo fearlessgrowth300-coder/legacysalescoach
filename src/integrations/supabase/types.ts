@@ -237,6 +237,7 @@ export type Database = {
           category: string
           content: string
           created_at: string
+          embedding: string | null
           id: string
           relevance_score: number
           source_id: string | null
@@ -249,6 +250,7 @@ export type Database = {
           category?: string
           content: string
           created_at?: string
+          embedding?: string | null
           id?: string
           relevance_score?: number
           source_id?: string | null
@@ -261,6 +263,7 @@ export type Database = {
           category?: string
           content?: string
           created_at?: string
+          embedding?: string | null
           id?: string
           relevance_score?: number
           source_id?: string | null
@@ -466,6 +469,62 @@ export type Database = {
           },
         ]
       }
+      sales_brain: {
+        Row: {
+          brain_type: string
+          category: string
+          created_at: string
+          embedding: string | null
+          how_to_apply: string
+          id: string
+          metadata: Json | null
+          principle_name: string
+          source_id: string | null
+          source_name: string
+          source_type: string
+          user_id: string
+          what_i_learned: string
+        }
+        Insert: {
+          brain_type?: string
+          category?: string
+          created_at?: string
+          embedding?: string | null
+          how_to_apply: string
+          id?: string
+          metadata?: Json | null
+          principle_name: string
+          source_id?: string | null
+          source_name: string
+          source_type?: string
+          user_id: string
+          what_i_learned: string
+        }
+        Update: {
+          brain_type?: string
+          category?: string
+          created_at?: string
+          embedding?: string | null
+          how_to_apply?: string
+          id?: string
+          metadata?: Json | null
+          principle_name?: string
+          source_id?: string | null
+          source_name?: string
+          source_type?: string
+          user_id?: string
+          what_i_learned?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_brain_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_base_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       suggestion_feedback: {
         Row: {
           conversation_stage: string | null
@@ -603,7 +662,40 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      match_knowledge_chunks: {
+        Args: {
+          match_count?: number
+          match_threshold?: number
+          p_user_id?: string
+          query_embedding: string
+        }
+        Returns: {
+          brain_type: string
+          category: string
+          content: string
+          id: string
+          similarity: number
+          source_type: string
+          trigger_phrases: string
+        }[]
+      }
+      match_sales_brain: {
+        Args: {
+          match_count?: number
+          match_threshold?: number
+          p_user_id?: string
+          query_embedding: string
+        }
+        Returns: {
+          category: string
+          how_to_apply: string
+          id: string
+          principle_name: string
+          similarity: number
+          source_name: string
+          what_i_learned: string
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never

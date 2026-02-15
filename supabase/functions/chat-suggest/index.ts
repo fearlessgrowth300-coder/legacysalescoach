@@ -400,6 +400,14 @@ serve(async (req) => {
       .order("relevance_score", { ascending: false })
       .limit(20);
 
+    // Also retrieve structured sales principles from sales_brain
+    const { data: salesPrinciples } = await supabase
+      .from("sales_brain")
+      .select("principle_name, what_i_learned, how_to_apply, source_name, category")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(10);
+
     // Also retrieve learned insights from past conversations
     const { data: brainInsights } = await supabase
       .from("learned_insights")
@@ -431,6 +439,12 @@ serve(async (req) => {
         `[BRAIN CHUNK ${i + 1}] (Source: ${c.source_type || "unknown"}, Category: ${c.category}):\n${c.content.substring(0, 600)}`
       ).join("\n\n");
       
+      // Add structured sales principles
+      if (salesPrinciples && salesPrinciples.length > 0) {
+        brainChunksFormatted += "\n\n[SALES PRINCIPLES FROM YOUR BRAIN]:\n" + 
+          salesPrinciples.map((sp: any) => `• ${sp.principle_name}: ${sp.what_i_learned}\n  How to apply: ${sp.how_to_apply}\n  (From: ${sp.source_name})`).join("\n");
+      }
+
       if (brainInsights && brainInsights.length > 0) {
         brainChunksFormatted += "\n\n[LEARNED INSIGHTS FROM PAST CONVERSATIONS]:\n" + 
           brainInsights.slice(0, 5).map((ins: any) => `- ${ins.insight} (from: ${ins.source || "conversation"})`).join("\n");
