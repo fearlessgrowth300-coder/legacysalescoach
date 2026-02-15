@@ -511,6 +511,12 @@ export default function Chats() {
       setFeedbackMap({});
       if (data.conversationStage) setConversationStage(data.conversationStage);
       if (data.prospectType) setProspectType(data.prospectType);
+      // Show brain retrieval notification
+      if (data.brainRetrieval && data.brainRetrieval.chunksRetrieved > 0) {
+        const br = data.brainRetrieval;
+        const sourceList = (br.sources || []).filter((s: string) => s !== "unknown").join(", ") || "brain";
+        toast.info(`🔍 Pulled from brain: ${br.chunksRetrieved} chunks | Sources: ${sourceList}`, { duration: 4000 });
+      }
       // Show learning notification
       if (data.learningResult) {
         const lr = data.learningResult;
@@ -584,6 +590,11 @@ export default function Chats() {
       setFeedbackMap({});
       if (data.conversationStage) setConversationStage(data.conversationStage);
       if (data.prospectType) setProspectType(data.prospectType);
+      if (data.brainRetrieval && data.brainRetrieval.chunksRetrieved > 0) {
+        const br = data.brainRetrieval;
+        const sourceList = (br.sources || []).filter((s: string) => s !== "unknown").join(", ") || "brain";
+        toast.info(`🔍 Pulled from brain: ${br.chunksRetrieved} chunks | Sources: ${sourceList}`, { duration: 4000 });
+      }
       if (data.learningResult) {
         const lr = data.learningResult;
         toast.success(`🧠 Your AI friend just learned ${lr.chunksAdded || 1} new way${(lr.chunksAdded || 1) > 1 ? 's' : ''} to handle "${(data.prospectType || "prospects").replace(/_/g, " ")}" and added it to the brain`, { duration: 5000 });
