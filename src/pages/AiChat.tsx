@@ -37,18 +37,26 @@ async function streamChat({
   const token = session?.access_token;
   if (!token) { onError("Not authenticated"); return; }
 
-  const resp = await fetch(CHAT_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-    },
-    body: JSON.stringify({ messages }),
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(CHAT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      },
+      body: JSON.stringify({ messages }),
+    });
+  } catch (networkErr) {
+    console.error("Network error calling brain-chat:", networkErr);
+    onError("Network error — check your connection and try again.");
+    return;
+  }
 
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}));
+    console.error("brain-chat returned error:", resp.status, data);
     onError(data.error || `Error ${resp.status}`);
     return;
   }
@@ -481,9 +489,10 @@ export default function AiChat() {
         onError: (err) => { toast.error(err); setIsLoading(false); setIsTyping(false); },
       });
     } catch (e) {
-      console.error(e);
-      toast.error("Failed to get response");
+      console.error("AI chat error:", e);
+      toast.error(e instanceof Error ? e.message : "Failed to get response");
       setIsLoading(false);
+      setIsTyping(false);
     }
   };
 
@@ -663,7 +672,7 @@ export default function AiChat() {
               <div key={conv.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} onClick={() => { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); }}>
                 <MessageSquare className="h-4 w-4 shrink-0" />
                 <span className="truncate flex-1">{conv.title}</span>
-                <Button size="icon" variant="ghost" className="h-6 w-6 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}>
+                <Button size="icon" variant="ghost" className="h-6 w-6 md:opacity-0 md:group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}>
                   <Trash2 className="h-3 w-3" />
                 </Button>
               </div>
