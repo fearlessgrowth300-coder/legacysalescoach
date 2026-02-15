@@ -733,7 +733,7 @@ export default function PracticeCall() {
 
               <TabsContent value="prospect" className="mt-4 space-y-4">
                 <h3 className="font-bold">About {selectedScenario.prospectName}</h3>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="bg-muted/50 rounded-lg p-3">
                     <p className="text-xs font-medium text-muted-foreground mb-1">Role & Company</p>
                     <p className="text-sm font-semibold">{selectedScenario.prospectRole}</p>
@@ -850,30 +850,30 @@ export default function PracticeCall() {
 
     return (
       <div className="px-4 py-6 md:py-8 max-w-3xl mx-auto overflow-x-hidden">
-        <div className="text-center mb-8">
-          <Trophy className={`h-12 w-12 mx-auto mb-3 ${getScoreColor(avgScore)}`} />
-          <h1 className="text-3xl font-bold mb-1">Practice Complete</h1>
-          <p className="text-muted-foreground">{selectedScenario?.name}</p>
+        <div className="text-center mb-6 sm:mb-8">
+          <Trophy className={`h-10 w-10 sm:h-12 sm:w-12 mx-auto mb-3 ${getScoreColor(avgScore)}`} />
+          <h1 className="text-2xl sm:text-3xl font-bold mb-1">Practice Complete</h1>
+          <p className="text-sm text-muted-foreground">{selectedScenario?.name}</p>
         </div>
 
         {/* Score Overview */}
-        <div className="grid grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6 sm:mb-8">
           <Card>
-            <CardContent className="py-4 text-center">
-              <p className="text-xs text-muted-foreground mb-1">Overall Score</p>
-              <p className={`text-3xl font-bold ${getScoreColor(avgScore)}`}>{avgScore}/10</p>
+            <CardContent className="p-3 sm:py-4 text-center">
+              <p className="text-[10px] sm:text-xs text-muted-foreground mb-1">Overall Score</p>
+              <p className={`text-xl sm:text-3xl font-bold ${getScoreColor(avgScore)}`}>{avgScore}/10</p>
             </CardContent>
           </Card>
           <Card>
-            <CardContent className="py-4 text-center">
-              <p className="text-xs text-muted-foreground mb-1">Messages Sent</p>
-              <p className="text-3xl font-bold">{userMsgCount}</p>
+            <CardContent className="p-3 sm:py-4 text-center">
+              <p className="text-[10px] sm:text-xs text-muted-foreground mb-1">Messages Sent</p>
+              <p className="text-xl sm:text-3xl font-bold">{userMsgCount}</p>
             </CardContent>
           </Card>
           <Card>
-            <CardContent className="py-4 text-center">
-              <p className="text-xs text-muted-foreground mb-1">Best Turn</p>
-              <p className={`text-3xl font-bold ${getScoreColor(bestScore)}`}>{bestScore}/10</p>
+            <CardContent className="p-3 sm:py-4 text-center">
+              <p className="text-[10px] sm:text-xs text-muted-foreground mb-1">Best Turn</p>
+              <p className={`text-xl sm:text-3xl font-bold ${getScoreColor(bestScore)}`}>{bestScore}/10</p>
             </CardContent>
           </Card>
         </div>
@@ -901,7 +901,7 @@ export default function PracticeCall() {
         )}
 
         {/* Techniques & Feedback */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div className="grid grid-cols-1 gap-3 sm:gap-4 mb-4 sm:mb-6">
           {uniqueTechniques.length > 0 && (
             <Card>
               <CardContent className="py-4">
@@ -961,12 +961,12 @@ export default function PracticeCall() {
           </CardContent>
         </Card>
 
-        <div className="flex gap-3 justify-center">
-          <Button variant="outline" onClick={resetCall}>
-            <RotateCcw className="h-4 w-4 mr-2" />Try Another Scenario
+        <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 justify-center">
+          <Button variant="outline" size="sm" className="text-xs sm:text-sm" onClick={resetCall}>
+            <RotateCcw className="h-4 w-4 mr-1 sm:mr-2" />Try Another
           </Button>
-          <Button onClick={() => { setCallState("ringing"); setMessages([]); setAllScores([]); setAllFeedback([]); setAllTechniques([]); setAllStages([]); startCall(); }}>
-            <Phone className="h-4 w-4 mr-2" />Retry This Scenario
+          <Button size="sm" className="text-xs sm:text-sm" onClick={() => { setCallState("ringing"); setMessages([]); setAllScores([]); setAllFeedback([]); setAllTechniques([]); setAllStages([]); startCall(); }}>
+            <Phone className="h-4 w-4 mr-1 sm:mr-2" />Retry Scenario
           </Button>
         </div>
       </div>
@@ -978,11 +978,11 @@ export default function PracticeCall() {
   // ========================
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
-      <div className="border-b px-4 py-3 flex items-center justify-between bg-background/95 backdrop-blur">
-        <div className="flex items-center gap-3">
-          <div className="h-3 w-3 rounded-full bg-emerald-500 animate-pulse" />
-          <div>
-            <h2 className="font-semibold text-sm">{selectedScenario?.prospectName} — {selectedScenario?.name}</h2>
+      <div className="border-b px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between bg-background/95 backdrop-blur shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+          <div className="h-3 w-3 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+          <div className="min-w-0">
+            <h2 className="font-semibold text-xs sm:text-sm truncate">{selectedScenario?.prospectName} — {selectedScenario?.name}</h2>
             <div className="flex items-center gap-2">
               {lastCoaching && (
                 <Badge className={`text-[10px] ${getStageColor(lastCoaching.conversationStage)}`}>
