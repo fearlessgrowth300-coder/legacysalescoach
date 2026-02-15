@@ -1015,7 +1015,7 @@ export default function Chats() {
 
       {/* Main Chat Area */}
       {showChat && (
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {!selectedProspectId ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
@@ -1027,7 +1027,7 @@ export default function Chats() {
         ) : (
           <>
             {/* Chat Header */}
-            <div className="p-2 md:p-4 border-b flex items-center gap-2 overflow-hidden" style={{ minHeight: "var(--chat-header-h)" }}>
+            <div className="p-2 md:p-4 border-b flex items-center gap-1 md:gap-2 shrink-0" style={{ minHeight: "var(--chat-header-h)" }}>
               {isMobile && (
                 <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => navigate("/chats")}>
                   <ArrowLeft className="h-4 w-4" />
@@ -1049,43 +1049,48 @@ export default function Chats() {
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 min-w-0">
-                <h3 className="font-medium text-sm md:text-base truncate">
-                  {selectedProspect?.name}
-                  {!isMobile && (selectedProspect as any)?.instagram_username && (
-                    <span className="text-xs text-muted-foreground font-normal ml-1">@{(selectedProspect as any).instagram_username}</span>
-                  )}
-                </h3>
+                <h3 className="font-medium text-sm md:text-base truncate">{selectedProspect?.name}</h3>
                 <p className="text-xs text-muted-foreground truncate">
                   {isMobile
-                    ? ((selectedProspect as any)?.instagram_username ? `@${(selectedProspect as any).instagram_username}` : (selectedProspect?.detected_interests || "Paste a message"))
+                    ? ((selectedProspect as any)?.instagram_username ? `@${(selectedProspect as any).instagram_username}` : "Paste a message")
                     : (selectedProspect?.detected_interests || "Paste a message to get AI suggestions")
                   }
                 </p>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
+              {!isMobile && (
                 <Select value={currentThreadType} onValueChange={(v: "friend" | "expert") => { setCurrentThreadType(v); setSuggestions([]); }}>
-                  <SelectTrigger className="w-24 md:w-32 h-8"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-32 h-8"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="friend"><div className="flex items-center gap-2"><Heart className="h-3 w-3 text-pink-500" />Friend</div></SelectItem>
                     <SelectItem value="expert"><div className="flex items-center gap-2"><Briefcase className="h-3 w-3 text-blue-500" />Expert</div></SelectItem>
                   </SelectContent>
                 </Select>
-                <DropdownMenu modal={false}>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
-                      <MoreVertical className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" side="bottom" className="z-[100]">
-                    <DropdownMenuItem onClick={() => { updateOutcome.mutate({ id: selectedProspectId!, outcome: "won" }); toast.success("Marked as won!"); }}>Mark as Won</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => { updateOutcome.mutate({ id: selectedProspectId!, outcome: "lost" }); toast.success("Marked as lost"); }}>Mark as Lost</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => { updateOutcome.mutate({ id: selectedProspectId!, outcome: "ghosted" }); toast.success("Marked as ghosted"); }}>Mark as Ghosted</DropdownMenuItem>
-                    <DropdownMenuItem className="text-destructive" onClick={() => deleteProspect.mutate(selectedProspectId!)}>
-                      <Trash2 className="h-4 w-4 mr-2" />Delete Chat
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
+              )}
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+                    <MoreVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" side="bottom" className="z-[100]">
+                  {isMobile && (
+                    <>
+                      <DropdownMenuItem onClick={() => { setCurrentThreadType("friend"); setSuggestions([]); }}>
+                        <Heart className="h-3 w-3 mr-2 text-pink-500" />Friend Mode
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => { setCurrentThreadType("expert"); setSuggestions([]); }}>
+                        <Briefcase className="h-3 w-3 mr-2 text-blue-500" />Expert Mode
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  <DropdownMenuItem onClick={() => { updateOutcome.mutate({ id: selectedProspectId!, outcome: "won" }); toast.success("Marked as won!"); }}>Mark as Won</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => { updateOutcome.mutate({ id: selectedProspectId!, outcome: "lost" }); toast.success("Marked as lost"); }}>Mark as Lost</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => { updateOutcome.mutate({ id: selectedProspectId!, outcome: "ghosted" }); toast.success("Marked as ghosted"); }}>Mark as Ghosted</DropdownMenuItem>
+                  <DropdownMenuItem className="text-destructive" onClick={() => deleteProspect.mutate(selectedProspectId!)}>
+                    <Trash2 className="h-4 w-4 mr-2" />Delete Chat
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
 
             {/* Prospect Type Badge (shown below header on mobile) */}
@@ -1166,7 +1171,7 @@ export default function Chats() {
             </div>
 
             {/* Messages */}
-            <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
+            <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollAreaRef}>
               <div className="space-y-4">
                 {messages?.map((message) => (
                   <div key={message.id} className={`flex ${message.direction === "outbound" ? "justify-end" : "justify-start"}`}>
