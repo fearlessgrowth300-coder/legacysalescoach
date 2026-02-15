@@ -33,11 +33,12 @@ export default defineConfig(({ mode }) => ({
         ],
       },
       manifest: {
+        id: "/",
         name: "Legacy Sales Coach",
         short_name: "SalesCoach",
         description: "AI-powered sales coaching that learns from every conversation",
         theme_color: "#1e293b",
-        background_color: "#ffffff",
+        background_color: "#1e293b",
         display: "standalone",
         orientation: "portrait",
         scope: "/",
