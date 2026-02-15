@@ -6,11 +6,16 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Brain, Send, Loader2, BookOpen, Sparkles, Plus, MessageSquare,
   Image, Link, FileText, Pencil, Trash2, Check, CheckCheck, X, Menu,
-  Mic, MicOff, Pin, PinOff, Search, Star, Zap, Video, File
+  Mic, MicOff, Pin, PinOff, Search, Star, Zap, Video, File, ArrowLeft
 } from "lucide-react";
 import SwipeToDelete from "@/components/SwipeToDelete";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
@@ -127,6 +132,7 @@ function generateFollowUps(content: string): string[] {
 
 export default function AiChat() {
   const { user } = useAuth();
+  const isMobile = useIsMobile();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -154,6 +160,9 @@ export default function AiChat() {
 
   const [followUps, setFollowUps] = useState<string[]>([]);
   const [isTyping, setIsTyping] = useState(false);
+
+  // Delete confirmation
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   // Brain status
   const [brainStats, setBrainStats] = useState<{ videos: number; pdfs: number; conversations: number }>({ videos: 0, pdfs: 0, conversations: 0 });
@@ -236,6 +245,10 @@ export default function AiChat() {
     }
   };
 
+  const confirmDeleteConversation = (convId: string) => {
+    setDeleteConfirmId(convId);
+  };
+
   const deleteConversation = async (convId: string) => {
     await supabase.from("ai_conversations").delete().eq("id", convId);
     setConversations(prev => prev.filter(c => c.id !== convId));
@@ -243,6 +256,7 @@ export default function AiChat() {
       setActiveConvId(null);
       setMessages([]);
     }
+    setDeleteConfirmId(null);
   };
 
   const toggleVoice = () => {
@@ -607,11 +621,30 @@ export default function AiChat() {
     "How do I follow up without being annoying?",
   ];
 
+  // On mobile: show sidebar when no active chat, show chat when active
+  const showMobileSidebar = isMobile && !activeConvId;
+  const showMobileChat = isMobile && !!activeConvId;
+
   return (
-    <div className="flex h-[calc(100vh-4rem)]">
+    <div className="flex h-[calc(100dvh-4rem)] overflow-x-hidden" style={{ touchAction: "pan-y" }}>
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete conversation?</AlertDialogTitle>
+            <AlertDialogDescription>This will permanently delete this conversation and all its messages. This action cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteConfirmId && deleteConversation(deleteConfirmId)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Sidebar */}
-      <div className={`${sidebarOpen ? "w-72" : "w-0"} transition-all duration-200 border-r bg-muted/30 flex flex-col overflow-hidden`}>
-        <div className="p-3 border-b flex items-center justify-between gap-1">
+      {(isMobile ? showMobileSidebar : true) && (
+      <div className={`${isMobile ? "w-full" : sidebarOpen ? "w-72" : "w-0"} transition-all duration-200 border-r bg-muted/30 flex flex-col overflow-hidden`}>
+        <div className="p-3 border-b flex items-center justify-between gap-1" style={{ height: "var(--chat-header-h)" }}>
           <h3 className="font-semibold text-sm">Chats</h3>
           <div className="flex gap-1">
             <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setShowSearch(!showSearch); setShowPinned(false); }} title="Search chats">
@@ -670,11 +703,11 @@ export default function AiChat() {
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-1">
             {conversations.map(conv => (
-              <SwipeToDelete key={conv.id} onDelete={() => deleteConversation(conv.id)}>
+              <SwipeToDelete key={conv.id} onDelete={() => confirmDeleteConversation(conv.id)}>
                 <div className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} onClick={() => { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); }}>
                   <MessageSquare className="h-4 w-4 shrink-0" />
                   <span className="truncate flex-1">{conv.title}</span>
-                  <Button size="icon" variant="ghost" className="h-6 w-6 hidden md:opacity-0 md:group-hover:opacity-100 md:inline-flex shrink-0" onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}>
+                  <Button size="icon" variant="ghost" className="h-6 w-6 hidden md:opacity-0 md:group-hover:opacity-100 md:inline-flex shrink-0" onClick={(e) => { e.stopPropagation(); confirmDeleteConversation(conv.id); }}>
                     <Trash2 className="h-3 w-3" />
                   </Button>
                 </div>
@@ -684,25 +717,33 @@ export default function AiChat() {
           </div>
         </ScrollArea>
       </div>
+      )}
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {(!isMobile || activeConvId) && (
+      <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
         {/* Header */}
-        <div className="p-3 border-b flex items-center gap-3">
-          <Button size="icon" variant="ghost" onClick={() => setSidebarOpen(!sidebarOpen)} className="shrink-0">
-            <Menu className="h-4 w-4" />
-          </Button>
-          <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-            <Brain className="h-5 w-5 text-primary" />
+        <div className="p-2 md:p-3 border-b flex items-center gap-2 md:gap-3" style={{ height: "var(--chat-header-h)" }}>
+          {isMobile && activeConvId ? (
+            <Button size="icon" variant="ghost" onClick={() => setActiveConvId(null)} className="shrink-0 h-8 w-8">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button size="icon" variant="ghost" onClick={() => setSidebarOpen(!sidebarOpen)} className="shrink-0 h-8 w-8 hidden md:inline-flex">
+              <Menu className="h-4 w-4" />
+            </Button>
+          )}
+          <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+            <Brain className="h-4 w-4 text-primary" />
           </div>
           <div className="min-w-0 flex-1">
             <h2 className="font-bold text-sm flex items-center gap-1.5 truncate">
-              Your AI Brain is Ready <Zap className="h-3.5 w-3.5 text-primary shrink-0" />
+              AI Brain <Zap className="h-3.5 w-3.5 text-primary shrink-0" />
             </h2>
-            <p className="text-xs text-muted-foreground truncate">Ask me anything. I learn from every video, PDF, and principle you've ever uploaded.</p>
+            <p className="text-xs text-muted-foreground truncate hidden md:block">Ask me anything. I learn from every video, PDF, and principle you've ever uploaded.</p>
           </div>
-          {/* Brain Status Badge */}
-          <div className="flex items-center gap-1.5 shrink-0">
+          {/* Brain Status Badge - hide on mobile */}
+          <div className="hidden md:flex items-center gap-1.5 shrink-0">
             <Badge variant="secondary" className="text-[10px] gap-1 py-0.5">
               <Video className="h-2.5 w-2.5" /> {brainStats.videos}
             </Badge>
@@ -842,7 +883,7 @@ export default function AiChat() {
         )}
 
         {/* Input Area */}
-        <div className="p-3 border-t max-w-3xl mx-auto w-full">
+        <div className="p-3 border-t max-w-3xl mx-auto w-full chat-input-safe">
           <div className="flex gap-2 items-end">
             <div className="flex gap-1 pb-1">
               <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => fileInputRef.current?.click()} title="Upload screenshot"><Image className="h-4 w-4" /></Button>
@@ -865,6 +906,7 @@ export default function AiChat() {
         <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
         <input ref={pdfInputRef} type="file" accept=".pdf" className="hidden" onChange={handlePdfUpload} />
       </div>
+      )}
     </div>
   );
 }
