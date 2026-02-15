@@ -350,7 +350,7 @@ export default function KnowledgeBase() {
   const getChunksForItem = (itemId: string) => chunks?.filter(c => c.source_id === itemId) || [];
 
   return (
-    <div className="container py-8 max-w-4xl">
+    <div className="px-4 py-6 md:py-8 max-w-4xl mx-auto overflow-x-hidden">
       {/* Learnings Result Dialog */}
       <Dialog open={learningsDialogOpen} onOpenChange={setLearningsDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
@@ -426,15 +426,15 @@ export default function KnowledgeBase() {
         </DialogContent>
       </Dialog>
 
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 md:mb-8 gap-4">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Brain className="h-6 w-6 text-primary" />Knowledge Base
+          <h1 className="text-xl md:text-2xl font-bold flex items-center gap-2">
+            <Brain className="h-5 w-5 md:h-6 md:w-6 text-primary" />Knowledge Base
           </h1>
-          <p className="text-muted-foreground">Upload sales training content to make your AI smarter</p>
+          <p className="text-sm text-muted-foreground">Upload sales training content to make your AI smarter</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setViewAllLearningsOpen(true)}>
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={() => setViewAllLearningsOpen(true)}>
             <BookOpen className="h-4 w-4 mr-2" />View All Brain Learnings
           </Button>
           {/* Batch Import Dialog */}
@@ -796,10 +796,10 @@ export default function KnowledgeBase() {
                         <p className="font-medium truncate">{item.title}</p>
                         {getStatusIcon(item.status)}
                       </div>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <Badge variant="outline" className="text-xs">{item.type.toUpperCase()}</Badge>
                         <Badge variant="outline" className="text-xs">{item.brain_type}</Badge>
-                        {item.url && <p className="text-xs text-muted-foreground truncate">{item.url}</p>}
+                        {item.url && <p className="text-xs text-muted-foreground truncate max-w-[200px] md:max-w-none">{item.url}</p>}
                       </div>
                     </div>
                     <Button variant="ghost" size="icon" onClick={() => deleteItem.mutate(item.id)}>
