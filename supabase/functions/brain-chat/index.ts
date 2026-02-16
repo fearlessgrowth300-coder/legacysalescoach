@@ -40,24 +40,54 @@ serve(async (req) => {
       });
     }
 
-    // Validate and smart-truncate messages to fit within limits
-    let validatedMessages = messages.map((m: any) => {
+    // Helper: fetch image URL and convert to base64 data URI
+    const imageToBase64 = async (url: string): Promise<string | null> => {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        const buf = await resp.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        const b64 = btoa(binary);
+        const ct = resp.headers.get("content-type") || "image/png";
+        return `data:${ct};base64,${b64}`;
+      } catch { return null; }
+    };
+
+    // Convert any image_url parts to base64 so the AI gateway can read them
+    const processMessage = async (m: any) => {
       if (typeof m.content === "string" && m.content.length > MAX_MESSAGE_LENGTH) {
         return { ...m, content: m.content.substring(0, MAX_MESSAGE_LENGTH) + "\n\n[Message truncated — original was " + m.content.length + " chars]" };
       }
       if (Array.isArray(m.content)) {
-        return {
-          ...m,
-          content: m.content.map((part: any) => {
-            if (part.type === "text" && typeof part.text === "string" && part.text.length > MAX_MESSAGE_LENGTH) {
-              return { ...part, text: part.text.substring(0, MAX_MESSAGE_LENGTH) + "\n\n[Message truncated]" };
+        const newContent = [];
+        for (const part of m.content) {
+          if (part.type === "image_url" && part.image_url?.url) {
+            const url = part.image_url.url;
+            if (url.startsWith("data:")) {
+              newContent.push(part); // already base64
+            } else {
+              const b64 = await imageToBase64(url);
+              if (b64) {
+                newContent.push({ type: "image_url", image_url: { url: b64 } });
+              } else {
+                newContent.push({ type: "text", text: "[Image could not be loaded]" });
+              }
             }
-            return part;
-          }),
-        };
+          } else if (part.type === "text" && typeof part.text === "string" && part.text.length > MAX_MESSAGE_LENGTH) {
+            newContent.push({ ...part, text: part.text.substring(0, MAX_MESSAGE_LENGTH) + "\n\n[Message truncated]" });
+          } else {
+            newContent.push(part);
+          }
+        }
+        return { ...m, content: newContent };
       }
       return m;
-    });
+    };
+
+    // Validate and smart-truncate messages to fit within limits
+    let validatedMessages = await Promise.all(messages.map(processMessage));
 
     // Smart context window: if total chars exceed limit, summarize older messages
     const getCharCount = (m: any) => {
