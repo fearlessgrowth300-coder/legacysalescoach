@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -43,7 +44,7 @@ export default function Workspaces() {
   const [editBusiness, setEditBusiness] = useState("");
   const [editPositioning, setEditPositioning] = useState("");
   const [editLinkedIds, setEditLinkedIds] = useState<string[]>([]);
-
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const { data: workspaces } = useQuery({
     queryKey: ["workspaces"],
     queryFn: async () => {
@@ -423,7 +424,7 @@ export default function Workspaces() {
                         <Check className="h-4 w-4" />
                       </Button>
                     )}
-                    <Button variant="ghost" size="icon" onClick={() => deleteWorkspace.mutate(workspace.id)}>
+                    <Button variant="ghost" size="icon" onClick={() => setDeleteConfirmId(workspace.id)}>
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
                   </div>
@@ -456,6 +457,32 @@ export default function Workspaces() {
           ))}
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Workspace?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this workspace, including all its prospects, messages, and framework data. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deleteConfirmId) {
+                  deleteWorkspace.mutate(deleteConfirmId);
+                  setDeleteConfirmId(null);
+                }
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

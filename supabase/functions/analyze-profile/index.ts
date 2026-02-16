@@ -110,8 +110,8 @@ serve(async (req) => {
       }
     }
 
-    if (scrapedParts.length === 0 && !workspace.niche_description) {
-      return new Response(JSON.stringify({ error: "No URLs or description to analyze" }), {
+    if (scrapedParts.length === 0 && !workspace.niche_description && !workspace.custom_framework) {
+      return new Response(JSON.stringify({ error: "No URLs, description, or framework to analyze" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -125,7 +125,11 @@ serve(async (req) => {
 2. Products/services detected (comma-separated list)
 
 Workspace name: ${workspace.name}
+Workspace type: ${workspace.workspace_type || "friend"}
 Niche description: ${workspace.niche_description || "Not provided"}
+${workspace.custom_framework ? `Custom Framework: ${workspace.custom_framework.substring(0, 1000)}` : ""}
+${workspace.target_audience ? `Target Audience: ${workspace.target_audience}` : ""}
+${workspace.business_model ? `Business Model: ${workspace.business_model}` : ""}
 
 Scraped content from their profiles:
 ${scrapedParts.join("\n\n")}
@@ -189,24 +193,33 @@ Return JSON: { "profile_analysis": "...", "products_detected": "..." }`;
     const personaPrompt = `Based on this business profile, create a structured persona object for this workspace.
 
 Workspace name: ${workspace.name}
+Workspace type: ${workspace.workspace_type || "friend"}
 Niche description: ${workspace.niche_description || "Not provided"}
 Profile Analysis: ${profileAnalysis}
 Products: ${productsDetected}
+${workspace.target_audience ? `Target Audience: ${workspace.target_audience}` : ""}
+${workspace.business_model ? `Business Model: ${workspace.business_model}` : ""}
+${workspace.positioning ? `Market Positioning: ${workspace.positioning}` : ""}
 
-Scraped content:
+${workspace.custom_framework ? `CUSTOM CONVERSATION FRAMEWORK (this is the user's primary reply guide — the persona MUST reflect this framework's tone, style, and approach):\n${workspace.custom_framework}\n` : ""}
+
+Scraped content from their profiles:
 ${scrapedParts.join("\n\n")}
+
+IMPORTANT: If a custom framework was provided above, the persona's tone, energy, positioning, and close style MUST align with that framework. Extract the tone and approach directly from the framework text.
 
 Return a JSON object with these exact fields:
 {
-  "workspace_name": "short persona name, e.g. 'Digital Mom Friend'",
-  "tone": "e.g. Warm, relatable / Professional, authoritative / Energetic, motivational",
-  "audience": "e.g. Beginner moms / Aspiring entrepreneurs / Fitness enthusiasts",
-  "positioning": "e.g. Peer who succeeded / Authority expert / Relatable mentor",
-  "energy": "e.g. Calm, encouraging / High-energy, motivational / Direct, no-nonsense",
-  "allowed_close_style": "e.g. Soft invitation / Direct ask / Consultative close",
-  "niche_detected": "the specific niche detected",
+  "workspace_name": "short persona name derived from niche + framework style, e.g. 'Digital Mom Friend' or 'Fitness Authority Coach'",
+  "tone": "extracted from the custom framework if provided, otherwise inferred from content. e.g. Warm, relatable / Professional, authoritative",
+  "audience": "extracted from niche description + content. e.g. Beginner moms / Aspiring entrepreneurs",
+  "positioning": "derived from framework + niche. e.g. Peer who succeeded / Authority expert",
+  "energy": "derived from framework tone. e.g. Calm, encouraging / High-energy, motivational",
+  "allowed_close_style": "derived from framework close strategy. e.g. Soft invitation / Direct ask",
+  "niche_detected": "the specific niche detected from description + content",
   "audience_type": "the type of audience (beginner/intermediate/advanced)",
-  "key_themes": "3-5 main themes from their content, comma-separated"
+  "key_themes": "3-5 main themes from their content + framework, comma-separated",
+  "framework_summary": "1-2 sentence summary of the custom framework's core approach, or 'No custom framework' if none provided"
 }
 
 Return ONLY the JSON object.`;
@@ -257,7 +270,9 @@ Energy: ${personaData.energy || "Not detected"}
 Close Style: ${personaData.allowed_close_style || "Not detected"}
 Niche: ${personaData.niche_detected || "Not detected"}
 Audience Type: ${personaData.audience_type || "Not detected"}
-Key Themes: ${personaData.key_themes || "Not detected"}`;
+Key Themes: ${personaData.key_themes || "Not detected"}
+Framework Approach: ${personaData.framework_summary || "No custom framework"}
+Workspace Type: ${workspace.workspace_type || "friend"}`;
 
       const embedding = await generateEmbedding(personaSummary, LOVABLE_API_KEY);
 
