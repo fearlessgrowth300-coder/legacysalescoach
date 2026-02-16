@@ -427,9 +427,11 @@ export default function AiChat() {
     }
 
     let imageUrl: string | null = null;
+    const imageBase64: string | null = imagePreview || null;
     if (attachedImage) imageUrl = await uploadImage(attachedImage);
 
-    const userMsg: Msg = { role: "user", content: text || "Analyze this image", image_url: imageUrl, status: "sending" };
+    // Use base64 for display & AI (works everywhere), store URL in DB for persistence
+    const userMsg: Msg = { role: "user", content: text || "Analyze this image", image_url: imageBase64 || imageUrl, status: "sending" };
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setAttachedImage(null);
