@@ -668,6 +668,53 @@ export type Database = {
           },
         ]
       }
+      workspace_training_data: {
+        Row: {
+          content: string | null
+          created_at: string
+          file_path: string | null
+          id: string
+          status: string
+          style_analysis: Json | null
+          title: string
+          type: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          content?: string | null
+          created_at?: string
+          file_path?: string | null
+          id?: string
+          status?: string
+          style_analysis?: Json | null
+          title: string
+          type?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          content?: string | null
+          created_at?: string
+          file_path?: string | null
+          id?: string
+          status?: string
+          style_analysis?: Json | null
+          title?: string
+          type?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_training_data_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       workspaces: {
         Row: {
           business_model: string | null
@@ -679,10 +726,12 @@ export type Database = {
           is_active: boolean
           name: string
           niche_description: string | null
+          parsed_framework: Json | null
           positioning: string | null
           products_detected: string | null
           profile_analysis: string | null
           store_url: string | null
+          style_vector: Json | null
           target_audience: string | null
           tiktok_url: string | null
           updated_at: string
@@ -699,10 +748,12 @@ export type Database = {
           is_active?: boolean
           name: string
           niche_description?: string | null
+          parsed_framework?: Json | null
           positioning?: string | null
           products_detected?: string | null
           profile_analysis?: string | null
           store_url?: string | null
+          style_vector?: Json | null
           target_audience?: string | null
           tiktok_url?: string | null
           updated_at?: string
@@ -719,10 +770,12 @@ export type Database = {
           is_active?: boolean
           name?: string
           niche_description?: string | null
+          parsed_framework?: Json | null
           positioning?: string | null
           products_detected?: string | null
           profile_analysis?: string | null
           store_url?: string | null
+          style_vector?: Json | null
           target_audience?: string | null
           tiktok_url?: string | null
           updated_at?: string

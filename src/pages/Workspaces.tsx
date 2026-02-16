@@ -14,6 +14,8 @@ import { Plus, Briefcase, Heart, Check, Trash2, Loader2, Search, Link2, Pencil }
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import WorkspaceTrainingUpload from "@/components/WorkspaceTrainingUpload";
+import FrameworkPreview from "@/components/FrameworkPreview";
 
 export default function Workspaces() {
   const { user } = useAuth();
@@ -123,8 +125,20 @@ export default function Workspaces() {
         }
       }
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("Workspace updated!");
+      // Re-parse framework if it changed
+      if (editFramework.trim() && editWorkspace) {
+        toast.info("Re-parsing framework...");
+        try {
+          await supabase.functions.invoke("parse-framework", {
+            body: { workspaceId: editWorkspace.id, frameworkText: editFramework },
+          });
+          toast.success("Framework re-parsed!");
+        } catch {
+          // Non-blocking
+        }
+      }
       setEditOpen(false);
       setEditWorkspace(null);
       queryClient.invalidateQueries({ queryKey: ["workspaces"] });
@@ -170,6 +184,14 @@ export default function Workspaces() {
       queryClient.invalidateQueries({ queryKey: ["workspaces"] });
       if (inserted) {
         try {
+          // Parse framework if provided
+          if (customFramework.trim()) {
+            toast.info("Parsing framework into structured rules...");
+            await supabase.functions.invoke("parse-framework", {
+              body: { workspaceId: (inserted as any).id, frameworkText: customFramework },
+            });
+            toast.success("Framework parsed into enforceable rules!");
+          }
           await supabase.functions.invoke("analyze-profile", { body: { workspaceId: (inserted as any).id } });
           toast.success("Profile analyzed & framework saved!");
           queryClient.invalidateQueries({ queryKey: ["workspaces"] });
@@ -446,10 +468,33 @@ export default function Workspaces() {
                     <p className="text-xs text-muted-foreground line-clamp-3">{workspace.custom_framework}</p>
                   </div>
                 )}
+                {workspace.parsed_framework && (
+                  <FrameworkPreview parsedFramework={workspace.parsed_framework as any} />
+                )}
                 {workspace.profile_analysis && (
                   <div className="mt-3 p-3 bg-muted rounded-lg">
                     <p className="text-xs font-medium mb-1">Profile Analysis</p>
                     <p className="text-xs text-muted-foreground">{workspace.profile_analysis}</p>
+                  </div>
+                )}
+                {workspace.style_vector && (
+                  <div className="mt-3 p-3 bg-muted rounded-lg">
+                    <p className="text-xs font-medium mb-1">Style Fingerprint</p>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {(workspace.style_vector as any)?.emotional_tone && <Badge variant="outline" className="text-xs">Tone: {(workspace.style_vector as any).emotional_tone}</Badge>}
+                      {(workspace.style_vector as any)?.avg_message_length && <Badge variant="outline" className="text-xs">Length: {(workspace.style_vector as any).avg_message_length}</Badge>}
+                      {(workspace.style_vector as any)?.emoji_pattern && <Badge variant="outline" className="text-xs">Emoji: {(workspace.style_vector as any).emoji_pattern}</Badge>}
+                      {(workspace.style_vector as any)?.cta_softness && <Badge variant="outline" className="text-xs">CTA: {(workspace.style_vector as any).cta_softness}</Badge>}
+                    </div>
+                    {(workspace.style_vector as any)?.overall_personality && (
+                      <p className="text-xs text-muted-foreground mt-1">{(workspace.style_vector as any).overall_personality}</p>
+                    )}
+                  </div>
+                )}
+                {/* Training Upload Section */}
+                {user && (
+                  <div className="mt-4 border-t pt-4">
+                    <WorkspaceTrainingUpload workspaceId={workspace.id} userId={user.id} />
                   </div>
                 )}
               </CardContent>
