@@ -141,7 +141,7 @@ export default function AiChat() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [editingMsgIdx, setEditingMsgIdx] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
-  const [attachedImages, setAttachedImages] = useState<File[]>([]);
+  const [attachedImages, setAttachedImages] = useState<Blob[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [linkInput, setLinkInput] = useState("");
   const [showLinkInput, setShowLinkInput] = useState(false);
@@ -331,32 +331,58 @@ export default function AiChat() {
     }
   };
 
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Compress image to max 1200px to reduce upload size
+  const compressImage = (file: File): Promise<Blob> => {
+    return new Promise((resolve) => {
+      if (file.size < 500 * 1024) { resolve(file); return; }
+      const img = document.createElement("img");
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const maxDim = 1200;
+        let w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+          const ratio = Math.min(maxDim / w, maxDim / h);
+          w = Math.round(w * ratio); h = Math.round(h * ratio);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+        canvas.toBlob((blob) => resolve(blob || file), "image/jpeg", 0.7);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
+  };
+
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
     const validFiles: File[] = [];
     for (const file of files) {
-      if (file.size > 5 * 1024 * 1024) { toast.error(`${file.name} is over 5MB`); continue; }
+      if (file.size > 10 * 1024 * 1024) { toast.error(`${file.name} is over 10MB`); continue; }
       validFiles.push(file);
     }
     if (attachedImages.length + validFiles.length > 10) {
       toast.error("Maximum 10 images allowed"); return;
     }
-    setAttachedImages(prev => [...prev, ...validFiles]);
-    validFiles.forEach(file => {
+    // Compress all images in parallel
+    const compressed = await Promise.all(validFiles.map(compressImage));
+    setAttachedImages(prev => [...prev, ...compressed]);
+    compressed.forEach(blob => {
       const reader = new FileReader();
       reader.onload = () => setImagePreviews(prev => [...prev, reader.result as string]);
-      reader.readAsDataURL(file);
+      reader.readAsDataURL(blob);
     });
     e.target.value = "";
   };
 
-  const uploadImage = async (file: File): Promise<string | null> => {
+  const uploadImage = async (blob: Blob, index: number): Promise<string | null> => {
     if (!user) return null;
-    const ext = file.name.split(".").pop();
-    const path = `${user.id}/ai-chat/${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from("chat-screenshots").upload(path, file);
-    if (error) { console.error("Upload error:", error); return null; }
+    const ext = blob.type.split("/").pop() || "jpg";
+    const path = `${user.id}/ai-chat/${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const { error } = await supabase.storage.from("chat-screenshots").upload(path, blob, { contentType: blob.type });
+    if (error) { console.error("Upload error:", error); toast.error(`Failed to upload image ${index + 1}`); return null; }
     const { data: { publicUrl } } = supabase.storage.from("chat-screenshots").getPublicUrl(path);
     return publicUrl;
   };
@@ -436,12 +462,16 @@ export default function AiChat() {
       setConversations(prev => [data as Conversation, ...prev]);
     }
 
-    // Upload all images to storage — use URLs for AI payload (edge fn converts to base64)
+    // Upload all images to storage in parallel — use URLs for AI payload
     const displayPreviews = [...imagePreviews]; // base64 for instant UI display
-    const uploadedUrls: string[] = [];
-    for (const file of attachedImages) {
-      const url = await uploadImage(file);
-      if (url) uploadedUrls.push(url);
+    const uploadResults = await Promise.all(
+      attachedImages.map((file, idx) => uploadImage(file, idx))
+    );
+    const uploadedUrls = uploadResults.filter((url): url is string => url !== null);
+    if (attachedImages.length > 0 && uploadedUrls.length === 0) {
+      toast.error("All image uploads failed. Please try again.");
+      setIsLoading(false);
+      return;
     }
 
     const userMsg: Msg = {
