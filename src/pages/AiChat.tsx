@@ -453,12 +453,28 @@ export default function AiChat() {
     setMessages(prev => prev.map(m => m.id === savedMsg?.id ? { ...m, status: "delivered" as const } : m));
     setIsTyping(true);
 
-    const aiMessages = [...messages, userMsg].map(m => {
+    // Convert image URLs to base64 for AI gateway compatibility
+    const imageUrlToBase64 = async (url: string): Promise<string> => {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    };
+
+    const aiMessages = await Promise.all([...messages, userMsg].map(async (m) => {
       if (m.image_url && m.role === "user") {
-        return { role: m.role, content: [{ type: "text", text: m.content }, { type: "image_url", image_url: { url: m.image_url } }] };
+        let imgData = m.image_url;
+        if (!imgData.startsWith("data:")) {
+          try { imgData = await imageUrlToBase64(imgData); } catch { /* keep original */ }
+        }
+        return { role: m.role, content: [{ type: "text", text: m.content }, { type: "image_url", image_url: { url: imgData } }] };
       }
       return { role: m.role, content: m.content };
-    });
+    }));
 
     let assistantSoFar = "";
     const questionText = text;
