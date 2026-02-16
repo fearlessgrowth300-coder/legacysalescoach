@@ -10,8 +10,9 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-const MAX_MESSAGE_LENGTH = 4000;
+const MAX_MESSAGE_LENGTH = 30000;
 const MAX_MESSAGES = 50;
+const MAX_TOTAL_CHARS = 120000;
 
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -39,16 +40,17 @@ serve(async (req) => {
       });
     }
 
-    const validatedMessages = messages.map((m: any) => {
+    // Validate and smart-truncate messages to fit within limits
+    let validatedMessages = messages.map((m: any) => {
       if (typeof m.content === "string" && m.content.length > MAX_MESSAGE_LENGTH) {
-        return { ...m, content: m.content.substring(0, MAX_MESSAGE_LENGTH) };
+        return { ...m, content: m.content.substring(0, MAX_MESSAGE_LENGTH) + "\n\n[Message truncated — original was " + m.content.length + " chars]" };
       }
       if (Array.isArray(m.content)) {
         return {
           ...m,
           content: m.content.map((part: any) => {
             if (part.type === "text" && typeof part.text === "string" && part.text.length > MAX_MESSAGE_LENGTH) {
-              return { ...part, text: part.text.substring(0, MAX_MESSAGE_LENGTH) };
+              return { ...part, text: part.text.substring(0, MAX_MESSAGE_LENGTH) + "\n\n[Message truncated]" };
             }
             return part;
           }),
@@ -56,6 +58,34 @@ serve(async (req) => {
       }
       return m;
     });
+
+    // Smart context window: if total chars exceed limit, summarize older messages
+    const getCharCount = (m: any) => {
+      if (typeof m.content === "string") return m.content.length;
+      if (Array.isArray(m.content)) return m.content.reduce((sum: number, p: any) => sum + (p.text?.length || 0), 0);
+      return 0;
+    };
+    
+    let totalCharsUsed = validatedMessages.reduce((sum: number, m: any) => sum + getCharCount(m), 0);
+    
+    if (totalCharsUsed > MAX_TOTAL_CHARS && validatedMessages.length > 2) {
+      // Keep at least the last 4 messages at full length, compress older ones
+      const keepFull = Math.min(4, validatedMessages.length);
+      const older = validatedMessages.slice(0, -keepFull);
+      const recent = validatedMessages.slice(-keepFull);
+      
+      // Summarize older messages aggressively
+      const summarized = older.map((m: any) => {
+        const text = typeof m.content === "string" ? m.content : 
+          (Array.isArray(m.content) ? m.content.map((p: any) => p.text || "").join(" ") : "");
+        if (text.length > 500) {
+          return { ...m, content: text.substring(0, 500) + "..." };
+        }
+        return m;
+      });
+      
+      validatedMessages = [...summarized, ...recent];
+    }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
