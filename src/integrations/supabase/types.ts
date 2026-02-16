@@ -670,6 +670,7 @@ export type Database = {
       }
       workspaces: {
         Row: {
+          business_model: string | null
           created_at: string
           custom_framework: string | null
           default_reply_mode: string
@@ -678,15 +679,18 @@ export type Database = {
           is_active: boolean
           name: string
           niche_description: string | null
+          positioning: string | null
           products_detected: string | null
           profile_analysis: string | null
           store_url: string | null
+          target_audience: string | null
           tiktok_url: string | null
           updated_at: string
           user_id: string
           workspace_type: string
         }
         Insert: {
+          business_model?: string | null
           created_at?: string
           custom_framework?: string | null
           default_reply_mode?: string
@@ -695,15 +699,18 @@ export type Database = {
           is_active?: boolean
           name: string
           niche_description?: string | null
+          positioning?: string | null
           products_detected?: string | null
           profile_analysis?: string | null
           store_url?: string | null
+          target_audience?: string | null
           tiktok_url?: string | null
           updated_at?: string
           user_id: string
           workspace_type?: string
         }
         Update: {
+          business_model?: string | null
           created_at?: string
           custom_framework?: string | null
           default_reply_mode?: string
@@ -712,9 +719,11 @@ export type Database = {
           is_active?: boolean
           name?: string
           niche_description?: string | null
+          positioning?: string | null
           products_detected?: string | null
           profile_analysis?: string | null
           store_url?: string | null
+          target_audience?: string | null
           tiktok_url?: string | null
           updated_at?: string
           user_id?: string

@@ -958,7 +958,34 @@ export default function Chats() {
               </DialogContent>
             </Dialog>
           </div>
-          <p className="text-xs text-muted-foreground">Workspace: {activeWorkspace.name}</p>
+          <div className="px-3 py-1">
+            <Select value={activeWorkspace?.id || ""} onValueChange={(wsId) => {
+              // Set new active workspace
+              const switchWorkspace = async () => {
+                if (!user) return;
+                await supabase.from("workspaces").update({ is_active: false }).eq("user_id", user.id);
+                await supabase.from("workspaces").update({ is_active: true }).eq("id", wsId);
+                queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+                queryClient.invalidateQueries({ queryKey: ["prospects"] });
+                navigate("/chats");
+              };
+              switchWorkspace();
+            }}>
+              <SelectTrigger className="h-7 text-xs">
+                <SelectValue placeholder="Select workspace" />
+              </SelectTrigger>
+              <SelectContent>
+                {workspaces?.map((ws: any) => (
+                  <SelectItem key={ws.id} value={ws.id}>
+                    <span className="flex items-center gap-1">
+                      {ws.workspace_type === "expert" ? <Briefcase className="h-3 w-3" /> : <Heart className="h-3 w-3" />}
+                      {ws.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         <ScrollArea className="flex-1">

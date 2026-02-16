@@ -26,6 +26,10 @@ export default function Workspaces() {
   const [storeUrl, setStoreUrl] = useState("");
   const [customFramework, setCustomFramework] = useState("");
   const [linkedFriendIds, setLinkedFriendIds] = useState<string[]>([]);
+  // Expert-specific fields
+  const [targetAudience, setTargetAudience] = useState("");
+  const [businessModel, setBusinessModel] = useState("");
+  const [positioning, setPositioning] = useState("");
 
   const { data: workspaces } = useQuery({
     queryKey: ["workspaces"],
@@ -44,6 +48,7 @@ export default function Workspaces() {
   const resetForm = () => {
     setName(""); setNicheDescription(""); setInstagramUrl(""); setTiktokUrl("");
     setStoreUrl(""); setCustomFramework(""); setWorkspaceType("friend"); setLinkedFriendIds([]);
+    setTargetAudience(""); setBusinessModel(""); setPositioning("");
   };
 
   const createWorkspace = useMutation({
@@ -58,6 +63,9 @@ export default function Workspaces() {
         store_url: storeUrl || null,
         default_reply_mode: workspaceType,
         custom_framework: customFramework || null,
+        target_audience: targetAudience || null,
+        business_model: businessModel || null,
+        positioning: positioning || null,
         is_active: !workspaces?.length,
       } as any).select().single();
       if (error) throw error;
@@ -189,40 +197,65 @@ export default function Workspaces() {
                 <Input value={storeUrl} onChange={(e) => setStoreUrl(e.target.value)} placeholder="https://yourstore.com" />
               </div>
 
+              {/* Expert-specific fields */}
+              {workspaceType === "expert" && (
+                <>
+                  <div>
+                    <Label>Target Audience *</Label>
+                    <Input value={targetAudience} onChange={(e) => setTargetAudience(e.target.value)} placeholder="e.g., Female entrepreneurs aged 25-40 in health & wellness" />
+                  </div>
+                  <div>
+                    <Label>Business Model</Label>
+                    <Input value={businessModel} onChange={(e) => setBusinessModel(e.target.value)} placeholder="e.g., Coaching, SaaS, E-commerce, Agency" />
+                  </div>
+                  <div>
+                    <Label>Market Positioning</Label>
+                    <Input value={positioning} onChange={(e) => setPositioning(e.target.value)} placeholder="e.g., Premium done-for-you funnel building for coaches" />
+                  </div>
+                </>
+              )}
+
               {/* Custom Framework */}
               <div>
-                <Label className="text-sm font-semibold">Custom Conversation Framework / Reply Guide</Label>
+                <Label className="text-sm font-semibold">
+                  {workspaceType === "expert" ? "Strategy & Consultation Framework" : "Custom Conversation Framework / Reply Guide"}
+                </Label>
                 <p className="text-xs text-muted-foreground mb-2">
-                  Paste your custom reply framework here (F.R.I.E.N.D method, scripts, closing strategy, tone rules, etc.)
+                  {workspaceType === "expert"
+                    ? "Paste your strategy framework, marketing steps, funnel creation process, audit checklist, etc."
+                    : "Paste your custom reply framework here (F.R.I.E.N.D method, scripts, closing strategy, tone rules, etc.)"}
                 </p>
                 <Textarea
                   value={customFramework}
                   onChange={(e) => setCustomFramework(e.target.value)}
-                  placeholder="Example: Always start with 'I Was You' story... Use these 5 scripts for price objections... Tone must be big-sister energy..."
+                  placeholder={workspaceType === "expert"
+                    ? "Example: Step 1: Website Audit... Step 2: Funnel Strategy... Step 3: Marketing Roadmap..."
+                    : "Example: Always start with 'I Was You' story... Use these 5 scripts for price objections... Tone must be big-sister energy..."}
                   rows={6}
                 />
               </div>
 
               {/* Expert mode: link to friend workspaces */}
-              {workspaceType === "expert" && friendWorkspaces.length > 0 && (
+              {workspaceType === "expert" && (
                 <div>
                   <Label className="flex items-center gap-2">
-                    <Link2 className="h-4 w-4" /> Link to Friend Workspaces
+                    <Link2 className="h-4 w-4" /> Connect to Friend Workspace
                   </Label>
-                  <p className="text-xs text-muted-foreground mb-2">Select friend workspaces whose frameworks this expert workspace can access</p>
-                  <div className="space-y-2 border rounded-md p-3">
-                    {friendWorkspaces.map((fw: any) => (
-                      <label key={fw.id} className="flex items-center gap-2 cursor-pointer text-sm">
-                        <Checkbox checked={linkedFriendIds.includes(fw.id)} onCheckedChange={() => toggleLinkedFriend(fw.id)} />
-                        <Heart className="h-3 w-3 text-pink-500" />
-                        {fw.name}
-                      </label>
-                    ))}
-                  </div>
+                  <p className="text-xs text-muted-foreground mb-2">Select friend workspaces whose leads can be analyzed in this expert workspace. Leave empty if none.</p>
+                  {friendWorkspaces.length > 0 ? (
+                    <div className="space-y-2 border rounded-md p-3">
+                      {friendWorkspaces.map((fw: any) => (
+                        <label key={fw.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                          <Checkbox checked={linkedFriendIds.includes(fw.id)} onCheckedChange={() => toggleLinkedFriend(fw.id)} />
+                          <Heart className="h-3 w-3 text-pink-500" />
+                          {fw.name}
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground italic">No friend workspaces to link yet. Create a friend workspace first.</p>
+                  )}
                 </div>
-              )}
-              {workspaceType === "expert" && friendWorkspaces.length === 0 && (
-                <p className="text-xs text-muted-foreground italic">No friend workspaces to link yet. Create a friend workspace first.</p>
               )}
             </div>
             <DialogFooter>
@@ -282,6 +315,9 @@ export default function Workspaces() {
                   <div><p className="text-muted-foreground text-xs">TikTok</p><p className="truncate text-sm">{workspace.tiktok_url || "Not set"}</p></div>
                   <div><p className="text-muted-foreground text-xs">Store</p><p className="truncate text-sm">{workspace.store_url || "Not set"}</p></div>
                   <div><p className="text-muted-foreground text-xs">Products</p><p className="truncate text-sm">{workspace.products_detected || "Not analyzed"}</p></div>
+                  {(workspace as any).target_audience && <div><p className="text-muted-foreground text-xs">Target Audience</p><p className="truncate text-sm">{(workspace as any).target_audience}</p></div>}
+                  {(workspace as any).business_model && <div><p className="text-muted-foreground text-xs">Business Model</p><p className="truncate text-sm">{(workspace as any).business_model}</p></div>}
+                  {(workspace as any).positioning && <div><p className="text-muted-foreground text-xs">Positioning</p><p className="truncate text-sm">{(workspace as any).positioning}</p></div>}
                 </div>
                 {workspace.custom_framework && (
                   <div className="mt-3 p-3 bg-muted rounded-lg">
