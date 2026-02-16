@@ -21,7 +21,7 @@ import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "@/integrations/supabase/client";
 
-type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url?: string | null; is_edited?: boolean; is_pinned?: boolean; status?: "sending" | "sent" | "delivered" | "read" };
+type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url?: string | null; image_urls?: string[]; is_edited?: boolean; is_pinned?: boolean; status?: "sending" | "sent" | "delivered" | "read" };
 type Conversation = { id: string; title: string; created_at: string; updated_at: string };
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/brain-chat`;
@@ -141,8 +141,8 @@ export default function AiChat() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [editingMsgIdx, setEditingMsgIdx] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
-  const [attachedImage, setAttachedImage] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [attachedImages, setAttachedImages] = useState<File[]>([]);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [linkInput, setLinkInput] = useState("");
   const [showLinkInput, setShowLinkInput] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -332,13 +332,23 @@ export default function AiChat() {
   };
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) { toast.error("Image must be under 5MB"); return; }
-    setAttachedImage(file);
-    const reader = new FileReader();
-    reader.onload = () => setImagePreview(reader.result as string);
-    reader.readAsDataURL(file);
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    const validFiles: File[] = [];
+    for (const file of files) {
+      if (file.size > 5 * 1024 * 1024) { toast.error(`${file.name} is over 5MB`); continue; }
+      validFiles.push(file);
+    }
+    if (attachedImages.length + validFiles.length > 10) {
+      toast.error("Maximum 10 images allowed"); return;
+    }
+    setAttachedImages(prev => [...prev, ...validFiles]);
+    validFiles.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => setImagePreviews(prev => [...prev, reader.result as string]);
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
   };
 
   const uploadImage = async (file: File): Promise<string | null> => {
@@ -407,7 +417,7 @@ export default function AiChat() {
 
   const send = async (overrideText?: string) => {
     const text = (overrideText || input).trim();
-    if (!text && !attachedImage) return;
+    if (!text && attachedImages.length === 0) return;
     if (isLoading) return;
     if (!user) return;
 
@@ -426,21 +436,30 @@ export default function AiChat() {
       setConversations(prev => [data as Conversation, ...prev]);
     }
 
-    let imageUrl: string | null = null;
-    const imageBase64: string | null = imagePreview || null;
-    if (attachedImage) imageUrl = await uploadImage(attachedImage);
+    // Upload all images to storage, keep base64 for display & AI
+    const imageBase64s = [...imagePreviews];
+    let firstImageUrl: string | null = null;
+    for (const file of attachedImages) {
+      const url = await uploadImage(file);
+      if (!firstImageUrl) firstImageUrl = url;
+    }
 
-    // Use base64 for display & AI (works everywhere), store URL in DB for persistence
-    const userMsg: Msg = { role: "user", content: text || "Analyze this image", image_url: imageBase64 || imageUrl, status: "sending" };
+    const userMsg: Msg = {
+      role: "user",
+      content: text || `Analyze ${imageBase64s.length > 1 ? "these images" : "this image"}`,
+      image_url: firstImageUrl,
+      image_urls: imageBase64s.length > 0 ? imageBase64s : undefined,
+      status: "sending",
+    };
     setMessages(prev => [...prev, userMsg]);
     setInput("");
-    setAttachedImage(null);
-    setImagePreview(null);
+    setAttachedImages([]);
+    setImagePreviews([]);
     setIsLoading(true);
 
     const { data: savedMsg } = await supabase
       .from("ai_chat_messages")
-      .insert({ conversation_id: convId, user_id: user.id, role: "user", content: userMsg.content, image_url: imageUrl })
+      .insert({ conversation_id: convId, user_id: user.id, role: "user", content: userMsg.content, image_url: firstImageUrl })
       .select().single();
     if (savedMsg) {
       userMsg.id = savedMsg.id;
@@ -468,12 +487,17 @@ export default function AiChat() {
     };
 
     const aiMessages = await Promise.all([...messages, userMsg].map(async (m) => {
-      if (m.image_url && m.role === "user") {
-        let imgData = m.image_url;
-        if (!imgData.startsWith("data:")) {
-          try { imgData = await imageUrlToBase64(imgData); } catch { /* keep original */ }
+      const imgs = m.image_urls || (m.image_url ? [m.image_url] : []);
+      if (imgs.length > 0 && m.role === "user") {
+        const parts: any[] = [{ type: "text", text: m.content }];
+        for (const img of imgs) {
+          let imgData = img;
+          if (!imgData.startsWith("data:")) {
+            try { imgData = await imageUrlToBase64(imgData); } catch { /* keep original */ }
+          }
+          parts.push({ type: "image_url", image_url: { url: imgData } });
         }
-        return { role: m.role, content: [{ type: "text", text: m.content }, { type: "image_url", image_url: { url: imgData } }] };
+        return { role: m.role, content: parts };
       }
       return { role: m.role, content: m.content };
     }));
@@ -812,7 +836,13 @@ export default function AiChat() {
             {messages.map((msg, i) => (
               <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[85%] rounded-lg p-3 relative group ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                  {msg.image_url && <img src={msg.image_url} alt="Attached" className="rounded-md mb-2 max-h-48 object-cover" />}
+                  {(msg.image_urls || (msg.image_url ? [msg.image_url] : [])).length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-2">
+                      {(msg.image_urls || [msg.image_url!]).map((url, imgIdx) => (
+                        <img key={imgIdx} src={url} alt={`Attached ${imgIdx + 1}`} className="rounded-md max-h-48 object-cover" />
+                      ))}
+                    </div>
+                  )}
                   {editingMsgIdx === i ? (
                     <div className="space-y-2">
                       <Textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="bg-background text-foreground min-h-[60px]" autoFocus />
@@ -878,14 +908,19 @@ export default function AiChat() {
           </div>
         </ScrollArea>
 
-        {imagePreview && (
-          <div className="px-4 pb-1">
-            <div className="relative inline-block">
-              <img src={imagePreview} alt="Preview" className="h-16 rounded-md border" />
-              <button onClick={() => { setAttachedImage(null); setImagePreview(null); }} className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center text-xs">
-                <X className="h-3 w-3" />
-              </button>
-            </div>
+        {imagePreviews.length > 0 && (
+          <div className="px-4 pb-1 flex gap-2 flex-wrap">
+            {imagePreviews.map((preview, idx) => (
+              <div key={idx} className="relative inline-block">
+                <img src={preview} alt={`Preview ${idx + 1}`} className="h-16 rounded-md border" />
+                <button onClick={() => {
+                  setAttachedImages(prev => prev.filter((_, i) => i !== idx));
+                  setImagePreviews(prev => prev.filter((_, i) => i !== idx));
+                }} className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center text-xs">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -912,7 +947,7 @@ export default function AiChat() {
               </Button>
             </div>
             <Textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder={isRecording ? "Listening... speak now" : "Ask your Sales Brain anything..."} className="min-h-[50px] max-h-[150px] resize-none flex-1" onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={isLoading} />
-            <Button onClick={() => send()} disabled={(!input.trim() && !attachedImage) || isLoading} className="self-end">
+            <Button onClick={() => send()} disabled={(!input.trim() && attachedImages.length === 0) || isLoading} className="self-end">
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>
           </div>
@@ -921,7 +956,7 @@ export default function AiChat() {
           </p>
         </div>
 
-        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
+        <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleImageSelect} />
         <input ref={pdfInputRef} type="file" accept=".pdf" className="hidden" onChange={handlePdfUpload} />
       </div>
       )}
