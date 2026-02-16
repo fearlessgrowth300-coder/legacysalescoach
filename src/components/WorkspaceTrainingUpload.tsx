@@ -59,7 +59,7 @@ export default function WorkspaceTrainingUpload({ workspaceId, userId }: Props) 
         body: {
           workspaceId,
           trainingDataId: (inserted as any).id,
-          content: content.substring(0, 20000),
+          content: content.substring(0, 50000),
           title,
           type,
         },

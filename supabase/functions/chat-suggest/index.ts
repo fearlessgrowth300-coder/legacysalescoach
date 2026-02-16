@@ -530,15 +530,25 @@ serve(async (req) => {
       .order("created_at", { ascending: false })
       .limit(10);
 
-    // 5. Pull workspace conversation chunks (private to this workspace)
+    // 5. Pull workspace conversation chunks (private to this workspace) — includes training data
     const { data: wsConvoChunks } = await supabase
       .from("knowledge_chunks")
       .select("content, category, source_type, trigger_phrases")
       .eq("user_id", user.id)
       .eq("workspace_id", prospect.workspace_id)
-      .eq("source_type", "conversation")
+      .in("source_type", ["conversation", "training_conversation"])
       .order("relevance_score", { ascending: false })
-      .limit(10);
+      .limit(15);
+
+    // 6. Pull actual training conversation examples for this workspace
+    const { data: trainingExamples } = await supabase
+      .from("workspace_training_data")
+      .select("content, title, style_analysis")
+      .eq("workspace_id", prospect.workspace_id)
+      .eq("status", "ready")
+      .not("content", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(5);
 
     // Score and rank CORE chunks by relevance to current context
     const queryTerms = brainQuery.toLowerCase().split(/\s+/).filter(t => t.length > 3);
@@ -573,6 +583,18 @@ serve(async (req) => {
     if (brainInsights && brainInsights.length > 0) {
       brainChunksFormatted += "\n\n[LEARNED INSIGHTS FROM THIS WORKSPACE'S CONVERSATIONS]:\n" + 
         brainInsights.slice(0, 5).map((ins: any) => `- ${ins.insight} (from: ${ins.source || "conversation"})`).join("\n");
+    }
+
+    // Add actual training conversation examples so AI can match exact patterns
+    if (trainingExamples && trainingExamples.length > 0) {
+      brainChunksFormatted += "\n\n===== TRAINING CONVERSATION EXAMPLES (MATCH THIS EXACT STYLE) =====\n";
+      brainChunksFormatted += "These are REAL conversations the user had. Study them carefully and replicate the EXACT tone, message length, emoji usage, and conversation flow:\n\n";
+      for (const ex of trainingExamples) {
+        const content = (ex.content as string) || "";
+        brainChunksFormatted += `--- "${ex.title}" ---\n${content.substring(0, 4000)}\n\n`;
+      }
+      brainChunksFormatted += "===== END TRAINING EXAMPLES =====\n";
+      brainChunksFormatted += "CRITICAL: Your reply MUST sound like it came from the same person who wrote the messages above. Match their exact patterns.\n";
     }
 
     const knowledgeContext = "";

@@ -43,7 +43,7 @@ serve(async (req) => {
     const stylePrompt = `Analyze these conversation examples and extract a detailed STYLE FINGERPRINT. This will be used to make AI-generated replies match this exact conversational style.
 
 CONVERSATION EXAMPLES:
-${content.substring(0, 20000)}
+${content.substring(0, 50000)}
 
 Extract and return this EXACT JSON:
 {
