@@ -14,12 +14,111 @@ function getCorsHeaders(req: Request) {
 
 const MAX_MESSAGE_LENGTH = 4000;
 
+function buildFrameworkConstraints(parsedFramework: any): string {
+  if (!parsedFramework) return "";
+
+  const sections: string[] = [];
+  sections.push("\n===== FRAMEWORK CONSTRAINT ENGINE (ENFORCED ON EVERY REPLY) =====");
+
+  if (parsedFramework.voice_style) {
+    sections.push(`VOICE STYLE: ${parsedFramework.voice_style}`);
+  }
+  if (parsedFramework.identity_mode) {
+    sections.push(`IDENTITY MODE: ${parsedFramework.identity_mode}`);
+  }
+  if (parsedFramework.never_rules?.length) {
+    sections.push(`\n🚫 NEVER RULES (VIOLATION = IMMEDIATE REJECTION):`);
+    parsedFramework.never_rules.forEach((r: string) => sections.push(`  ✗ NEVER: ${r}`));
+  }
+  if (parsedFramework.always_rules?.length) {
+    sections.push(`\n✅ ALWAYS RULES (MUST BE PRESENT IN EVERY REPLY):`);
+    parsedFramework.always_rules.forEach((r: string) => sections.push(`  ✓ ALWAYS: ${r}`));
+  }
+  if (parsedFramework.forbidden_behaviors?.length) {
+    sections.push(`\n🚫 FORBIDDEN BEHAVIORS:`);
+    parsedFramework.forbidden_behaviors.forEach((b: string) => sections.push(`  ✗ ${b}`));
+  }
+  if (parsedFramework.mandatory_behaviors?.length) {
+    sections.push(`\n✅ MANDATORY BEHAVIORS:`);
+    parsedFramework.mandatory_behaviors.forEach((b: string) => sections.push(`  ✓ ${b}`));
+  }
+  if (parsedFramework.step_flow?.length) {
+    sections.push(`\nEMOTIONAL FLOW SEQUENCE (follow in order):`);
+    parsedFramework.step_flow.forEach((s: any) => {
+      sections.push(`  Step ${s.step}: ${s.name} — ${s.description}${s.triggers ? ` (Trigger: ${s.triggers})` : ""}`);
+    });
+  }
+  if (parsedFramework.objection_map && Object.keys(parsedFramework.objection_map).length) {
+    sections.push(`\nOBJECTION MAP:`);
+    for (const [objection, handler] of Object.entries(parsedFramework.objection_map)) {
+      sections.push(`  "${objection}" → ${handler}`);
+    }
+  }
+  if (parsedFramework.emotional_hooks?.length) {
+    sections.push(`\nEMOTIONAL HOOKS: ${parsedFramework.emotional_hooks.join(" | ")}`);
+  }
+  if (parsedFramework.cta_style) {
+    sections.push(`CTA STYLE: ${parsedFramework.cta_style}`);
+  }
+  if (parsedFramework.tag_triggers && Object.keys(parsedFramework.tag_triggers).length) {
+    sections.push(`\nTAG TRIGGERS:`);
+    for (const [trigger, response] of Object.entries(parsedFramework.tag_triggers)) {
+      sections.push(`  When: "${trigger}" → Do: ${response}`);
+    }
+  }
+  if (parsedFramework.canned_scripts?.length) {
+    sections.push(`\nCANNED SCRIPTS:`);
+    parsedFramework.canned_scripts.forEach((s: any) => {
+      sections.push(`  Situation: ${s.situation}\n  Script: ${s.script}`);
+    });
+  }
+  if (parsedFramework.pricing_scripts?.length) {
+    sections.push(`\nPRICING SCRIPTS: ${parsedFramework.pricing_scripts.join(" | ")}`);
+  }
+  if (parsedFramework.urgency_phrasing?.length) {
+    sections.push(`\nURGENCY PHRASING: ${parsedFramework.urgency_phrasing.join(" | ")}`);
+  }
+  if (parsedFramework.followup_cadence) {
+    sections.push(`FOLLOW-UP CADENCE: ${parsedFramework.followup_cadence}`);
+  }
+
+  sections.push("\n===== END FRAMEWORK CONSTRAINTS =====");
+  sections.push("\nCRITICAL: Before outputting any reply, verify it passes ALL constraints above. If a reply violates a NEVER rule or misses an ALWAYS rule, regenerate it.");
+
+  return sections.join("\n");
+}
+
+function buildStyleInstructions(styleVector: any): string {
+  if (!styleVector) return "";
+
+  const parts: string[] = [];
+  parts.push("\n===== CONVERSATIONAL STYLE FINGERPRINT (MATCH THIS STYLE) =====");
+  if (styleVector.avg_message_length) parts.push(`Message Length: ${styleVector.avg_message_length}`);
+  if (styleVector.question_density) parts.push(`Question Density: ${styleVector.question_density}`);
+  if (styleVector.emoji_pattern) parts.push(`Emoji Usage: ${styleVector.emoji_pattern}`);
+  if (styleVector.emoji_favorites?.length) parts.push(`Favorite Emojis: ${styleVector.emoji_favorites.join(" ")}`);
+  if (styleVector.emotional_tone) parts.push(`Emotional Tone: ${styleVector.emotional_tone}`);
+  if (styleVector.cta_softness) parts.push(`CTA Softness: ${styleVector.cta_softness}`);
+  if (styleVector.vocabulary_level) parts.push(`Vocabulary Level: ${styleVector.vocabulary_level}`);
+  if (styleVector.opening_style) parts.push(`Opening Style: ${styleVector.opening_style}`);
+  if (styleVector.closing_style) parts.push(`Closing Style: ${styleVector.closing_style}`);
+  if (styleVector.vulnerability_level) parts.push(`Vulnerability Level: ${styleVector.vulnerability_level}`);
+  if (styleVector.power_phrases?.length) parts.push(`Power Phrases to Use: "${styleVector.power_phrases.slice(0, 8).join('", "')}"`);
+  if (styleVector.transition_phrases?.length) parts.push(`Transition Phrases: "${styleVector.transition_phrases.slice(0, 6).join('", "')}"`);
+  if (styleVector.overall_personality) parts.push(`Overall Personality: ${styleVector.overall_personality}`);
+  parts.push("===== END STYLE FINGERPRINT =====");
+  parts.push("IMPORTANT: Match this style in message length, emoji usage, tone, and phrasing.");
+  return parts.join("\n");
+}
+
 function buildFriendModeInstructions(workspace: any, brainChunks?: string, personaData?: any): string {
   const niche = workspace?.niche_description || "digital marketing";
   const profileAnalysis = workspace?.profile_analysis || "";
   const productsDetected = workspace?.products_detected || "";
   const workspaceName = workspace?.name || "Business";
   const customFramework = workspace?.custom_framework || "";
+  const parsedFramework = workspace?.parsed_framework || null;
+  const styleVector = workspace?.style_vector || null;
 
   // Use workspace persona if available, otherwise fallback to defaults
   const tone = personaData?.tone || "Warm, relatable";
@@ -64,9 +163,19 @@ RULES:
 - NEVER mention other workspaces, other niches, or conversations from other prospects
 ` : "";
 
-  // ===== CUSTOM FRAMEWORK (PRIMARY RULE) =====
+  // ===== CUSTOM FRAMEWORK (PRIMARY RULE) — use parsed structured version if available =====
   let frameworkSection = "";
-  if (customFramework.trim()) {
+  if (parsedFramework && Object.keys(parsedFramework).length > 0) {
+    frameworkSection = `
+===== PRIMARY RULE: STRUCTURED CONVERSATION FRAMEWORK (MUST FOLLOW) =====
+This framework has been parsed into enforceable rules. Every reply MUST comply.
+${buildFrameworkConstraints(parsedFramework)}
+`;
+    if (customFramework.trim()) {
+      frameworkSection += `\nORIGINAL FRAMEWORK TEXT (for additional context):\n${customFramework.substring(0, 3000)}\n`;
+    }
+    frameworkSection += `CRITICAL: This structured framework overrides ALL default conversation patterns. Follow every rule. Only supplement with core brain principles where the framework doesn't explicitly cover a scenario.\n===== END CUSTOM FRAMEWORK =====\n`;
+  } else if (customFramework.trim()) {
     frameworkSection = `
 ===== PRIMARY RULE: CUSTOM CONVERSATION FRAMEWORK (MUST FOLLOW) =====
 The user has provided their own conversation framework for this workspace. This is YOUR PRIMARY GUIDE. Follow it EXACTLY before applying any other principles.
@@ -77,7 +186,6 @@ CRITICAL: This custom framework overrides ALL default conversation patterns. Fol
 ===== END CUSTOM FRAMEWORK =====
 `;
   } else {
-    // Fallback: basic friend mode instructions when no custom framework is provided
     frameworkSection = `
 ===== DEFAULT FRIEND MODE GUIDELINES =====
 Since no custom framework was provided for this workspace, use these default guidelines:
@@ -102,6 +210,9 @@ END every reply with ONE question that moves the conversation forward.
 `;
   }
 
+  // Style fingerprint from training data
+  const styleInstructions = buildStyleInstructions(styleVector);
+
   return `ROLE & IDENTITY:
 ${persona}
 
@@ -114,6 +225,7 @@ Niche: ${niche}
 
 CRITICAL RULE: You do NOT sell. You do NOT pitch. You do NOT push.
 ${frameworkSection}
+${styleInstructions}
 ${brainGroundingInstructions}
 
 ===== URGENCY TRIGGERS (Internal Pressure, NOT External) =====
@@ -135,6 +247,8 @@ Use these to create urgency WITHOUT looking desperate:
 
 END every reply with ONE question that moves the conversation forward. Make it a question that's hard to ignore.`;
 }
+
+// Expert mode is now included in the buildExpertModeInstructions above
 
 function buildExpertModeInstructions(workspace: any, brainChunks?: string, personaData?: any): string {
   const niche = workspace?.niche_description || "business consulting";

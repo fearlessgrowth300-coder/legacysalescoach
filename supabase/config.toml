@@ -38,3 +38,9 @@ verify_jwt = false
 
 [functions.brain-chat]
 verify_jwt = false
+
+[functions.parse-framework]
+verify_jwt = false
+
+[functions.analyze-training-data]
+verify_jwt = false
