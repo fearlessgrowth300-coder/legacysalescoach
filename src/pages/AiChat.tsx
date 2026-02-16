@@ -436,19 +436,19 @@ export default function AiChat() {
       setConversations(prev => [data as Conversation, ...prev]);
     }
 
-    // Upload all images to storage, keep base64 for display & AI
-    const imageBase64s = [...imagePreviews];
-    let firstImageUrl: string | null = null;
+    // Upload all images to storage — use URLs for AI payload (edge fn converts to base64)
+    const displayPreviews = [...imagePreviews]; // base64 for instant UI display
+    const uploadedUrls: string[] = [];
     for (const file of attachedImages) {
       const url = await uploadImage(file);
-      if (!firstImageUrl) firstImageUrl = url;
+      if (url) uploadedUrls.push(url);
     }
 
     const userMsg: Msg = {
       role: "user",
-      content: text || `Analyze ${imageBase64s.length > 1 ? "these images" : "this image"}`,
-      image_url: firstImageUrl,
-      image_urls: imageBase64s.length > 0 ? imageBase64s : undefined,
+      content: text || `Analyze ${displayPreviews.length > 1 ? "these images" : "this image"}`,
+      image_url: uploadedUrls[0] || null,
+      image_urls: displayPreviews.length > 0 ? displayPreviews : undefined, // base64 for UI only
       status: "sending",
     };
     setMessages(prev => [...prev, userMsg]);
@@ -459,7 +459,7 @@ export default function AiChat() {
 
     const { data: savedMsg } = await supabase
       .from("ai_chat_messages")
-      .insert({ conversation_id: convId, user_id: user.id, role: "user", content: userMsg.content, image_url: firstImageUrl })
+      .insert({ conversation_id: convId, user_id: user.id, role: "user", content: userMsg.content, image_url: uploadedUrls[0] || null })
       .select().single();
     if (savedMsg) {
       userMsg.id = savedMsg.id;
@@ -486,16 +486,20 @@ export default function AiChat() {
       });
     };
 
-    const aiMessages = await Promise.all([...messages, userMsg].map(async (m) => {
-      const imgs = m.image_urls || (m.image_url ? [m.image_url] : []);
+    const aiMessages = await Promise.all([...messages, userMsg].map(async (m, idx) => {
+      // For the message we just sent, use uploaded storage URLs (not base64)
+      const isCurrentMsg = idx === messages.length;
+      let imgs: string[] = [];
+      if (isCurrentMsg && uploadedUrls.length > 0) {
+        imgs = uploadedUrls; // storage URLs — edge fn converts to base64 server-side
+      } else {
+        // For older messages, use stored image_url (storage URL)
+        imgs = m.image_url ? [m.image_url] : [];
+      }
       if (imgs.length > 0 && m.role === "user") {
         const parts: any[] = [{ type: "text", text: m.content }];
         for (const img of imgs) {
-          let imgData = img;
-          if (!imgData.startsWith("data:")) {
-            try { imgData = await imageUrlToBase64(imgData); } catch { /* keep original */ }
-          }
-          parts.push({ type: "image_url", image_url: { url: imgData } });
+          parts.push({ type: "image_url", image_url: { url: img } });
         }
         return { role: m.role, content: parts };
       }
