@@ -134,10 +134,54 @@ serve(async (req) => {
       });
     }
 
-    // ─── RAG: Retrieve ONLY Core Knowledge (videos, PDFs, extracted principles) ───
-    // ZERO access to workspace data, conversations, or prospect messages
+    // ─── RAG: sales_brain FIRST, then knowledge_chunks as supplementary ───
 
-    // Fetch CORE KNOWLEDGE chunks (global — no workspace_id, uploaded content only)
+    // Extract last user message text for title matching
+    const lastUserMsg = [...validatedMessages].reverse().find((m: any) => m.role === "user");
+    const queryText = typeof lastUserMsg?.content === "string" ? lastUserMsg.content :
+      (Array.isArray(lastUserMsg?.content) ? lastUserMsg.content.map((p: any) => p.text || "").join(" ") : "");
+
+    // 1) Title-exact-match: if query mentions a source title, prioritize those principles
+    let titleMatchPrinciples: any[] = [];
+    if (queryText.length > 3) {
+      const { data: kbItems } = await supabase
+        .from("knowledge_base_items")
+        .select("id, title")
+        .eq("user_id", user.id);
+      const matchedIds = (kbItems || [])
+        .filter((k: any) => queryText.toLowerCase().includes(k.title.toLowerCase()))
+        .map((k: any) => k.id);
+      if (matchedIds.length > 0) {
+        const { data: matched } = await supabase
+          .from("sales_brain")
+          .select("principle_name, what_i_learned, how_to_apply, source_name, category, source_type, relevance_score")
+          .eq("user_id", user.id)
+          .in("source_id", matchedIds)
+          .order("relevance_score", { ascending: false, nullsFirst: false })
+          .limit(15);
+        titleMatchPrinciples = matched || [];
+      }
+    }
+
+    // 2) General sales_brain retrieval — top 15 by relevance_score
+    const titleMatchIds = new Set(titleMatchPrinciples.map((p: any) => p.principle_name));
+    const generalLimit = Math.max(5, 15 - titleMatchPrinciples.length);
+    const { data: corePrinciples } = await supabase
+      .from("sales_brain")
+      .select("principle_name, what_i_learned, how_to_apply, source_name, category, source_type, relevance_score")
+      .eq("user_id", user.id)
+      .is("workspace_id", null)
+      .order("relevance_score", { ascending: false, nullsFirst: false })
+      .limit(generalLimit);
+
+    // Merge: title matches first, then general (deduplicated)
+    const allPrinciples = [...titleMatchPrinciples];
+    for (const p of (corePrinciples || [])) {
+      if (!titleMatchIds.has(p.principle_name)) allPrinciples.push(p);
+    }
+    const principles = allPrinciples.slice(0, 15);
+
+    // 3) Supplementary knowledge_chunks
     const { data: coreChunks } = await supabase
       .from("knowledge_chunks")
       .select("content, category, source_type, source_id")
@@ -145,19 +189,9 @@ serve(async (req) => {
       .is("workspace_id", null)
       .in("source_type", ["core_knowledge", "content", "video", "pdf"])
       .order("relevance_score", { ascending: false })
-      .limit(20);
-
-    // Fetch CORE sales_brain principles (global — no workspace_id, only extracted principles)
-    const { data: corePrinciples } = await supabase
-      .from("sales_brain")
-      .select("principle_name, what_i_learned, how_to_apply, source_name, category, source_type")
-      .eq("user_id", user.id)
-      .is("workspace_id", null)
-      .in("source_type", ["core_knowledge", "sales_principle", "content"])
-      .limit(20);
+      .limit(10);
 
     const chunks = coreChunks || [];
-    const principles = corePrinciples || [];
 
     // Fetch source names for chunks
     const sourceIds = [...new Set(chunks.map((c: any) => c.source_id).filter(Boolean))];
@@ -172,15 +206,15 @@ serve(async (req) => {
       }
     }
 
-    // Build brain context from CORE KNOWLEDGE ONLY
+    // Build brain context — PRINCIPLES FIRST
+    const principlesContext = principles.map((p: any) =>
+      `[Principle: ${p.principle_name}] [Source: ${p.source_name}] [Category: ${p.category}] [Relevance: ${p.relevance_score ?? 70}]\nWhat I Learned: ${p.what_i_learned}\nHow to Apply: ${p.how_to_apply}`
+    ).join("\n\n");
+
     const chunksContext = chunks.map((c: any) => {
       const sourceName = c.source_id ? sourceMap[c.source_id] || c.source_type : c.source_type;
       return `[Source: ${sourceName}] [Category: ${c.category}]\n${c.content}`;
     }).join("\n\n");
-
-    const principlesContext = principles.map((p: any) =>
-      `[Principle: ${p.principle_name}] [Source: ${p.source_name}] [Category: ${p.category}]\nWhat I Learned: ${p.what_i_learned}\nHow to Apply: ${p.how_to_apply}`
-    ).join("\n\n");
 
     const totalChunks = chunks.length + principles.length;
     const sourceTypes = new Set<string>();
