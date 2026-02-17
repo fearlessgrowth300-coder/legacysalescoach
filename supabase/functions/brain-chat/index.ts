@@ -11,7 +11,7 @@ function getCorsHeaders(req: Request) {
 }
 
 const MAX_MESSAGE_LENGTH = 30000;
-const MAX_MESSAGES = 50;
+const MAX_MESSAGES = 200;
 const MAX_TOTAL_CHARS = 120000;
 
 serve(async (req) => {
