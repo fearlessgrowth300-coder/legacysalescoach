@@ -1,89 +1,84 @@
 
 
-# Fix All "Failed to Fetch" Errors + Instagram Apify Integration + OTP Sign Up
+# Clean Up Sales Brain + Fix Embedding Errors + Re-Process All Uploads
 
-## Issues Found
+## Root Cause of the Error
 
-### 1. CORS Headers Broken on ALL Edge Functions (ROOT CAUSE of "fail to fetch")
-All 4 edge functions (`chat-suggest`, `process-knowledge`, `ocr-screenshot`, `analyze-profile`) have **incomplete CORS headers**. The app uses `@supabase/supabase-js@2.95.3` which sends additional headers (`x-supabase-client-platform`, `x-supabase-client-platform-version`, `x-supabase-client-runtime`, `x-supabase-client-runtime-version`). These are NOT listed in the `Access-Control-Allow-Headers`, so the browser blocks the preflight OPTIONS request, causing "Failed to fetch" for every edge function call (workspace creation, PDF upload, URL processing, chat suggestions, etc.).
+The `108d46782f06b3e49fe98201db0f6b69` error traces back to **Embedding API 400 errors** visible in the process-knowledge logs. The function calls the Lovable AI Gateway with model `text-embedding-3-small`, which is returning HTTP 400 for every embedding request. This means:
+- Principles ARE being extracted (10 per upload) but stored WITHOUT embeddings
+- Raw vector chunks fail entirely ("Stored 0 raw embedded chunks")
+- The Brain's semantic search (`match_sales_brain`, `match_knowledge_chunks`) returns nothing because embeddings are null
 
-**Fix**: Update CORS headers in all 4 edge functions to include the full set of allowed headers.
+**The fix**: Switch to a supported embedding model on the gateway, then re-process everything.
 
-### 2. Instagram Scraping via Apify API
-Currently the app tries to scrape Instagram directly with `fetch()`, which Instagram blocks. The user has provided an Apify API key (`apify_api_l4V98dj5TbYLNuh74lfDFk0RhSNGba2g3Cwq`) to use the Instagram Scraper actor instead.
-
-**Fix**: 
-- Store the Apify API key as a secret
-- Create a new `fetch-instagram` edge function that calls Apify's Instagram Profile Scraper
-- Update `process-knowledge` to use this function for Instagram URLs
-- Update the Chats page to fetch prospect details via Apify when an Instagram URL is pasted during new chat creation
-
-### 3. Sign Up: OTP Code Instead of Email Link
-Currently sign up sends a confirmation link. User wants a verification code (OTP) sent to email instead.
-
-**Fix**:
-- Enable auto-confirm on sign up (so users can log in immediately), OR
-- Implement OTP flow: use `supabase.auth.signUp()` then `supabase.auth.verifyOtp()` with a code input screen
-- Update `SignUp.tsx` to show a code verification step after sign up
-
-### 4. New Chat: Auto-fetch Instagram Prospect Details
-When creating a new chat and pasting an Instagram URL, the app should automatically fetch the prospect's bio, interests, and profile info via Apify to generate a better first message.
-
-**Fix**: When a prospect is created with an Instagram URL, call the `fetch-instagram` edge function and save the scraped data (bio, interests, followers) to the prospect record.
+## Current State
+- **sales_brain**: 242 rows (most without working embeddings)
+- **knowledge_base_items**: 129 uploads (91 URLs + 37 PDFs), all status "ready"
+- **sales_brain table**: Missing `relevance_score` column
 
 ---
 
 ## Implementation Steps
 
-### Step 1: Fix CORS on ALL Edge Functions
-Update the `corsHeaders` in all 4 files to:
-```text
-"Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version"
-```
+### Step 1: Add `relevance_score` column to `sales_brain`
+Add a float column `relevance_score` with a default of 70 for better search ranking.
 
-Files: `chat-suggest/index.ts`, `process-knowledge/index.ts`, `ocr-screenshot/index.ts`, `analyze-profile/index.ts`
+### Step 2: Fix the embedding model in `process-knowledge`
+Change the embedding call from `text-embedding-3-small` to a model supported by the Lovable AI Gateway. The gateway supports Google and OpenAI models -- we need to verify which embedding model works and switch to it. If the gateway doesn't support embeddings at all, we'll skip embeddings and rely on text-based retrieval (which the brain-chat function already does).
 
-### Step 2: Add Apify API Key as Secret
-Store `apify_api_l4V98dj5TbYLNuh74lfDFk0RhSNGba2g3Cwq` as `APIFY_API_KEY` secret.
+### Step 3: Create a `reprocess-brain` edge function
+A new backend function that:
+1. Deletes all existing `sales_brain` rows for the authenticated user
+2. Deletes all existing `knowledge_chunks` rows for the user
+3. Fetches all `knowledge_base_items` for the user
+4. For each item: calls the existing `process-knowledge` function internally (or duplicates the extraction logic) to re-extract content and generate 12-15 principles
+5. Returns a report: "Cleaned! Added X new principles from Y uploads."
 
-### Step 3: Create `fetch-instagram` Edge Function
-New edge function that:
-- Takes an Instagram username or URL
-- Calls the Apify Instagram Profile Scraper API
-- Returns bio, follower count, posts, interests, niche info
-- Used by both knowledge base processing and new chat creation
+This function will need a longer timeout since it processes 129 items. To handle this within edge function limits, it will:
+- Process items in batches
+- Use `EdgeRuntime.waitUntil` for background processing
+- Update a status row the frontend can poll
 
-### Step 4: Update `process-knowledge` for Instagram
-Replace the direct Instagram `fetch()` with a call to the Apify-based scraper for much richer data extraction.
+### Step 4: Add a "Re-process Brain" button to the UI
+Add a button (likely in the Knowledge Base or Brain Stats page) that:
+- Calls the `reprocess-brain` function
+- Shows a progress indicator
+- Displays the final report toast: "Cleaned! Added X new principles from Y uploads."
 
-### Step 5: Update Chat Creation with Instagram Auto-Fetch
-In `Chats.tsx`, after creating a prospect with an Instagram URL:
-- Call `fetch-instagram` to get profile details
-- Update the prospect record with scraped bio, interests, detected niche
-- Use this data to inform the AI's first message strategy
-
-### Step 6: Implement OTP Email Verification on Sign Up
-Update `SignUp.tsx`:
-- After `signUp()`, show a code input field
-- User enters the OTP code from their email
-- Call `supabase.auth.verifyOtp({ email, token, type: 'signup' })` to verify
-- On success, navigate to `/chats`
-
-### Step 7: Update `supabase/config.toml`
-Add the new `fetch-instagram` function with `verify_jwt = false`.
-
-### Step 8: Deploy All Edge Functions
-Deploy all updated and new edge functions.
+### Step 5: Deploy and test
 
 ---
 
-## Files to Modify
-1. `supabase/functions/chat-suggest/index.ts` -- Fix CORS headers
-2. `supabase/functions/process-knowledge/index.ts` -- Fix CORS + use Apify for Instagram
-3. `supabase/functions/ocr-screenshot/index.ts` -- Fix CORS headers
-4. `supabase/functions/analyze-profile/index.ts` -- Fix CORS headers (already correct)
-5. `supabase/functions/fetch-instagram/index.ts` -- NEW: Apify Instagram scraper
-6. `supabase/config.toml` -- Add fetch-instagram function
-7. `src/pages/SignUp.tsx` -- Add OTP verification step
-8. `src/pages/Chats.tsx` -- Auto-fetch Instagram details on prospect creation
+## Technical Details
+
+### Database Migration
+```sql
+ALTER TABLE public.sales_brain 
+ADD COLUMN IF NOT EXISTS relevance_score float DEFAULT 70;
+```
+
+### New Edge Function: `reprocess-brain`
+- Authenticates the user
+- Truncates their sales_brain + knowledge_chunks
+- Loops through each knowledge_base_item
+- For videos/URLs: re-fetches transcript via the preview-url function
+- For PDFs: re-downloads from storage and re-extracts via Gemini
+- Generates 12-15 principles per item using the same AI extraction
+- Inserts into sales_brain with full metadata, workspace_id = null
+- Attempts embeddings with corrected model (or skips if unsupported)
+- Returns summary report
+
+### Files to Create/Modify
+1. **Database migration** -- Add `relevance_score` column
+2. **`supabase/functions/reprocess-brain/index.ts`** -- NEW: bulk re-processing function
+3. **`supabase/functions/process-knowledge/index.ts`** -- Fix embedding model
+4. **`supabase/config.toml`** -- Add reprocess-brain function config
+5. **`src/pages/KnowledgeBase.tsx`** or **`src/pages/BrainStats.tsx`** -- Add re-process button + progress UI
+
+### Edge Function Timeout Strategy
+Since 129 items cannot be processed in a single 60s function call, the reprocess-brain function will:
+1. Delete old data immediately
+2. Process items in the foreground (batch of ~5 at a time)
+3. Use streaming response to keep the connection alive
+4. Or: use a job-based approach where it kicks off processing and the frontend polls for completion
 
