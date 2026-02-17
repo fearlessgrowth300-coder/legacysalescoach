@@ -1,18 +1,23 @@
+import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Brain, BookOpen, MessageSquare, Target, Shield,
   Sparkles, TrendingUp, Zap, Heart, Briefcase, FileText, Link,
-  ThumbsUp, Lightbulb, Calendar
+  ThumbsUp, Lightbulb, Calendar, RefreshCw, Loader2
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, isToday, isThisWeek } from "date-fns";
+import { toast } from "sonner";
 
 export default function BrainStats() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const [isReprocessing, setIsReprocessing] = useState(false);
 
   const { data: chunks, isLoading } = useQuery({
     queryKey: ["brain-chunks"],
@@ -88,6 +93,25 @@ export default function BrainStats() {
 
   const tier = getIntelligenceTier(intelligenceLevel);
 
+  const handleReprocessBrain = async () => {
+    if (isReprocessing) return;
+    setIsReprocessing(true);
+    toast.info("Re-processing all uploads... This may take a few minutes.");
+    try {
+      const { data, error } = await supabase.functions.invoke("reprocess-brain");
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast.success(data.message || "Brain re-processed successfully!");
+      queryClient.invalidateQueries({ queryKey: ["brain-chunks"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+      queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
+    } catch (e: any) {
+      toast.error(e.message || "Re-processing failed");
+    } finally {
+      setIsReprocessing(false);
+    }
+  };
+
   const byCategory: Record<string, number> = {};
   chunks?.forEach((c) => { byCategory[c.category] = (byCategory[c.category] || 0) + 1; });
 
@@ -125,11 +149,27 @@ export default function BrainStats() {
   return (
     <div className="px-4 py-6 md:py-8 max-w-4xl mx-auto overflow-x-hidden">
       {/* Header */}
-      <div className="mb-6 md:mb-8">
-        <h1 className="text-xl md:text-2xl font-bold flex items-center gap-2">
-          <Brain className="h-5 w-5 md:h-6 md:w-6 text-primary" />AI Brain Intelligence
-        </h1>
-        <p className="text-sm text-muted-foreground">See how smart your Sales AI has become</p>
+      <div className="mb-6 md:mb-8 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl md:text-2xl font-bold flex items-center gap-2">
+            <Brain className="h-5 w-5 md:h-6 md:w-6 text-primary" />AI Brain Intelligence
+          </h1>
+          <p className="text-sm text-muted-foreground">See how smart your Sales AI has become</p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleReprocessBrain}
+          disabled={isReprocessing}
+          className="shrink-0"
+        >
+          {isReprocessing ? (
+            <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+          ) : (
+            <RefreshCw className="h-4 w-4 mr-1.5" />
+          )}
+          {isReprocessing ? "Re-processing..." : "Re-process Brain"}
+        </Button>
       </div>
 
       {/* Intelligence Level */}

@@ -11,31 +11,10 @@ function getCorsHeaders(req: Request) {
 }
 
 // ===== EMBEDDING GENERATION =====
-async function generateEmbedding(text: string, apiKey: string): Promise<number[] | null> {
-  try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "text-embedding-3-small",
-        input: text.substring(0, 8000),
-        dimensions: 768,
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!response.ok) {
-      console.error("Embedding API error:", response.status);
-      return null;
-    }
-    const data = await response.json();
-    return data.data?.[0]?.embedding || null;
-  } catch (e) {
-    console.error("Embedding generation failed:", e);
-    return null;
-  }
+// Note: The Lovable AI Gateway does not support embedding models.
+// Embeddings are skipped; retrieval uses text-based search instead.
+async function generateEmbedding(_text: string, _apiKey: string): Promise<null> {
+  return null;
 }
 
 // ===== STRUCTURED LEARNINGS EXTRACTION =====

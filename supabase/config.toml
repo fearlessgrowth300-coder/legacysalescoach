@@ -44,3 +44,6 @@ verify_jwt = false
 
 [functions.analyze-training-data]
 verify_jwt = false
+
+[functions.reprocess-brain]
+verify_jwt = false
