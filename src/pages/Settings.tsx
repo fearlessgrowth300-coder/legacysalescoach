@@ -54,13 +54,13 @@ export default function Settings() {
   };
 
   return (
-    <div className="container py-8 max-w-2xl">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <SettingsIcon className="h-6 w-6 text-primary" />
+    <div className="px-4 py-6 overflow-x-hidden">
+      <div className="mb-6">
+        <h1 className="text-xl font-bold flex items-center gap-2">
+          <SettingsIcon className="h-5 w-5 text-primary" />
           Settings
         </h1>
-        <p className="text-muted-foreground">Manage your app configuration and API keys</p>
+        <p className="text-sm text-muted-foreground">Manage your configuration and API keys</p>
       </div>
 
       <div className="space-y-6">

@@ -65,7 +65,7 @@ export default function Analytics() {
 
   if (!activeWorkspace) {
     return (
-      <div className="container py-8 max-w-4xl">
+      <div className="px-4 py-6">
         <Card>
           <CardContent className="py-12 text-center">
             <Target className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
@@ -123,15 +123,15 @@ export default function Analytics() {
   const totalConversationsTracked = analytics?.length || 0;
 
   return (
-    <div className="container py-8 max-w-5xl space-y-8">
+    <div className="px-4 py-6 space-y-4 overflow-x-hidden">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <BarChart3 className="h-6 w-6 text-primary" />Analytics & AI Learning
+        <h1 className="text-xl font-bold flex items-center gap-2">
+          <BarChart3 className="h-5 w-5 text-primary" />Analytics
         </h1>
-        <p className="text-muted-foreground">Track performance for {activeWorkspace.name}</p>
+        <p className="text-sm text-muted-foreground">Track performance for {activeWorkspace.name}</p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         <Card><CardContent className="pt-6"><div className="flex items-center gap-3"><div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center"><Users className="h-5 w-5 text-primary" /></div><div><p className="text-2xl font-bold">{total}</p><p className="text-sm text-muted-foreground">Total Prospects</p></div></div></CardContent></Card>
         <Card><CardContent className="pt-6"><div className="flex items-center gap-3"><div className="h-10 w-10 rounded-full bg-green-500/10 flex items-center justify-center"><Trophy className="h-5 w-5 text-green-500" /></div><div><p className="text-2xl font-bold">{won}</p><p className="text-sm text-muted-foreground">Won</p></div></div></CardContent></Card>
         <Card><CardContent className="pt-6"><div className="flex items-center gap-3"><div className="h-10 w-10 rounded-full bg-purple-500/10 flex items-center justify-center"><Brain className="h-5 w-5 text-purple-500" /></div><div><p className="text-2xl font-bold">{totalInsights}</p><p className="text-sm text-muted-foreground">AI Insights</p></div></div></CardContent></Card>
@@ -178,49 +178,47 @@ export default function Analytics() {
       </Card>
 
       {/* Conversation Length Insights */}
-      <div className="grid md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg"><MessageSquare className="h-5 w-5 text-primary" />Avg Messages to Win</CardTitle>
+          <CardHeader className="p-4 pb-2">
+            <CardTitle className="flex items-center gap-1.5 text-sm"><MessageSquare className="h-4 w-4 text-primary" />Avg Msgs to Win</CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold">{avgMsgsWon || "—"}</p>
-            <p className="text-sm text-muted-foreground mt-1">messages per won conversation</p>
+          <CardContent className="p-4 pt-0">
+            <p className="text-2xl font-bold">{avgMsgsWon || "—"}</p>
+            <p className="text-xs text-muted-foreground">per won convo</p>
           </CardContent>
         </Card>
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg"><MessageSquare className="h-5 w-5 text-destructive" />Avg Messages to Loss</CardTitle>
+          <CardHeader className="p-4 pb-2">
+            <CardTitle className="flex items-center gap-1.5 text-sm"><MessageSquare className="h-4 w-4 text-destructive" />Avg Msgs to Loss</CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold">{avgMsgsLost || "—"}</p>
-            <p className="text-sm text-muted-foreground mt-1">messages per lost conversation</p>
+          <CardContent className="p-4 pt-0">
+            <p className="text-2xl font-bold">{avgMsgsLost || "—"}</p>
+            <p className="text-xs text-muted-foreground">per lost convo</p>
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2"><Heart className="h-5 w-5 text-pink-500" />Friend Mode</CardTitle>
-            <CardDescription>Warm, casual conversation style</CardDescription>
+          <CardHeader className="p-4 pb-2">
+            <CardTitle className="flex items-center gap-1.5 text-sm"><Heart className="h-4 w-4 text-pink-500" />Friend</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex justify-between"><span className="text-muted-foreground">Total</span><Badge variant="secondary">{friendMode.length}</Badge></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Won</span><Badge className="bg-green-500">{friendMode.filter((p) => p.outcome === "won").length}</Badge></div>
+          <CardContent className="p-4 pt-0">
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Total</span><Badge variant="secondary" className="text-xs">{friendMode.length}</Badge></div>
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Won</span><Badge className="bg-green-500 text-xs">{friendMode.filter((p) => p.outcome === "won").length}</Badge></div>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2"><Briefcase className="h-5 w-5 text-blue-500" />Expert Mode</CardTitle>
-            <CardDescription>Professional expert style</CardDescription>
+          <CardHeader className="p-4 pb-2">
+            <CardTitle className="flex items-center gap-1.5 text-sm"><Briefcase className="h-4 w-4 text-blue-500" />Expert</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex justify-between"><span className="text-muted-foreground">Total</span><Badge variant="secondary">{expertMode.length}</Badge></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Won</span><Badge className="bg-green-500">{expertMode.filter((p) => p.outcome === "won").length}</Badge></div>
+          <CardContent className="p-4 pt-0">
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Total</span><Badge variant="secondary" className="text-xs">{expertMode.length}</Badge></div>
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Won</span><Badge className="bg-green-500 text-xs">{expertMode.filter((p) => p.outcome === "won").length}</Badge></div>
             </div>
           </CardContent>
         </Card>
