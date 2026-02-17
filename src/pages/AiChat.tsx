@@ -462,8 +462,8 @@ export default function AiChat() {
       setConversations(prev => [data as Conversation, ...prev]);
     }
 
-    // Upload all images to storage in parallel — use URLs for AI payload
-    const displayPreviews = [...imagePreviews]; // base64 for instant UI display
+    // Upload all images to storage in parallel for persistence
+    const displayPreviews = [...imagePreviews]; // base64 data URIs for instant UI display AND for AI
     const uploadResults = await Promise.all(
       attachedImages.map((file, idx) => uploadImage(file, idx))
     );
@@ -478,7 +478,7 @@ export default function AiChat() {
       role: "user",
       content: text || `Analyze ${displayPreviews.length > 1 ? "these images" : "this image"}`,
       image_url: uploadedUrls[0] || null,
-      image_urls: displayPreviews.length > 0 ? displayPreviews : undefined, // base64 for UI only
+      image_urls: displayPreviews.length > 0 ? displayPreviews : undefined,
       status: "sending",
     };
     setMessages(prev => [...prev, userMsg]);
@@ -504,37 +504,48 @@ export default function AiChat() {
     setMessages(prev => prev.map(m => m.id === savedMsg?.id ? { ...m, status: "delivered" as const } : m));
     setIsTyping(true);
 
-    // Convert image URLs to base64 for AI gateway compatibility
-    const imageUrlToBase64 = async (url: string): Promise<string> => {
-      const response = await fetch(url);
-      const blob = await response.blob();
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
+    // Helper: download image from private storage via authenticated supabase client
+    const downloadImageAsBase64 = async (storageUrl: string): Promise<string | null> => {
+      try {
+        const match = storageUrl.match(/chat-screenshots\/(.+)$/);
+        if (!match) return null;
+        const path = match[1];
+        const { data, error } = await supabase.storage.from("chat-screenshots").download(path);
+        if (error || !data) return null;
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(data);
+        });
+      } catch { return null; }
     };
 
-    const aiMessages = await Promise.all([...messages, userMsg].map(async (m, idx) => {
-      // For the message we just sent, use uploaded storage URLs (not base64)
+    // Build AI messages — use base64 data URIs directly (private bucket URLs won't work for edge fn)
+    const allMsgs = [...messages, userMsg];
+    const aiMessages: any[] = [];
+    for (let idx = 0; idx < allMsgs.length; idx++) {
+      const m = allMsgs[idx];
       const isCurrentMsg = idx === messages.length;
-      let imgs: string[] = [];
-      if (isCurrentMsg && uploadedUrls.length > 0) {
-        imgs = uploadedUrls; // storage URLs — edge fn converts to base64 server-side
-      } else {
-        // For older messages, use stored image_url (storage URL)
-        imgs = m.image_url ? [m.image_url] : [];
+
+      let base64Imgs: string[] = [];
+      if (isCurrentMsg && displayPreviews.length > 0) {
+        base64Imgs = displayPreviews;
+      } else if (m.image_url && m.role === "user") {
+        const b64 = await downloadImageAsBase64(m.image_url);
+        if (b64) base64Imgs = [b64];
       }
-      if (imgs.length > 0 && m.role === "user") {
+
+      if (base64Imgs.length > 0 && m.role === "user") {
         const parts: any[] = [{ type: "text", text: m.content }];
-        for (const img of imgs) {
+        for (const img of base64Imgs) {
           parts.push({ type: "image_url", image_url: { url: img } });
         }
-        return { role: m.role, content: parts };
+        aiMessages.push({ role: m.role, content: parts });
+      } else {
+        aiMessages.push({ role: m.role, content: m.content });
       }
-      return { role: m.role, content: m.content };
-    }));
+    }
 
     let assistantSoFar = "";
     const questionText = text;
