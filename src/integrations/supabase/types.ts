@@ -489,6 +489,7 @@ export type Database = {
           id: string
           metadata: Json | null
           principle_name: string
+          relevance_score: number | null
           source_id: string | null
           source_name: string
           source_type: string
@@ -505,6 +506,7 @@ export type Database = {
           id?: string
           metadata?: Json | null
           principle_name: string
+          relevance_score?: number | null
           source_id?: string | null
           source_name: string
           source_type?: string
@@ -521,6 +523,7 @@ export type Database = {
           id?: string
           metadata?: Json | null
           principle_name?: string
+          relevance_score?: number | null
           source_id?: string | null
           source_name?: string
           source_type?: string
