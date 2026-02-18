@@ -161,7 +161,12 @@ RULES:
 - If chunks contain success stories, WEAVE them into your vulnerability stories
 - NEVER say "according to the knowledge base" — speak as if this is YOUR lived experience
 - NEVER mention other workspaces, other niches, or conversations from other prospects
-` : "";
+` : `
+
+===== NO BRAIN KNOWLEDGE AVAILABLE =====
+CRITICAL: If no relevant brain knowledge exists for the reply needed, your reply text MUST be exactly: "0"
+"0" means the brain hasn't learned anything relevant yet. Do NOT make up answers.
+`;
 
   // ===== CUSTOM FRAMEWORK (PRIMARY RULE) — use parsed structured version if available =====
   let frameworkSection = "";
@@ -266,7 +271,12 @@ function buildExpertModeInstructions(workspace: any, brainChunks?: string, perso
 ${brainChunks}
 
 Reference these naturally as expert insights. Never say "according to the knowledge base."
-` : "";
+` : `
+
+===== NO BRAIN KNOWLEDGE AVAILABLE =====
+CRITICAL: If no relevant brain knowledge exists for the reply needed, your reply text MUST be exactly: "0"
+"0" means the brain hasn't learned anything relevant yet. Do NOT make up answers.
+`;
 
   let frameworkSection = "";
   if (customFramework.trim()) {
