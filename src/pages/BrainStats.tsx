@@ -121,29 +121,27 @@ export default function BrainStats() {
     both: chunks?.filter((c) => c.brain_type === "both").length || 0,
   };
 
-  const categoryIcons: Record<string, React.ReactNode> = {
-    opening_lines: <MessageSquare className="h-4 w-4" />,
-    rapport_building: <Heart className="h-4 w-4" />,
-    pain_discovery: <Target className="h-4 w-4" />,
-    objection_handling: <Shield className="h-4 w-4" />,
-    closing_techniques: <Zap className="h-4 w-4" />,
-    trust_building: <Sparkles className="h-4 w-4" />,
-    general: <BookOpen className="h-4 w-4" />,
+  // Dynamic category icons — pick icon based on known keywords, fallback to BookOpen
+  const getCategoryIcon = (cat: string) => {
+    const lower = cat.toLowerCase();
+    if (lower.includes("opening") || lower.includes("message")) return <MessageSquare className="h-4 w-4" />;
+    if (lower.includes("rapport") || lower.includes("trust") || lower.includes("relationship")) return <Heart className="h-4 w-4" />;
+    if (lower.includes("pain") || lower.includes("discovery") || lower.includes("target")) return <Target className="h-4 w-4" />;
+    if (lower.includes("objection") || lower.includes("shield") || lower.includes("handling")) return <Shield className="h-4 w-4" />;
+    if (lower.includes("closing") || lower.includes("close")) return <Zap className="h-4 w-4" />;
+    if (lower.includes("team") || lower.includes("leader")) return <Briefcase className="h-4 w-4" />;
+    if (lower.includes("life") || lower.includes("personal") || lower.includes("growth")) return <Sparkles className="h-4 w-4" />;
+    if (lower.includes("motivation") || lower.includes("mindset")) return <TrendingUp className="h-4 w-4" />;
+    if (lower.includes("network") || lower.includes("prospect")) return <Brain className="h-4 w-4" />;
+    return <BookOpen className="h-4 w-4" />;
   };
 
-  const categoryLabels: Record<string, string> = {
-    opening_lines: "Opening Lines",
-    rapport_building: "Rapport Building",
-    pain_discovery: "Pain Discovery",
-    objection_handling: "Objection Handling",
-    closing_techniques: "Closing Techniques",
-    trust_building: "Trust Building",
-    general: "General Knowledge",
-    audience_insight: "Audience Insights",
-    emotional_trigger: "Emotional Triggers",
-    strategic_question: "Strategic Questions",
-    need_identification: "Need Identification",
-    conversation_pattern: "Conversation Patterns",
+  // Format category name for display: convert snake_case to Title Case, or keep as-is if already Title Case
+  const formatCategoryName = (cat: string) => {
+    if (cat.includes("_")) {
+      return cat.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    }
+    return cat;
   };
 
   return (
@@ -212,11 +210,11 @@ export default function BrainStats() {
         </CardHeader>
         <CardContent className="p-4 sm:p-6 pt-0">
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-4">
-            {Object.entries(byCategory).map(([cat, count]) => (
+            {Object.entries(byCategory).sort((a, b) => b[1] - a[1]).map(([cat, count]) => (
               <div key={cat} className="p-3 sm:p-4 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
                 <div className="flex items-center gap-2 mb-1 sm:mb-2">
-                  {categoryIcons[cat] || <BookOpen className="h-4 w-4" />}
-                  <span className="font-medium text-xs sm:text-sm truncate">{categoryLabels[cat] || cat}</span>
+                  {getCategoryIcon(cat)}
+                  <span className="font-medium text-xs sm:text-sm truncate">{formatCategoryName(cat)}</span>
                 </div>
                 <div className="text-xl sm:text-2xl font-bold">{count}</div>
                 <div className="text-[10px] sm:text-xs text-muted-foreground">chunks</div>

@@ -31,29 +31,38 @@ async function extractStructuredLearnings(content: string, sourceName: string, a
         messages: [
           {
             role: "system",
-            content: `You are a master sales coach. Extract 8-12 clear, actionable learnings from this sales training material.
+            content: `You are an expert knowledge analyst. Extract 8-12 clear, actionable learnings from this training material.
+
+IMPORTANT: This content may NOT be about sales. It could be about leadership, life experiences, motivation, team building, networking, mindset, family, health, or ANY topic. Detect what the content is actually about.
 
 For each learning, output in this exact JSON format:
 [
   {
     "principle_name": "Short name, e.g. Speak Calm & Slow",
     "what_i_learned": "1-2 sentence explanation of the principle",
-    "how_to_apply": "Specific example of how to use this when replying to a prospect in a friends chat",
-    "category": "one of: opening_lines, rapport_building, pain_discovery, objection_handling, closing_techniques, trust_building, prospecting, network_marketing, general"
+    "how_to_apply": "Specific example of how to use this in real life or when advising someone",
+    "category": "auto-detected category name"
   }
 ]
+
+CATEGORY DETECTION RULES:
+- Detect the main category for each insight based on its ACTUAL content
+- If it fits an existing common category, use it: Opening Lines, Rapport Building, Objection Handling, Closing Techniques, Trust Building, Prospecting, Team Leading, Life Experiences, Networking Business, Motivation Mindset, Family Balance, Personal Growth, Leadership, Health & Wellness, Financial Literacy, Content Creation, Social Media Strategy
+- If NONE of these fit, CREATE a new descriptive category name (e.g., "Parenting Wisdom", "Spiritual Growth", "Career Transitions")
+- Use Title Case for category names (e.g., "Team Leading" not "team_leading")
+- NEVER force sales categories onto non-sales content
+- A life experiences video should NOT get "Objection Handling" — it should get "Life Experiences" or "Personal Growth"
 
 RULES:
 - Extract EXACTLY 8-12 learnings, no more, no less
 - Each principle must be ACTIONABLE and SPECIFIC
-- "how_to_apply" must give a concrete example of what to say/do in a DM conversation
-- Focus on psychological techniques, specific phrases, frameworks, and word-for-word scripts when available
-- Categories should accurately reflect the type of sales skill
+- "how_to_apply" must give a concrete example of what to say/do
+- Focus on techniques, specific phrases, frameworks, and word-for-word scripts when available
 - Return ONLY the JSON array, no other text`,
           },
           {
             role: "user",
-            content: `Extract sales learnings from this material titled "${sourceName}":\n\n${content.substring(0, 40000)}`,
+            content: `Extract learnings from this material titled "${sourceName}":\n\n${content.substring(0, 40000)}`,
           },
         ],
         temperature: 0.3,
@@ -154,25 +163,22 @@ serve(async (req) => {
         messages: [
           {
             role: "system",
-            content: `You are a sales & network marketing knowledge extractor. Extract actionable sales and prospecting knowledge from the content below.
+            content: `You are an expert knowledge extractor. Extract actionable knowledge from the content below.
 
-Categorize each insight into one of these categories:
-- opening_lines: Good ways to start conversations
-- rapport_building: How to build trust and connection
-- pain_discovery: How to uncover pain points and needs
-- objection_handling: How to handle objections and resistance
-- closing_techniques: How to close deals and get commitments
-- trust_building: How to establish credibility
-- prospecting: How to find and approach prospects
-- network_marketing: Network marketing specific strategies
-- general: General sales wisdom
+IMPORTANT: This content may be about ANY topic — sales, leadership, life, motivation, team building, networking, mindset, family, health, or anything else. Detect what it's actually about.
+
+CATEGORY DETECTION:
+- Auto-detect the category for each insight based on its actual content
+- Use existing categories if they fit: Opening Lines, Rapport Building, Objection Handling, Closing Techniques, Trust Building, Prospecting, Team Leading, Life Experiences, Networking Business, Motivation Mindset, Family Balance, Personal Growth, Leadership, Content Creation, Social Media Strategy
+- If none fit, CREATE a new descriptive Title Case category name
+- NEVER force sales categories onto non-sales content
 
 Return JSON array of objects with: { "category": "...", "content": "...", "triggerPhrases": "..." }
 Extract 10-25 chunks. Each chunk should be a standalone, actionable insight. 
 For books, extract specific techniques, frameworks, scripts, and word-for-word phrases when available.
 Make each chunk detailed enough to be useful on its own.`
           },
-          { role: "user", content: `Extract sales knowledge from:\n\n${contentToProcess}` }
+          { role: "user", content: `Extract knowledge from:\n\n${contentToProcess}` }
         ],
         temperature: 0.3,
       }),
