@@ -29,7 +29,36 @@ serve(async (req) => {
 
     console.log(`[reprocess-brain] Starting for user ${user.id}`);
 
-    // Step 1: Delete all old sales_brain and knowledge_chunks for this user
+    // ===== STEP 0: Remove duplicate knowledge_base_items (keep latest per title+url) =====
+    const { data: allItems } = await supabase
+      .from("knowledge_base_items")
+      .select("id, title, url, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+
+    let duplicatesRemoved = 0;
+    if (allItems && allItems.length > 0) {
+      const seen = new Map<string, string>(); // key -> kept id
+      const dupeIds: string[] = [];
+      for (const item of allItems) {
+        const key = `${item.title}|||${item.url || ""}`;
+        if (seen.has(key)) {
+          dupeIds.push(item.id);
+        } else {
+          seen.set(key, item.id);
+        }
+      }
+      if (dupeIds.length > 0) {
+        const { count } = await supabase
+          .from("knowledge_base_items")
+          .delete({ count: "exact" })
+          .in("id", dupeIds);
+        duplicatesRemoved = count || dupeIds.length;
+        console.log(`Removed ${duplicatesRemoved} duplicate knowledge_base_items`);
+      }
+    }
+
+    // ===== STEP 1: Delete all old sales_brain and knowledge_chunks for this user =====
     const { count: deletedBrain } = await supabase
       .from("sales_brain")
       .delete({ count: "exact" })
@@ -42,18 +71,19 @@ serve(async (req) => {
       .eq("user_id", user.id);
     console.log(`Deleted ${deletedChunks} knowledge_chunks rows`);
 
-    // Step 2: Fetch all knowledge_base_items
+    // ===== STEP 2: Fetch all unique knowledge_base_items =====
     const { data: items, error: itemsErr } = await supabase
       .from("knowledge_base_items")
       .select("*")
       .eq("user_id", user.id)
-      .eq("status", "ready");
+      .in("status", ["ready", "error", "processing"]);
 
     if (itemsErr) throw itemsErr;
     if (!items || items.length === 0) {
       return new Response(JSON.stringify({ 
         success: true, 
-        message: "Cleaned! No uploads found to re-process.",
+        message: `Cleaned ${duplicatesRemoved} duplicates! No uploads found to re-process.`,
+        duplicatesRemoved,
         principlesAdded: 0,
         uploadsProcessed: 0,
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -61,7 +91,7 @@ serve(async (req) => {
 
     console.log(`Found ${items.length} items to re-process`);
 
-    // Step 3: Process each item by calling process-knowledge
+    // ===== STEP 3: Process each item by calling process-knowledge =====
     let totalPrinciples = 0;
     let processedCount = 0;
     const errors: string[] = [];
@@ -109,12 +139,13 @@ serve(async (req) => {
       }
     }
 
-    const message = `Cleaned! Added ${totalPrinciples} new principles from ${processedCount} uploads.${errors.length > 0 ? ` (${errors.length} failed)` : ""}`;
+    const message = `Cleaned ${duplicatesRemoved} duplicates! Added ${totalPrinciples} insights from ${processedCount} uploads.${errors.length > 0 ? ` (${errors.length} failed)` : ""}`;
     console.log(`[reprocess-brain] Done: ${message}`);
 
     return new Response(JSON.stringify({
       success: true,
       message,
+      duplicatesRemoved,
       principlesAdded: totalPrinciples,
       uploadsProcessed: processedCount,
       totalUploads: items.length,
