@@ -27,7 +27,28 @@ function extractInstagramUsername(url: string): string | null {
   return match ? match[1] : null;
 }
 
-async function fetchYouTubeData(videoId: string) {
+async function getUserTranscriptApiKey(userId: string | null): Promise<string | null> {
+  if (!userId) return null;
+  try {
+    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2.49.4");
+    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const { data } = await supabase
+      .from("user_api_keys")
+      .select("api_key")
+      .eq("user_id", userId)
+      .in("service", ["supadata", "transcriptapi"])
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (data?.api_key) {
+      console.log("Using user's TranscriptAPI key from user_api_keys");
+      return data.api_key;
+    }
+  } catch (e) { console.error("Failed to fetch user API key:", e); }
+  return null;
+}
+
+async function fetchYouTubeData(videoId: string, userId: string | null = null) {
   let title = "";
   let transcript = "";
   const thumbnail = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
@@ -44,9 +65,11 @@ async function fetchYouTubeData(videoId: string) {
     }
   } catch (e) { console.error("YouTube oembed error:", e); }
 
-  // 2. Try TranscriptAPI.com (primary method)
-  const SUPADATA_API_KEY = Deno.env.get("SUPADATA_API_KEY");
+  // 2. Try TranscriptAPI.com — user's key first, then global fallback
+  const userKey = await getUserTranscriptApiKey(userId);
+  const SUPADATA_API_KEY = userKey || Deno.env.get("SUPADATA_API_KEY");
   if (SUPADATA_API_KEY) {
+    console.log("Using TranscriptAPI key:", userKey ? "user-provided" : "global fallback");
     try {
       console.log("Trying TranscriptAPI.com for transcript...", "key length:", SUPADATA_API_KEY.length);
       const sdRes = await fetch(
@@ -217,6 +240,19 @@ serve(async (req) => {
     const { url } = await req.json();
     if (!url) throw new Error("URL required");
 
+    // Extract user ID from auth token to fetch their API keys
+    let userId: string | null = null;
+    try {
+      const authHeader = req.headers.get("Authorization");
+      if (authHeader) {
+        const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2.49.4");
+        const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+        const token = authHeader.replace("Bearer ", "");
+        const { data: { user } } = await supabase.auth.getUser(token);
+        userId = user?.id || null;
+      }
+    } catch { /* continue without user key */ }
+
     const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
     const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
 
@@ -227,7 +263,7 @@ serve(async (req) => {
           status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      const ytData = await fetchYouTubeData(videoId);
+      const ytData = await fetchYouTubeData(videoId, userId);
       return new Response(JSON.stringify({
         type: "youtube",
         videoId,
