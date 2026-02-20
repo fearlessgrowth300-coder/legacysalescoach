@@ -58,7 +58,7 @@ serve(async (req) => {
       }
     }
 
-    // ===== STEP 1: Delete all old sales_brain and knowledge_chunks for this user =====
+    // ===== STEP 1: FULL WIPE — Delete all brain data for this user =====
     const { count: deletedBrain } = await supabase
       .from("sales_brain")
       .delete({ count: "exact" })
@@ -70,6 +70,22 @@ serve(async (req) => {
       .delete({ count: "exact" })
       .eq("user_id", user.id);
     console.log(`Deleted ${deletedChunks} knowledge_chunks rows`);
+
+    // Clear learned_insights (conversation-derived)
+    const { count: deletedInsights } = await supabase
+      .from("learned_insights")
+      .delete({ count: "exact" })
+      .eq("user_id", user.id);
+    console.log(`Deleted ${deletedInsights} learned_insights rows`);
+
+    // Clear conversation_insights too
+    try {
+      const { count: deletedConvInsights } = await supabase
+        .from("conversation_insights")
+        .delete({ count: "exact" })
+        .eq("user_id", user.id);
+      console.log(`Deleted ${deletedConvInsights} conversation_insights rows`);
+    } catch { /* table may not exist yet */ }
 
     // ===== STEP 2: Fetch all unique knowledge_base_items =====
     const { data: items, error: itemsErr } = await supabase
