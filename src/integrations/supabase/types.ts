@@ -192,6 +192,50 @@ export type Database = {
           },
         ]
       }
+      conversation_insights: {
+        Row: {
+          created_at: string
+          id: string
+          insight: string
+          insight_type: string
+          metadata: Json | null
+          prospect_id: string | null
+          source: string | null
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          insight: string
+          insight_type?: string
+          metadata?: Json | null
+          prospect_id?: string | null
+          source?: string | null
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          insight?: string
+          insight_type?: string
+          metadata?: Json | null
+          prospect_id?: string | null
+          source?: string | null
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_insights_prospect_id_fkey"
+            columns: ["prospect_id"]
+            isOneToOne: false
+            referencedRelation: "prospects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       knowledge_base_items: {
         Row: {
           brain_type: string
