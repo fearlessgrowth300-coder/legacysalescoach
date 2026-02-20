@@ -122,7 +122,7 @@ serve(async (req) => {
       content = await extractPdfContent(filePath, supabase, itemId, corsHeaders, LOVABLE_API_KEY);
       if (content === "__ERROR__") return; // error response already sent
     } else if (url) {
-      content = await extractUrlContent(url, supabaseUrl, supabaseKey, supabase);
+      content = await extractUrlContent(url, supabaseUrl, supabaseKey, supabase, user.id);
     }
 
     if (!content || content.length < 20) {
@@ -449,14 +449,14 @@ async function extractPdfContent(filePath: string, supabase: any, itemId: string
 }
 
 // ===== URL CONTENT EXTRACTION =====
-async function extractUrlContent(url: string, supabaseUrl: string, supabaseKey: string, supabase: any): Promise<string> {
+async function extractUrlContent(url: string, supabaseUrl: string, supabaseKey: string, supabase: any, userId: string | null = null): Promise<string> {
   const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
   const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
 
   if (isInstagram) {
     return await extractInstagramContent(url, supabaseUrl, supabaseKey, supabase);
   } else if (isYouTube) {
-    return await extractYouTubeContent(url);
+    return await extractYouTubeContent(url, userId, supabase);
   } else {
     return await extractWebContent(url);
   }
@@ -521,7 +521,7 @@ async function extractInstagramContent(url: string, supabaseUrl: string, supabas
   return content;
 }
 
-async function extractYouTubeContent(url: string): Promise<string> {
+async function extractYouTubeContent(url: string, userId: string | null = null, supabaseClient: any = null): Promise<string> {
   let content = "";
   let videoId = "";
   try {
@@ -530,57 +530,112 @@ async function extractYouTubeContent(url: string): Promise<string> {
   } catch { /* ignore */ }
 
   if (videoId) {
-    try {
-      const transcriptRes = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-        signal: AbortSignal.timeout(15000),
-      });
-      if (transcriptRes.ok) {
-        const html = await transcriptRes.text();
-        const titleMatch = html.match(/<meta name="title" content="([^"]*)"/) || html.match(/<title>([^<]*)<\/title>/);
-        const descMatch = html.match(/<meta name="description" content="([^"]*)"/);
-        const title = titleMatch?.[1] || "";
-        const description = descMatch?.[1] || "";
-
-        const captionsUrlMatch = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/);
-        if (captionsUrlMatch) {
-          try {
-            const captionUrl = captionsUrlMatch[1].replace(/\\u0026/g, "&");
-            const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
-            if (captionRes.ok) {
-              const captionXml = await captionRes.text();
-              const transcriptText = captionXml
-                .replace(/<[^>]+>/g, " ")
-                .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-                .replace(/&#39;/g, "'").replace(/&quot;/g, '"')
-                .replace(/\s+/g, " ").trim();
-              if (transcriptText.length > 100) {
-                content = `Video Title: ${title}\n\nTranscript:\n${transcriptText.substring(0, 15000)}`;
-              }
-            }
-          } catch (e) {
-            console.error("Transcript fetch error:", e);
-          }
+    // 1. Try TranscriptAPI.com with user's key first, then global fallback
+    let transcriptApiKey: string | null = null;
+    if (userId && supabaseClient) {
+      try {
+        const { data } = await supabaseClient
+          .from("user_api_keys")
+          .select("api_key")
+          .eq("user_id", userId)
+          .in("service", ["supadata", "transcriptapi"])
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (data?.api_key) {
+          transcriptApiKey = data.api_key;
+          console.log("Using user's TranscriptAPI key from user_api_keys");
         }
+      } catch (e) { console.error("Failed to fetch user API key:", e); }
+    }
+    transcriptApiKey = transcriptApiKey || Deno.env.get("SUPADATA_API_KEY") || null;
 
-        if (!content || content.length < 100) {
-          const initialDataMatch = html.match(/var ytInitialData = ({.*?});<\/script>/s);
-          let additionalContent = "";
-          if (initialDataMatch) {
+    if (transcriptApiKey) {
+      try {
+        console.log("Trying TranscriptAPI.com, key source:", userId && transcriptApiKey !== Deno.env.get("SUPADATA_API_KEY") ? "user" : "global");
+        const sdRes = await fetch(
+          `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`,
+          {
+            headers: { "Authorization": `Bearer ${transcriptApiKey}` },
+            signal: AbortSignal.timeout(30000),
+          }
+        );
+        if (sdRes.ok) {
+          const sdData = await sdRes.json();
+          let transcript = "";
+          if (sdData.transcript && typeof sdData.transcript === "string" && sdData.transcript.length > 50) {
+            transcript = sdData.transcript;
+          } else if (sdData.text && typeof sdData.text === "string" && sdData.text.length > 50) {
+            transcript = sdData.text;
+          } else if (Array.isArray(sdData.transcript)) {
+            transcript = sdData.transcript.map((c: any) => c.text || c.content || "").join(" ");
+          }
+          if (transcript.length > 100) {
+            // Get title
+            let title = "";
             try {
-              const ytData = JSON.parse(initialDataMatch[1]);
-              const str = JSON.stringify(ytData);
-              const textParts = str.match(/"text":"([^"]{20,})"/g);
-              if (textParts) {
-                additionalContent = textParts.map(p => p.replace(/"text":"/, "").replace(/"$/, "")).join(" ").substring(0, 5000);
-              }
+              const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`, { signal: AbortSignal.timeout(10000) });
+              if (oembedRes.ok) { title = (await oembedRes.json()).title || ""; }
             } catch { /* ignore */ }
+            content = `Video Title: ${title}\n\nTranscript:\n${transcript.substring(0, 15000)}`;
+            console.log("TranscriptAPI success, content length:", content.length);
           }
-          content = `YouTube Video: ${title}\n\nDescription: ${description}\n\n${additionalContent}`.substring(0, 15000);
+        } else {
+          console.warn("TranscriptAPI error:", sdRes.status, await sdRes.text());
         }
-      }
-    } catch (e) {
-      console.error("YouTube fetch error:", e);
+      } catch (e) { console.error("TranscriptAPI error:", e); }
+    }
+
+    // 2. Fallback: YouTube watch page scraping
+    if (!content || content.length < 100) {
+      try {
+        const transcriptRes = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (transcriptRes.ok) {
+          const html = await transcriptRes.text();
+          const titleMatch = html.match(/<meta name="title" content="([^"]*)"/) || html.match(/<title>([^<]*)<\/title>/);
+          const descMatch = html.match(/<meta name="description" content="([^"]*)"/);
+          const title = titleMatch?.[1] || "";
+          const description = descMatch?.[1] || "";
+
+          const captionsUrlMatch = html.match(/"baseUrl":"(https:\/\/www\.youtube\.com\/api\/timedtext[^"]*)"/);
+          if (captionsUrlMatch) {
+            try {
+              const captionUrl = captionsUrlMatch[1].replace(/\\u0026/g, "&");
+              const captionRes = await fetch(captionUrl, { signal: AbortSignal.timeout(10000) });
+              if (captionRes.ok) {
+                const captionXml = await captionRes.text();
+                const transcriptText = captionXml
+                  .replace(/<[^>]+>/g, " ")
+                  .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+                  .replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+                  .replace(/\s+/g, " ").trim();
+                if (transcriptText.length > 100) {
+                  content = `Video Title: ${title}\n\nTranscript:\n${transcriptText.substring(0, 15000)}`;
+                }
+              }
+            } catch (e) { console.error("Transcript fetch error:", e); }
+          }
+
+          if (!content || content.length < 100) {
+            const initialDataMatch = html.match(/var ytInitialData = ({.*?});<\/script>/s);
+            let additionalContent = "";
+            if (initialDataMatch) {
+              try {
+                const ytData = JSON.parse(initialDataMatch[1]);
+                const str = JSON.stringify(ytData);
+                const textParts = str.match(/"text":"([^"]{20,})"/g);
+                if (textParts) {
+                  additionalContent = textParts.map(p => p.replace(/"text":"/, "").replace(/"$/, "")).join(" ").substring(0, 5000);
+                }
+              } catch { /* ignore */ }
+            }
+            content = `YouTube Video: ${title}\n\nDescription: ${description}\n\n${additionalContent}`.substring(0, 15000);
+          }
+        }
+      } catch (e) { console.error("YouTube fetch error:", e); }
     }
   }
 
