@@ -335,6 +335,66 @@ export type Database = {
           },
         ]
       }
+      lead_registry: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          past_advice: Json | null
+          persona_type: string | null
+          prospect_id: string | null
+          psychological_state: string | null
+          subtext_analysis: string | null
+          updated_at: string
+          upload_matches: Json | null
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          past_advice?: Json | null
+          persona_type?: string | null
+          prospect_id?: string | null
+          psychological_state?: string | null
+          subtext_analysis?: string | null
+          updated_at?: string
+          upload_matches?: Json | null
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          past_advice?: Json | null
+          persona_type?: string | null
+          prospect_id?: string | null
+          psychological_state?: string | null
+          subtext_analysis?: string | null
+          updated_at?: string
+          upload_matches?: Json | null
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_registry_prospect_id_fkey"
+            columns: ["prospect_id"]
+            isOneToOne: false
+            referencedRelation: "prospects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_registry_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       learned_insights: {
         Row: {
           created_at: string
