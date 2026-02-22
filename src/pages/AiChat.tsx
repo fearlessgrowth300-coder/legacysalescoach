@@ -12,7 +12,7 @@ import {
 import {
   Brain, Send, Loader2, BookOpen, Sparkles, Plus, MessageSquare,
   Image, Link, FileText, Pencil, Trash2, Check, CheckCheck, X, Menu,
-  Mic, MicOff, Pin, PinOff, Search, Star, Zap, Video, File, ArrowLeft
+  Mic, MicOff, Pin, PinOff, Search, Star, Zap, Video, File, ArrowLeft, Phone, Volume2
 } from "lucide-react";
 import SwipeToDelete from "@/components/SwipeToDelete";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -164,6 +164,13 @@ export default function AiChat() {
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
+  // Voice Assistant state
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [voiceLoading, setVoiceLoading] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const voiceRecognitionRef = useRef<any>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
   // Brain status
   const [brainStats, setBrainStats] = useState<{ videos: number; pdfs: number; conversations: number }>({ videos: 0, pdfs: 0, conversations: 0 });
 
@@ -289,6 +296,67 @@ export default function AiChat() {
     toast.info("Listening... speak your question");
   };
 
+  // ─── Voice Assistant (Call Mode) ───
+  const startVoiceAssistant = useCallback(async () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) { toast.error("Speech recognition not supported"); return; }
+    setVoiceMode(true);
+    setVoiceTranscript("");
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+    let finalText = "";
+    recognition.onresult = (event: any) => {
+      let transcript = "";
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalText = transcript;
+      }
+      setVoiceTranscript(transcript);
+    };
+    recognition.onend = async () => {
+      if (!finalText.trim()) { setVoiceMode(false); return; }
+      setVoiceLoading(true);
+      setVoiceTranscript(finalText);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/voice-brain`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session?.access_token}`,
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ question: finalText, mode: "full" }),
+        });
+        const data = await resp.json();
+        if (data.audio) {
+          const audioUrl = `data:audio/mpeg;base64,${data.audio}`;
+          const audio = new Audio(audioUrl);
+          audioRef.current = audio;
+          await audio.play();
+        }
+        if (data.text) toast.success(data.text.substring(0, 120) + "...", { duration: 8000 });
+      } catch (e) {
+        toast.error("Voice assistant error");
+        console.error(e);
+      } finally { setVoiceLoading(false); setVoiceMode(false); setVoiceTranscript(""); }
+    };
+    recognition.onerror = () => { setVoiceMode(false); toast.error("Voice recognition error"); };
+    recognition.start();
+    voiceRecognitionRef.current = recognition;
+    toast.info("🎙️ Speak your question to The Brain...");
+  }, []);
+
+  const stopVoiceAssistant = useCallback(() => {
+    voiceRecognitionRef.current?.stop();
+    audioRef.current?.pause();
+    setVoiceMode(false);
+    setVoiceLoading(false);
+    setVoiceTranscript("");
+  }, []);
+
   const togglePin = async (msgIdx: number) => {
     const msg = messages[msgIdx];
     if (!msg.id) return;
@@ -402,44 +470,9 @@ export default function AiChat() {
     } catch { toast.error("Failed to feed link to brain"); }
   };
 
-  // Auto-save Q&A to sales_brain
-  const saveToBrain = async (question: string, answer: string) => {
-    if (!user) return;
-    try {
-      // Extract topics from the Q&A
-      const topics: string[] = [];
-      const topicMap: Record<string, string[]> = {
-        "objection handling": ["objection", "price", "expensive", "cost", "afford"],
-        "closing": ["close", "closing", "deal", "commit", "sign"],
-        "rapport": ["rapport", "trust", "relationship", "connect", "bond"],
-        "follow up": ["follow", "follow-up", "followup", "chase"],
-        "prospecting": ["prospect", "lead", "outreach", "dm", "cold"],
-        "mindset": ["mindset", "fear", "confidence", "believe", "motivation"],
-        "funnels": ["funnel", "landing", "page", "convert", "opt-in"],
-      };
-      const combined = (question + " " + answer).toLowerCase();
-      for (const [topic, keywords] of Object.entries(topicMap)) {
-        if (keywords.some(k => combined.includes(k))) topics.push(topic);
-      }
-      if (topics.length === 0) topics.push("general sales");
-
-      await supabase.from("sales_brain").insert({
-        user_id: user.id,
-        principle_name: question.substring(0, 100),
-        what_i_learned: answer.substring(0, 500),
-        how_to_apply: `From a coaching Q&A session. Topics: ${topics.join(", ")}`,
-        source_name: "AI Brain Coach Chat",
-        source_type: "ai_chat",
-        category: topics[0] || "general",
-        brain_type: "both",
-        metadata: { type: "ai_chat", question, topics },
-      });
-
-      toast.success(`✅ Added to brain: New learning from this question`, { duration: 3000 });
-    } catch (err) {
-      console.error("Failed to save to brain:", err);
-    }
-  };
+  // READ-ONLY VAULT: Q&A is saved to ai_chat_messages only (Tier 2: Memory).
+  // The brain (sales_brain / knowledge_chunks) is NEVER written to from chat.
+  // Knowledge is derived ONLY from uploaded videos/PDFs via process-knowledge.
 
   const send = async (overrideText?: string) => {
     const text = (overrideText || input).trim();
@@ -581,10 +614,7 @@ export default function AiChat() {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: convId, user_id: user!.id, role: "assistant", content: assistantSoFar,
             });
-            // Auto-save Q&A to brain
-            if (questionText) {
-              await saveToBrain(questionText, assistantSoFar);
-            }
+            // Q&A saved to ai_chat_messages only — brain is read-only vault
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
@@ -659,7 +689,7 @@ export default function AiChat() {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: activeConvId, user_id: user!.id, role: "assistant", content: assistantSoFar,
             });
-            if (questionText) await saveToBrain(questionText, assistantSoFar);
+            // Q&A saved to ai_chat_messages only — brain is read-only vault
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
@@ -827,8 +857,19 @@ export default function AiChat() {
             <h2 className="font-bold text-sm flex items-center gap-1.5 truncate">
               AI Brain <Zap className="h-3.5 w-3.5 text-primary shrink-0" />
             </h2>
-            <p className="text-xs text-muted-foreground truncate hidden md:block">Ask me anything. I learn from every video, PDF, and principle you've ever uploaded.</p>
+            <p className="text-xs text-muted-foreground truncate hidden md:block">Read-only vault — answers from uploads only.</p>
           </div>
+          {/* Call Assistant Button */}
+          <Button
+            size="sm"
+            variant={voiceMode ? "destructive" : "outline"}
+            className="shrink-0 gap-1.5 text-xs"
+            onClick={voiceMode ? stopVoiceAssistant : startVoiceAssistant}
+            disabled={voiceLoading}
+          >
+            {voiceLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : voiceMode ? <MicOff className="h-3.5 w-3.5" /> : <Phone className="h-3.5 w-3.5" />}
+            {voiceMode ? "Stop" : "Call Brain"}
+          </Button>
           {/* Brain Status Badge - hide on mobile */}
           <div className="hidden md:flex items-center gap-1.5 shrink-0">
             <Badge variant="secondary" className="text-[10px] gap-1 py-0.5">
@@ -837,11 +878,23 @@ export default function AiChat() {
             <Badge variant="secondary" className="text-[10px] gap-1 py-0.5">
               <File className="h-2.5 w-2.5" /> {brainStats.pdfs}
             </Badge>
-            <Badge variant="secondary" className="text-[10px] gap-1 py-0.5">
-              <MessageSquare className="h-2.5 w-2.5" /> {brainStats.conversations}
-            </Badge>
           </div>
         </div>
+
+        {/* Voice Mode Overlay */}
+        {voiceMode && (
+          <div className="absolute inset-0 z-50 bg-background/95 flex flex-col items-center justify-center gap-4 animate-in fade-in">
+            <div className="relative">
+              <Phone className="h-16 w-16 text-primary animate-pulse" />
+              {voiceLoading && <Loader2 className="h-8 w-8 text-primary animate-spin absolute -bottom-2 -right-2" />}
+            </div>
+            <h3 className="text-lg font-bold">{voiceLoading ? "Thinking..." : "Listening..."}</h3>
+            {voiceTranscript && <p className="text-sm text-muted-foreground max-w-sm text-center">"{voiceTranscript}"</p>}
+            <Button variant="destructive" size="sm" onClick={stopVoiceAssistant}>
+              <MicOff className="h-4 w-4 mr-1" /> Stop
+            </Button>
+          </div>
+        )}
 
         {/* Messages */}
         <ScrollArea className="flex-1 p-4" ref={scrollRef}>
@@ -997,7 +1050,7 @@ export default function AiChat() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-            <Brain className="h-3 w-3" /> Powered by your Knowledge Base • Every answer gets saved back to your brain
+            <Brain className="h-3 w-3" /> Powered by your Knowledge Base (Read-Only Vault)
           </p>
         </div>
 

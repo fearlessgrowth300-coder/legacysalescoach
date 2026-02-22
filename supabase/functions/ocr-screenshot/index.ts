@@ -1,23 +1,19 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
-function getCorsHeaders(req: Request) {
-  const origin = req.headers.get("origin") || "";
-  const isAllowed = origin.endsWith(".lovable.app") || origin.startsWith("http://localhost:");
-  return {
-    "Access-Control-Allow-Origin": isAllowed ? origin : "https://legacysalescoach.lovable.app",
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-  };
-}
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+};
 
 serve(async (req) => {
-  const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { filePath } = await req.json();
+    const body = await req.json();
+    const { filePath, imageBase64, mimeType: inputMimeType } = body;
 
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -32,32 +28,44 @@ serve(async (req) => {
       });
     }
 
-    // Download the screenshot from storage
-    const { data: fileData, error: fileError } = await supabase.storage
-      .from("chat-screenshots")
-      .download(filePath);
+    let base64: string;
+    let mimeType: string;
 
-    if (fileError || !fileData) {
-      return new Response(JSON.stringify({ error: "Could not download screenshot" }), {
+    if (imageBase64) {
+      // Direct base64 from client (used by WorkspaceTrainingUpload)
+      base64 = imageBase64;
+      mimeType = inputMimeType || "image/png";
+    } else if (filePath) {
+      // Download from storage (used by chat screenshots)
+      const { data: fileData, error: fileError } = await supabase.storage
+        .from("chat-screenshots")
+        .download(filePath);
+
+      if (fileError || !fileData) {
+        return new Response(JSON.stringify({ error: "Could not download screenshot" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const arrayBuffer = await fileData.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      base64 = btoa(binary);
+
+      const ext = filePath.split(".").pop()?.toLowerCase() || "png";
+      const mimeMap: Record<string, string> = {
+        png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+        webp: "image/webp", gif: "image/gif",
+      };
+      mimeType = mimeMap[ext] || "image/png";
+    } else {
+      return new Response(JSON.stringify({ error: "No image provided (need filePath or imageBase64)" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
-    const arrayBuffer = await fileData.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    const base64 = btoa(binary);
-
-    // Determine MIME type from file extension
-    const ext = filePath.split(".").pop()?.toLowerCase() || "png";
-    const mimeMap: Record<string, string> = {
-      png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-      webp: "image/webp", gif: "image/gif",
-    };
-    const mimeType = mimeMap[ext] || "image/png";
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
@@ -76,7 +84,19 @@ serve(async (req) => {
             content: [
               {
                 type: "text",
-                text: "This is a screenshot of a chat/DM conversation. Extract ALL the text from the messages visible in this screenshot. Format it as a conversation, with each message on a new line. Identify who sent each message if possible (e.g., 'Them:' and 'Me:'). Only return the extracted conversation text, nothing else.",
+                text: `This is a screenshot of a chat/DM conversation. Perform a VISION SYNC:
+
+1. IDENTIFY the Name of the person (look for profile name, username, or header)
+2. IDENTIFY the Platform (Instagram, TikTok, WhatsApp, iMessage, etc.)
+3. Extract ALL messages in chronological order
+
+Format output as:
+NAME: [detected name]
+PLATFORM: [detected platform]
+---
+[Each message on a new line, labeled "Them:" or "Me:" based on message alignment/color]
+
+Only return the extracted data, nothing else.`,
               },
               {
                 type: "image_url",

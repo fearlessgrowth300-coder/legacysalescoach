@@ -392,7 +392,7 @@ export default function KnowledgeBase() {
               <Brain className="h-5 w-5 text-primary" />
               All Brain Learnings ({allBrainLearnings?.length || 0})
             </DialogTitle>
-            <DialogDescription>Every sales principle your AI has ever learned</DialogDescription>
+            <DialogDescription>Principles extracted from uploaded videos &amp; PDFs only (read-only vault)</DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh]">
             <div className="space-y-3 py-2 pr-4">
