@@ -47,3 +47,6 @@ verify_jwt = false
 
 [functions.reprocess-brain]
 verify_jwt = false
+
+[functions.voice-brain]
+verify_jwt = false
