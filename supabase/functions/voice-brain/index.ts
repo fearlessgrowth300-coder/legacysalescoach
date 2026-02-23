@@ -98,7 +98,7 @@ serve(async (req) => {
       method: "POST",
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: frame ? "google/gemini-2.5-flash" : "google/gemini-3-flash-preview",
+        model: "google/gemini-2.5-flash",
         messages: [
           { role: "system", content: systemPrompt + (frame ? "\n\nThe user is also showing you a live camera/screen frame. Analyze what you see and incorporate it into your answer." : "") },
           { role: "user", content: userContent },
