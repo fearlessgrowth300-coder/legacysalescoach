@@ -14,6 +14,7 @@ import {
   Image, Link, FileText, Pencil, Trash2, Check, CheckCheck, X, Menu,
   Mic, MicOff, Pin, PinOff, Search, Star, Zap, Video, File, ArrowLeft, Phone, Volume2
 } from "lucide-react";
+import VoiceCallAssistant from "@/components/VoiceCallAssistant";
 import SwipeToDelete from "@/components/SwipeToDelete";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuth } from "@/hooks/useAuth";
@@ -168,6 +169,7 @@ export default function AiChat() {
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceLoading, setVoiceLoading] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [showVoiceCall, setShowVoiceCall] = useState(false);
   const voiceRecognitionRef = useRef<any>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -862,14 +864,15 @@ export default function AiChat() {
           {/* Call Assistant Button */}
           <Button
             size="sm"
-            variant={voiceMode ? "destructive" : "outline"}
+            variant="outline"
             className="shrink-0 gap-1.5 text-xs"
-            onClick={voiceMode ? stopVoiceAssistant : startVoiceAssistant}
-            disabled={voiceLoading}
+            onClick={() => setShowVoiceCall(true)}
           >
-            {voiceLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : voiceMode ? <MicOff className="h-3.5 w-3.5" /> : <Phone className="h-3.5 w-3.5" />}
-            {voiceMode ? "Stop" : "Call Brain"}
+            <Phone className="h-3.5 w-3.5" />
+            Call Brain
           </Button>
+          {/* Voice Call Assistant */}
+          <VoiceCallAssistant open={showVoiceCall} onClose={() => setShowVoiceCall(false)} />
           {/* Brain Status Badge - hide on mobile */}
           <div className="hidden md:flex items-center gap-1.5 shrink-0">
             <Badge variant="secondary" className="text-[10px] gap-1 py-0.5">
@@ -881,20 +884,7 @@ export default function AiChat() {
           </div>
         </div>
 
-        {/* Voice Mode Overlay */}
-        {voiceMode && (
-          <div className="absolute inset-0 z-50 bg-background/95 flex flex-col items-center justify-center gap-4 animate-in fade-in">
-            <div className="relative">
-              <Phone className="h-16 w-16 text-primary animate-pulse" />
-              {voiceLoading && <Loader2 className="h-8 w-8 text-primary animate-spin absolute -bottom-2 -right-2" />}
-            </div>
-            <h3 className="text-lg font-bold">{voiceLoading ? "Thinking..." : "Listening..."}</h3>
-            {voiceTranscript && <p className="text-sm text-muted-foreground max-w-sm text-center">"{voiceTranscript}"</p>}
-            <Button variant="destructive" size="sm" onClick={stopVoiceAssistant}>
-              <MicOff className="h-4 w-4 mr-1" /> Stop
-            </Button>
-          </div>
-        )}
+        {/* Old voice overlay removed — using VoiceCallAssistant component now */}
 
         {/* Messages */}
         <ScrollArea className="flex-1 p-4" ref={scrollRef}>

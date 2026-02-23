@@ -15,7 +15,7 @@ serve(async (req) => {
   }
 
   try {
-    const { question, mode } = await req.json();
+    const { question, mode, voiceId: customVoiceId, frame } = await req.json();
     // mode: "full" (default) or "blast" (15-second tactical)
     
     const authHeader = req.headers.get("Authorization");
@@ -85,15 +85,23 @@ serve(async (req) => {
       ? `You are "The Brain" voice assistant in BLAST mode. Give a punchy, 2-3 sentence tactical answer ONLY from uploaded knowledge. ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`
       : `You are "The Brain" voice assistant. Give concise, strategic advice ONLY from uploaded knowledge. Keep answers under 4 sentences for voice clarity. Reference source titles naturally. ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`;
 
+    // Build user message — support vision frame
+    const userContent: any = frame
+      ? [
+          { type: "text", text: question },
+          { type: "image_url", image_url: { url: frame } },
+        ]
+      : question;
+
     // Get AI response
     const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
+        model: frame ? "google/gemini-2.5-flash" : "google/gemini-3-flash-preview",
         messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: question },
+          { role: "system", content: systemPrompt + (frame ? "\n\nThe user is also showing you a live camera/screen frame. Analyze what you see and incorporate it into your answer." : "") },
+          { role: "user", content: userContent },
         ],
         temperature: 0.7,
       }),
@@ -104,7 +112,7 @@ serve(async (req) => {
     const textReply = aiData.choices?.[0]?.message?.content || "0 - Nothing in my knowledge base yet.";
 
     // Generate TTS via ElevenLabs
-    const voiceId = "JBFqnCBsd6RMkjVDRZzb"; // George - professional mentor voice
+    const voiceId = customVoiceId || "JBFqnCBsd6RMkjVDRZzb"; // User-selected or George default
     const ttsResponse = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
       {
