@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Phone, PhoneOff, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff,
+  Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Monitor, MonitorOff,
   Volume2, Loader2, X, Play, Brain, Square,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -37,7 +37,7 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
   const [callState, setCallState] = useState<CallState>("setup");
   const [selectedVoice, setSelectedVoice] = useState(VOICES[0].id);
   const [consentGiven, setConsentGiven] = useState(false);
-  const [cameraActive, setCameraActive] = useState(false);
+  const [videoActive, setVideoActive] = useState(false);
   const [screenShareActive, setScreenShareActive] = useState(false);
   const [micMuted, setMicMuted] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
@@ -47,12 +47,12 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
   const recognitionRef = useRef<any>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
-  const cameraVideoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const videoStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const transcriptEndRef = useRef<HTMLDivElement>(null);
   const isProcessingRef = useRef(false);
   const shouldContinueRef = useRef(false);
   const selectedVoiceRef = useRef(selectedVoice);
@@ -62,10 +62,9 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
   useEffect(() => { selectedVoiceRef.current = selectedVoice; }, [selectedVoice]);
   useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
 
+  // Auto-scroll transcript to bottom on every change
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [transcript, currentInterim]);
 
   useEffect(() => {
@@ -86,9 +85,9 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
 
   // ─── PREVIEW: Cancel previous, play new ───
   const previewVoice = async (voiceId: string) => {
-    // Stop any currently playing preview
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
+      previewAudioRef.current.currentTime = 0;
       previewAudioRef.current = null;
     }
     setPreviewPlaying(true);
@@ -144,7 +143,6 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
       return;
     }
 
-    // Stop any preview audio
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
       previewAudioRef.current = null;
@@ -158,21 +156,20 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
     startListening();
   };
 
-  // ─── LISTENING: Fixed to prevent duplicate words ───
+  // ─── LISTENING ───
   const startListening = useCallback(() => {
     if (!shouldContinueRef.current || isProcessingRef.current) return;
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) return;
 
-    // Stop existing recognition
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch {}
       recognitionRef.current = null;
     }
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = false; // Use non-continuous to avoid duplicate accumulation
+    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = "en-US";
     recognition.maxAlternatives = 1;
@@ -182,7 +179,7 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
 
     recognition.onresult = (event: any) => {
       let interim = "";
-      finalText = ""; // Reset each time — non-continuous mode gives full result each event
+      finalText = "";
       for (let i = 0; i < event.results.length; i++) {
         const t = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
@@ -193,7 +190,6 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
       }
       setCurrentInterim(finalText || interim);
 
-      // Auto-stop after 1.5s silence once we have final text
       clearTimeout(silenceTimer);
       if (finalText.trim()) {
         silenceTimer = setTimeout(() => {
@@ -243,6 +239,19 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
     }
   }, []);
 
+  // Capture a frame from the active video source
+  const captureFrame = (): string | undefined => {
+    if (!canvasRef.current) return undefined;
+    const sourceVideo = screenShareActive ? screenVideoRef.current : (videoActive ? videoRef.current : null);
+    if (!sourceVideo || sourceVideo.videoWidth === 0) return undefined;
+    const canvas = canvasRef.current;
+    canvas.width = Math.min(sourceVideo.videoWidth, 640);
+    canvas.height = Math.round(canvas.width * (sourceVideo.videoHeight / sourceVideo.videoWidth));
+    const ctx = canvas.getContext("2d");
+    ctx?.drawImage(sourceVideo, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.6);
+  };
+
   const processUserInput = async (text: string) => {
     if (isProcessingRef.current) return;
     isProcessingRef.current = true;
@@ -252,22 +261,7 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
 
     try {
       const headers = await getAuthHeaders();
-
-      // Capture frame if camera/screen is active
-      let frameBase64: string | undefined;
-      if (canvasRef.current) {
-        const sourceVideo = screenShareActive ? screenVideoRef.current : (cameraActive ? cameraVideoRef.current : null);
-        if (sourceVideo && sourceVideo.videoWidth > 0) {
-          const canvas = canvasRef.current;
-          canvas.width = Math.min(sourceVideo.videoWidth, 640);
-          canvas.height = Math.round(canvas.width * (sourceVideo.videoHeight / sourceVideo.videoWidth));
-          const ctx = canvas.getContext("2d");
-          ctx?.drawImage(sourceVideo, 0, 0, canvas.width, canvas.height);
-          frameBase64 = canvas.toDataURL("image/jpeg", 0.6);
-        }
-      }
-
-      // Use ref for voice to get current value (not stale closure)
+      const frameBase64 = captureFrame();
       const voiceId = selectedVoiceRef.current;
 
       const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/voice-brain`, {
@@ -292,29 +286,12 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
         setTranscript(prev => [...prev, { role: "assistant", text: data.text, timestamp: new Date() }]);
       }
 
+      // Play audio response
       if (data.audio) {
         setCallState("speaking");
-        const audio = new Audio(`data:audio/mpeg;base64,${data.audio}`);
-        audioRef.current = audio;
-        audio.onended = () => {
-          audioRef.current = null;
-          isProcessingRef.current = false;
-          if (shouldContinueRef.current) {
-            setCallState("listening");
-            startListening();
-          }
-        };
-        audio.onerror = () => {
-          audioRef.current = null;
-          isProcessingRef.current = false;
-          if (shouldContinueRef.current) {
-            setCallState("listening");
-            startListening();
-          }
-        };
-        await audio.play();
+        await playAudioResponse(data.audio);
       } else {
-        // No audio but we have text — still continue
+        // No audio — continue listening
         isProcessingRef.current = false;
         if (shouldContinueRef.current) {
           setCallState("listening");
@@ -332,6 +309,36 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
     }
   };
 
+  const playAudioResponse = (base64Audio: string): Promise<void> => {
+    return new Promise((resolve) => {
+      const audio = new Audio(`data:audio/mpeg;base64,${base64Audio}`);
+      audioRef.current = audio;
+
+      const finish = () => {
+        audioRef.current = null;
+        isProcessingRef.current = false;
+        if (shouldContinueRef.current) {
+          setCallState("listening");
+          startListening();
+        }
+        resolve();
+      };
+
+      audio.onended = finish;
+      audio.onerror = (e) => {
+        console.error("Audio playback error:", e);
+        finish();
+      };
+
+      audio.play().catch((err) => {
+        console.error("Audio play() failed:", err);
+        // Try user-interaction workaround
+        toast.error("Audio blocked — tap screen to enable");
+        finish();
+      });
+    });
+  };
+
   const cleanup = useCallback(() => {
     shouldContinueRef.current = false;
     isProcessingRef.current = false;
@@ -343,30 +350,31 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
     audioRef.current = null;
     previewAudioRef.current?.pause();
     previewAudioRef.current = null;
-    cameraStreamRef.current?.getTracks().forEach(t => t.stop());
-    cameraStreamRef.current = null;
+    videoStreamRef.current?.getTracks().forEach(t => t.stop());
+    videoStreamRef.current = null;
     screenStreamRef.current?.getTracks().forEach(t => t.stop());
     screenStreamRef.current = null;
-    setCameraActive(false);
+    setVideoActive(false);
     setScreenShareActive(false);
     setMicMuted(false);
     setCurrentInterim("");
     setPreviewPlaying(false);
   }, []);
 
-  // Camera toggle
-  const toggleCamera = async () => {
-    if (cameraActive) {
-      cameraStreamRef.current?.getTracks().forEach(t => t.stop());
-      cameraStreamRef.current = null;
-      setCameraActive(false);
+  // Video toggle
+  const toggleVideo = async () => {
+    if (videoActive) {
+      videoStreamRef.current?.getTracks().forEach(t => t.stop());
+      videoStreamRef.current = null;
+      setVideoActive(false);
     } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
         });
-        cameraStreamRef.current = stream;
-        setCameraActive(true);
+        videoStreamRef.current = stream;
+        setVideoActive(true);
+        // Stop screen share if active
         if (screenStreamRef.current) {
           screenStreamRef.current.getTracks().forEach(t => t.stop());
           screenStreamRef.current = null;
@@ -379,12 +387,12 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
   };
 
   useEffect(() => {
-    if (cameraActive && cameraVideoRef.current && cameraStreamRef.current) {
-      cameraVideoRef.current.srcObject = cameraStreamRef.current;
+    if (videoActive && videoRef.current && videoStreamRef.current) {
+      videoRef.current.srcObject = videoStreamRef.current;
     }
-  }, [cameraActive]);
+  }, [videoActive]);
 
-  // Screen share toggle (desktop only)
+  // Screen share toggle
   const toggleScreenShare = async () => {
     if (screenShareActive) {
       screenStreamRef.current?.getTracks().forEach(t => t.stop());
@@ -399,13 +407,15 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
           setScreenShareActive(false);
         };
         setScreenShareActive(true);
-        if (cameraStreamRef.current) {
-          cameraStreamRef.current.getTracks().forEach(t => t.stop());
-          cameraStreamRef.current = null;
-          setCameraActive(false);
+        if (videoStreamRef.current) {
+          videoStreamRef.current.getTracks().forEach(t => t.stop());
+          videoStreamRef.current = null;
+          setVideoActive(false);
         }
       } catch (err: any) {
-        toast.error(err.name === "NotAllowedError" ? "Screen share denied" : "Screen sharing not available");
+        if (err.name !== "NotAllowedError") {
+          toast.error("Screen sharing not available");
+        }
       }
     }
   };
@@ -432,7 +442,6 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
   const handleEndCall = () => {
     const finalTranscript = transcriptRef.current;
     cleanup();
-    // Persist transcript to chat
     if (finalTranscript.length > 0 && onCallEnd) {
       onCallEnd(finalTranscript);
     }
@@ -445,249 +454,278 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
 
   const selectedVoiceData = VOICES.find(v => v.id === selectedVoice);
   const isInCall = callState !== "idle" && callState !== "setup";
-  const showVideoFeed = cameraActive || screenShareActive;
+  const showVideoFeed = videoActive || screenShareActive;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center">
-      <div className="absolute inset-0 bg-background/80 backdrop-blur-md" onClick={isInCall ? undefined : handleEndCall} />
+    <div className="fixed inset-0 z-[100] flex flex-col">
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Fullscreen Camera/Screen — call UI overlays on top */}
-      {showVideoFeed && isInCall && (
-        <div className="absolute inset-0 z-[101] bg-black">
-          {cameraActive && (
-            <video ref={cameraVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-          )}
-          {screenShareActive && (
-            <video ref={screenVideoRef} autoPlay playsInline muted className="w-full h-full object-contain bg-black" />
-          )}
-        </div>
-      )}
-
-      {/* Call Card */}
-      <div className={`relative z-[102] w-full mx-4 rounded-3xl border bg-card shadow-2xl overflow-hidden animate-in zoom-in-95 fade-in duration-300 ${
-        showVideoFeed && isInCall ? "max-w-sm bg-card/80 backdrop-blur-xl" : "max-w-lg"
-      }`}>
-
-        {/* ── SETUP SCREEN ── */}
-        {callState === "setup" && (
-          <div className="p-6 space-y-5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-                  <Brain className="h-5 w-5 text-primary" />
-                </div>
-                <div>
-                  <h2 className="font-bold text-lg">Call The Brain</h2>
-                  <p className="text-xs text-muted-foreground">Voice assistant powered by your uploads</p>
-                </div>
-              </div>
-              <Button size="icon" variant="ghost" onClick={handleEndCall} className="h-8 w-8">
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-
-            {/* Voice Selection */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Choose Voice</label>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <select
-                    value={selectedVoice}
-                    onChange={(e) => setSelectedVoice(e.target.value)}
-                    className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 appearance-none cursor-pointer pr-8"
-                  >
-                    {VOICES.map(v => (
-                      <option key={v.id} value={v.id}>
-                        {v.name} ({v.gender}) — {v.desc}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
-                    <svg className="h-4 w-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+      {/* ── SETUP SCREEN — centered card ── */}
+      {callState === "setup" && (
+        <>
+          <div className="absolute inset-0 bg-background/80 backdrop-blur-md" onClick={handleEndCall} />
+          <div className="relative z-10 m-auto w-full max-w-lg mx-4 rounded-3xl border bg-card shadow-2xl overflow-hidden animate-in zoom-in-95 fade-in duration-300">
+            <div className="p-6 space-y-5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                    <Brain className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <h2 className="font-bold text-lg">Call The Brain</h2>
+                    <p className="text-xs text-muted-foreground">Voice assistant powered by your uploads</p>
                   </div>
                 </div>
-                <Button
-                  size="icon"
-                  variant="outline"
-                  onClick={() => previewVoice(selectedVoice)}
-                  disabled={previewPlaying}
-                  title="Preview voice"
-                >
-                  {previewPlaying ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                <Button size="icon" variant="ghost" onClick={handleEndCall} className="h-8 w-8">
+                  <X className="h-4 w-4" />
                 </Button>
               </div>
-            </div>
 
-            {/* Consent */}
-            <div className="flex items-start gap-3 p-3 rounded-xl bg-muted/50 border">
-              <Checkbox
-                id="consent"
-                checked={consentGiven}
-                onCheckedChange={(c) => setConsentGiven(!!c)}
-                className="mt-0.5"
-              />
-              <label htmlFor="consent" className="text-xs text-muted-foreground leading-relaxed cursor-pointer">
-                I consent to audio/video capture. Transcripts will be saved to my chat history for future reference.
-              </label>
-            </div>
-
-            <Button className="w-full h-12 text-base gap-2" onClick={startCall} disabled={!consentGiven}>
-              <Phone className="h-5 w-5" /> Start Call
-            </Button>
-          </div>
-        )}
-
-        {/* ── IN-CALL SCREEN ── */}
-        {isInCall && (
-          <div className="flex flex-col" style={{ maxHeight: "85vh" }}>
-            {/* Header */}
-            <div className="px-4 py-3 border-b flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2">
-                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
-                  <Brain className="h-4 w-4 text-primary" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold">The Brain</p>
-                  <p className="text-[10px] text-muted-foreground">{selectedVoiceData?.name} • {selectedVoiceData?.desc}</p>
-                </div>
-              </div>
-              <div className="relative">
-                <select
-                  value={selectedVoice}
-                  onChange={(e) => setSelectedVoice(e.target.value)}
-                  className="h-7 text-xs rounded-md bg-muted/50 border-none px-2 pr-6 appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring"
-                >
-                  {VOICES.map(v => (
-                    <option key={v.id} value={v.id}>{v.name} ({v.gender})</option>
-                  ))}
-                </select>
-                <Volume2 className="absolute right-1.5 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none text-muted-foreground" />
-              </div>
-            </div>
-
-            {/* Main Area */}
-            <div className="flex flex-col items-center justify-center p-4 min-h-[180px] shrink-0">
-              <div className="relative mb-4">
-                {callState === "listening" && (
-                  <>
-                    <div className="absolute inset-0 rounded-full bg-primary/10 animate-ping" style={{ animationDuration: "2s" }} />
-                    <div className="absolute -inset-3 rounded-full bg-primary/5 animate-ping" style={{ animationDuration: "3s" }} />
-                  </>
-                )}
-                {callState === "speaking" && (
-                  <>
-                    <div className="absolute -inset-2 rounded-full bg-primary/20 animate-pulse" />
-                    <div className="absolute -inset-4 rounded-full bg-primary/10 animate-pulse" style={{ animationDelay: "200ms" }} />
-                  </>
-                )}
-
-                <div className={`relative h-20 w-20 rounded-full flex items-center justify-center transition-all duration-500 ${
-                  callState === "listening" ? "bg-primary/10 ring-4 ring-primary/20" :
-                  callState === "thinking" ? "bg-muted" :
-                  callState === "speaking" ? "bg-primary/15 ring-4 ring-primary/30" : "bg-muted"
-                }`}>
-                  {callState === "listening" && <Mic className="h-8 w-8 text-primary" />}
-                  {callState === "thinking" && <Loader2 className="h-8 w-8 text-primary animate-spin" />}
-                  {callState === "speaking" && (
-                    <div className="flex items-end gap-1 h-8">
-                      {[0, 1, 2, 3, 4].map(i => (
-                        <div key={i} className="w-1.5 bg-primary rounded-full animate-bounce"
-                          style={{ height: `${10 + Math.random() * 22}px`, animationDelay: `${i * 100}ms`, animationDuration: "0.6s" }} />
+              {/* Voice Selection */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Choose Voice</label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <select
+                      value={selectedVoice}
+                      onChange={(e) => setSelectedVoice(e.target.value)}
+                      className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 appearance-none cursor-pointer pr-8"
+                    >
+                      {VOICES.map(v => (
+                        <option key={v.id} value={v.id}>
+                          {v.name} ({v.gender}) — {v.desc}
+                        </option>
                       ))}
+                    </select>
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none">
+                      <svg className="h-4 w-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                     </div>
-                  )}
+                  </div>
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    onClick={() => previewVoice(selectedVoice)}
+                    disabled={previewPlaying}
+                    title="Preview voice"
+                  >
+                    {previewPlaying ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                  </Button>
                 </div>
               </div>
 
-              <p className="text-sm font-semibold mb-1">
-                {callState === "listening" ? "Listening..." :
-                 callState === "thinking" ? "Thinking..." :
-                 callState === "speaking" ? "Speaking..." : ""}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {callState === "listening" ? "Speak naturally — I'm ready" :
-                 callState === "thinking" ? "Searching your brain..." :
-                 callState === "speaking" ? "Listen to the response" : ""}
-              </p>
+              {/* Consent */}
+              <div className="flex items-start gap-3 p-3 rounded-xl bg-muted/50 border">
+                <Checkbox
+                  id="consent"
+                  checked={consentGiven}
+                  onCheckedChange={(c) => setConsentGiven(!!c)}
+                  className="mt-0.5"
+                />
+                <label htmlFor="consent" className="text-xs text-muted-foreground leading-relaxed cursor-pointer">
+                  I consent to audio/video capture. Transcripts will be saved to my chat history.
+                </label>
+              </div>
 
-              {callState === "listening" && currentInterim && (
-                <div className="mt-3 px-4 py-2 rounded-xl bg-muted/50 border max-w-sm">
-                  <p className="text-sm text-muted-foreground italic">"{currentInterim}"</p>
-                </div>
+              <Button className="w-full h-12 text-base gap-2" onClick={startCall} disabled={!consentGiven}>
+                <Phone className="h-5 w-5" /> Start Call
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── IN-CALL: Gemini Live style — fullscreen ── */}
+      {isInCall && (
+        <div className="flex flex-col h-full w-full bg-black/95 relative">
+
+          {/* Video Feed — fullscreen background */}
+          {showVideoFeed && (
+            <div className="absolute inset-0 z-0">
+              {videoActive && (
+                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+              )}
+              {screenShareActive && (
+                <video ref={screenVideoRef} autoPlay playsInline muted className="w-full h-full object-contain bg-black" />
               )}
             </div>
+          )}
 
-            {/* Transcript Panel */}
-            {transcript.length > 0 && (
-              <div className="border-t flex-1 min-h-0 max-h-48 overflow-hidden">
-                <div ref={scrollRef} className="overflow-y-auto p-3 space-y-2 h-full">
-                  {transcript.map((entry, i) => (
-                    <div key={i} className={`flex ${entry.role === "user" ? "justify-end" : "justify-start"}`}>
-                      <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs ${
-                        entry.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"
-                      }`}>
-                        {entry.text}
-                      </div>
-                    </div>
-                  ))}
+          {/* Top header bar */}
+          <div className="relative z-10 flex items-center justify-between px-4 py-3 shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 text-white/90">
+                <div className="flex gap-0.5">
+                  <div className="w-0.5 h-3 bg-white/70 rounded-full animate-pulse" />
+                  <div className="w-0.5 h-4 bg-white/70 rounded-full animate-pulse" style={{ animationDelay: "100ms" }} />
+                  <div className="w-0.5 h-3 bg-white/70 rounded-full animate-pulse" style={{ animationDelay: "200ms" }} />
                 </div>
+                <span className="text-sm font-medium ml-1">Live</span>
+              </div>
+            </div>
+            {/* Voice switch */}
+            <div className="relative">
+              <select
+                value={selectedVoice}
+                onChange={(e) => setSelectedVoice(e.target.value)}
+                className="h-7 text-xs rounded-md bg-white/10 text-white border-white/20 border px-2 pr-6 appearance-none cursor-pointer focus:outline-none"
+              >
+                {VOICES.map(v => (
+                  <option key={v.id} value={v.id} className="text-black">{v.name} ({v.gender})</option>
+                ))}
+              </select>
+              <Volume2 className="absolute right-1.5 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none text-white/60" />
+            </div>
+          </div>
+
+          {/* Transcript area — scrollable, takes remaining space */}
+          <div className="relative z-10 flex-1 min-h-0 overflow-y-auto px-4 py-2" aria-live="polite">
+            {/* Listening indicator at top when no transcript */}
+            {transcript.length === 0 && !currentInterim && (
+              <div className="flex flex-col items-center justify-center h-full">
+                <div className="relative mb-4">
+                  {callState === "listening" && (
+                    <>
+                      <div className="absolute inset-0 rounded-full bg-white/10 animate-ping" style={{ animationDuration: "2s" }} />
+                      <div className="absolute -inset-3 rounded-full bg-white/5 animate-ping" style={{ animationDuration: "3s" }} />
+                    </>
+                  )}
+                  <div className={`relative h-20 w-20 rounded-full flex items-center justify-center transition-all duration-500 ${
+                    callState === "listening" ? "bg-white/10 ring-4 ring-white/20" :
+                    callState === "thinking" ? "bg-white/5" :
+                    callState === "speaking" ? "bg-white/15 ring-4 ring-white/30" : "bg-white/5"
+                  }`}>
+                    {callState === "listening" && <Mic className="h-8 w-8 text-white" />}
+                    {callState === "thinking" && <Loader2 className="h-8 w-8 text-white animate-spin" />}
+                    {callState === "speaking" && (
+                      <div className="flex items-end gap-1 h-8">
+                        {[0, 1, 2, 3, 4].map(i => (
+                          <div key={i} className="w-1.5 bg-white rounded-full animate-bounce"
+                            style={{ height: `${10 + Math.random() * 22}px`, animationDelay: `${i * 100}ms`, animationDuration: "0.6s" }} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <p className="text-white/90 text-sm font-medium">
+                  {callState === "listening" ? "Listening..." : callState === "thinking" ? "Thinking..." : callState === "speaking" ? "Speaking..." : ""}
+                </p>
+                <p className="text-white/50 text-xs mt-1">Speak naturally — I'm ready</p>
               </div>
             )}
 
-            {/* Controls Bar */}
-            <div className="p-4 border-t flex items-center justify-center shrink-0">
-              <div className="flex items-center gap-3 px-6 py-2 rounded-full bg-muted/50 border">
-                <button onClick={toggleCamera}
-                  className={`h-12 w-12 rounded-full flex items-center justify-center transition-all ${
-                    cameraActive ? "bg-primary text-primary-foreground" : "bg-background border hover:bg-muted"
-                  }`}
-                  title={cameraActive ? "Turn off camera" : "Turn on camera"}
-                >
-                  {cameraActive ? <Camera className="h-5 w-5" /> : <CameraOff className="h-5 w-5" />}
-                </button>
+            {/* Chat bubbles */}
+            {(transcript.length > 0 || currentInterim) && (
+              <div className="space-y-3 pb-4">
+                {transcript.map((entry, i) => (
+                  <div key={i} className={`flex ${entry.role === "user" ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm ${
+                      entry.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-white/10 text-white backdrop-blur-sm"
+                    }`}>
+                      {entry.text}
+                    </div>
+                  </div>
+                ))}
 
-                {/* Screen share — hide on mobile since it's not supported */}
-                {!isMobile && (
-                  <button onClick={toggleScreenShare}
-                    className={`h-12 w-12 rounded-full flex items-center justify-center transition-all ${
-                      screenShareActive ? "bg-primary text-primary-foreground" : "bg-background border hover:bg-muted"
-                    }`}
-                    title={screenShareActive ? "Stop sharing" : "Share screen"}
-                  >
-                    {screenShareActive ? <Monitor className="h-5 w-5" /> : <MonitorOff className="h-5 w-5" />}
-                  </button>
+                {/* Current interim text */}
+                {currentInterim && (
+                  <div className="flex justify-end">
+                    <div className="max-w-[85%] rounded-2xl px-4 py-2.5 text-sm bg-primary/60 text-primary-foreground italic">
+                      {currentInterim}
+                    </div>
+                  </div>
                 )}
 
-                <button onClick={toggleMic}
-                  className={`h-12 w-12 rounded-full flex items-center justify-center transition-all ${
-                    micMuted ? "bg-destructive/10 text-destructive border-destructive/30" : "bg-background border hover:bg-muted"
-                  }`}
-                  title={micMuted ? "Unmute" : "Mute"}
-                >
-                  {micMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-                </button>
+                {/* Thinking indicator */}
+                {callState === "thinking" && (
+                  <div className="flex justify-start">
+                    <div className="rounded-2xl px-4 py-2.5 bg-white/10 text-white backdrop-blur-sm">
+                      <div className="flex gap-1">
+                        <div className="w-2 h-2 rounded-full bg-white/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+                        <div className="w-2 h-2 rounded-full bg-white/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+                        <div className="w-2 h-2 rounded-full bg-white/60 animate-bounce" style={{ animationDelay: "300ms" }} />
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-                <button onClick={handleEndCall}
-                  className="h-12 w-12 rounded-full flex items-center justify-center bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-all"
-                  title="End call"
-                >
-                  <PhoneOff className="h-5 w-5" />
-                </button>
+                {/* Speaking indicator */}
+                {callState === "speaking" && (
+                  <div className="flex justify-start">
+                    <div className="rounded-2xl px-4 py-2.5 bg-white/10 backdrop-blur-sm flex items-center gap-2">
+                      <div className="flex items-end gap-0.5 h-4">
+                        {[0, 1, 2, 3].map(i => (
+                          <div key={i} className="w-1 bg-white/70 rounded-full animate-bounce"
+                            style={{ height: `${6 + Math.random() * 10}px`, animationDelay: `${i * 80}ms`, animationDuration: "0.5s" }} />
+                        ))}
+                      </div>
+                      <span className="text-white/60 text-xs">Speaking...</span>
+                    </div>
+                  </div>
+                )}
+
+                <div ref={transcriptEndRef} />
               </div>
+            )}
+          </div>
+
+          {/* Bottom Controls — Gemini Live style */}
+          <div className="relative z-10 shrink-0 pb-8 pt-4 flex justify-center">
+            <div className="flex items-center gap-4">
+              {/* Video toggle */}
+              <button onClick={toggleVideo}
+                className={`h-14 w-14 rounded-full flex items-center justify-center transition-all border-2 ${
+                  videoActive ? "bg-white text-black border-white" : "bg-white/10 text-white border-white/20 hover:bg-white/20"
+                }`}
+                title={videoActive ? "Turn off camera" : "Turn on camera"}
+              >
+                {videoActive ? <Video className="h-6 w-6" /> : <VideoOff className="h-6 w-6" />}
+              </button>
+
+              {/* Screen share */}
+              <button onClick={toggleScreenShare}
+                className={`h-14 w-14 rounded-full flex items-center justify-center transition-all border-2 ${
+                  screenShareActive ? "bg-white text-black border-white" : "bg-white/10 text-white border-white/20 hover:bg-white/20"
+                }`}
+                title={screenShareActive ? "Stop sharing" : "Share screen"}
+              >
+                {screenShareActive ? <Monitor className="h-6 w-6" /> : <MonitorOff className="h-6 w-6" />}
+              </button>
+
+              {/* Mic toggle */}
+              <button onClick={toggleMic}
+                className={`h-14 w-14 rounded-full flex items-center justify-center transition-all border-2 ${
+                  micMuted ? "bg-red-500/20 text-red-400 border-red-500/40" : "bg-white/10 text-white border-white/20 hover:bg-white/20"
+                }`}
+                title={micMuted ? "Unmute" : "Mute"}
+              >
+                {micMuted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
+              </button>
+
+              {/* End call */}
+              <button onClick={handleEndCall}
+                className="h-14 w-14 rounded-full flex items-center justify-center bg-red-600 text-white hover:bg-red-700 transition-all border-2 border-red-500"
+                title="End call"
+              >
+                <X className="h-6 w-6" />
+              </button>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Call ended */}
-        {callState === "idle" && (
-          <div className="p-6 text-center space-y-4">
+      {/* Call ended */}
+      {callState === "idle" && (
+        <>
+          <div className="absolute inset-0 bg-background/80 backdrop-blur-md" />
+          <div className="relative z-10 m-auto w-full max-w-lg mx-4 rounded-3xl border bg-card shadow-2xl p-6 text-center space-y-4">
             <Brain className="h-12 w-12 mx-auto text-primary/40" />
             <p className="text-sm text-muted-foreground">Call ended — transcript saved to chat</p>
             <Button onClick={() => setCallState("setup")} variant="outline">Start New Call</Button>
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }
