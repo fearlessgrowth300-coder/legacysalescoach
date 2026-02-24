@@ -872,7 +872,37 @@ export default function AiChat() {
             Call Brain
           </Button>
           {/* Voice Call Assistant */}
-          <VoiceCallAssistant open={showVoiceCall} onClose={() => setShowVoiceCall(false)} />
+          <VoiceCallAssistant
+            open={showVoiceCall}
+            onClose={() => setShowVoiceCall(false)}
+            onCallEnd={async (callTranscript) => {
+              if (!user || callTranscript.length === 0) return;
+              // Create or use active conversation
+              let convId = activeConvId;
+              if (!convId) {
+                const { data } = await supabase
+                  .from("ai_conversations")
+                  .insert({ user_id: user.id, title: "Voice Call — " + new Date().toLocaleDateString() })
+                  .select().single();
+                if (!data) return;
+                convId = data.id;
+                setActiveConvId(convId);
+                setConversations(prev => [data as Conversation, ...prev]);
+              }
+              // Save each transcript entry as a message
+              for (const entry of callTranscript) {
+                await supabase.from("ai_chat_messages").insert({
+                  conversation_id: convId,
+                  user_id: user.id,
+                  role: entry.role,
+                  content: entry.text,
+                });
+              }
+              // Reload messages
+              loadMessages(convId);
+              toast.success("Voice call transcript saved to chat");
+            }}
+          />
           {/* Brain Status Badge - hide on mobile */}
           <div className="hidden md:flex items-center gap-1.5 shrink-0">
             <Badge variant="secondary" className="text-[10px] gap-1 py-0.5">
