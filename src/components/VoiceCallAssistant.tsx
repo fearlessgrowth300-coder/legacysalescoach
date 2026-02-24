@@ -3,10 +3,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Phone, PhoneOff, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff,
-  Volume2, Loader2, X, Play, Brain,
+  Volume2, Loader2, X, Play, Brain, Square,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 type TranscriptEntry = {
   role: "user" | "assistant";
@@ -28,9 +29,11 @@ const VOICES = [
 interface Props {
   open: boolean;
   onClose: () => void;
+  onCallEnd?: (transcript: TranscriptEntry[]) => void;
 }
 
-export default function VoiceCallAssistant({ open, onClose }: Props) {
+export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) {
+  const isMobile = useIsMobile();
   const [callState, setCallState] = useState<CallState>("setup");
   const [selectedVoice, setSelectedVoice] = useState(VOICES[0].id);
   const [consentGiven, setConsentGiven] = useState(false);
@@ -40,10 +43,10 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [currentInterim, setCurrentInterim] = useState("");
   const [previewPlaying, setPreviewPlaying] = useState(false);
-  const [voiceDropdownOpen, setVoiceDropdownOpen] = useState(false);
 
   const recognitionRef = useRef<any>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -52,6 +55,12 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isProcessingRef = useRef(false);
   const shouldContinueRef = useRef(false);
+  const selectedVoiceRef = useRef(selectedVoice);
+  const transcriptRef = useRef<TranscriptEntry[]>([]);
+
+  // Keep refs in sync
+  useEffect(() => { selectedVoiceRef.current = selectedVoice; }, [selectedVoice]);
+  useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -61,7 +70,7 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
 
   useEffect(() => {
     if (!open) {
-      endCall();
+      cleanup();
       setCallState("setup");
     }
   }, [open]);
@@ -75,7 +84,13 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
     };
   };
 
+  // ─── PREVIEW: Cancel previous, play new ───
   const previewVoice = async (voiceId: string) => {
+    // Stop any currently playing preview
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
     setPreviewPlaying(true);
     try {
       const headers = await getAuthHeaders();
@@ -95,12 +110,13 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
       const data = await resp.json();
       if (data.audio) {
         const audio = new Audio(`data:audio/mpeg;base64,${data.audio}`);
-        audio.onended = () => setPreviewPlaying(false);
-        audio.onerror = () => { setPreviewPlaying(false); toast.error("Audio playback failed"); };
+        previewAudioRef.current = audio;
+        audio.onended = () => { setPreviewPlaying(false); previewAudioRef.current = null; };
+        audio.onerror = () => { setPreviewPlaying(false); previewAudioRef.current = null; toast.error("Audio playback failed"); };
         await audio.play();
       } else {
         setPreviewPlaying(false);
-        toast.error("No audio received");
+        toast.error("No audio received — try again");
       }
     } catch (e: any) {
       setPreviewPlaying(false);
@@ -110,13 +126,13 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
 
   const startCall = async () => {
     if (!consentGiven) {
-      toast.error("Please accept the privacy consent to continue");
+      toast.error("Please accept the consent to continue");
       return;
     }
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      toast.error("Speech recognition not supported in this browser. Use Chrome.");
+      toast.error("Speech recognition not supported. Use Chrome.");
       return;
     }
 
@@ -128,6 +144,13 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
       return;
     }
 
+    // Stop any preview audio
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+      setPreviewPlaying(false);
+    }
+
     shouldContinueRef.current = true;
     setCallState("listening");
     setTranscript([]);
@@ -135,59 +158,67 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
     startListening();
   };
 
+  // ─── LISTENING: Fixed to prevent duplicate words ───
   const startListening = useCallback(() => {
     if (!shouldContinueRef.current || isProcessingRef.current) return;
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) return;
 
+    // Stop existing recognition
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch {}
+      recognitionRef.current = null;
+    }
+
     const recognition = new SpeechRecognition();
-    recognition.continuous = true;
+    recognition.continuous = false; // Use non-continuous to avoid duplicate accumulation
     recognition.interimResults = true;
     recognition.lang = "en-US";
+    recognition.maxAlternatives = 1;
 
     let finalText = "";
     let silenceTimer: any = null;
 
     recognition.onresult = (event: any) => {
       let interim = "";
-      let newFinal = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      finalText = ""; // Reset each time — non-continuous mode gives full result each event
+      for (let i = 0; i < event.results.length; i++) {
         const t = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          newFinal += t;
+          finalText += t;
         } else {
           interim += t;
         }
       }
-      if (newFinal) {
-        finalText += (finalText ? " " : "") + newFinal;
-      }
-      setCurrentInterim(finalText + (interim ? " " + interim : ""));
+      setCurrentInterim(finalText || interim);
 
+      // Auto-stop after 1.5s silence once we have final text
       clearTimeout(silenceTimer);
       if (finalText.trim()) {
         silenceTimer = setTimeout(() => {
-          recognition.stop();
-        }, 1800);
+          try { recognition.stop(); } catch {}
+        }, 1500);
       }
     };
 
     recognition.onend = async () => {
+      clearTimeout(silenceTimer);
       recognitionRef.current = null;
       const text = finalText.trim();
       if (text && shouldContinueRef.current) {
         setCurrentInterim("");
         await processUserInput(text);
-      } else if (shouldContinueRef.current) {
+      } else if (shouldContinueRef.current && !isProcessingRef.current) {
         setCurrentInterim("");
-        setTimeout(() => startListening(), 200);
+        setTimeout(() => startListening(), 150);
       }
     };
 
     recognition.onerror = (e: any) => {
+      clearTimeout(silenceTimer);
       if (e.error === "no-speech" && shouldContinueRef.current) {
-        setTimeout(() => startListening(), 300);
+        setTimeout(() => startListening(), 200);
         return;
       }
       if (e.error === "not-allowed") {
@@ -198,6 +229,7 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
       }
       if (e.error !== "aborted") {
         console.error("Speech error:", e.error);
+        if (shouldContinueRef.current) setTimeout(() => startListening(), 300);
       }
     };
 
@@ -235,13 +267,16 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
         }
       }
 
+      // Use ref for voice to get current value (not stale closure)
+      const voiceId = selectedVoiceRef.current;
+
       const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/voice-brain`, {
         method: "POST",
         headers,
         body: JSON.stringify({
           question: text,
           mode: "full",
-          voiceId: selectedVoice,
+          voiceId,
           frame: frameBase64,
         }),
       });
@@ -257,41 +292,57 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
         setTranscript(prev => [...prev, { role: "assistant", text: data.text, timestamp: new Date() }]);
       }
 
-      setCallState("speaking");
-
       if (data.audio) {
+        setCallState("speaking");
         const audio = new Audio(`data:audio/mpeg;base64,${data.audio}`);
         audioRef.current = audio;
         audio.onended = () => {
           audioRef.current = null;
           isProcessingRef.current = false;
-          if (shouldContinueRef.current) startListening();
+          if (shouldContinueRef.current) {
+            setCallState("listening");
+            startListening();
+          }
         };
         audio.onerror = () => {
           audioRef.current = null;
           isProcessingRef.current = false;
-          if (shouldContinueRef.current) startListening();
+          if (shouldContinueRef.current) {
+            setCallState("listening");
+            startListening();
+          }
         };
         await audio.play();
       } else {
+        // No audio but we have text — still continue
         isProcessingRef.current = false;
-        if (shouldContinueRef.current) startListening();
+        if (shouldContinueRef.current) {
+          setCallState("listening");
+          startListening();
+        }
       }
     } catch (e: any) {
       console.error("Voice brain error:", e);
       toast.error(e.message || "Failed to get response");
       isProcessingRef.current = false;
-      if (shouldContinueRef.current) startListening();
+      if (shouldContinueRef.current) {
+        setCallState("listening");
+        startListening();
+      }
     }
   };
 
-  const endCall = useCallback(() => {
+  const cleanup = useCallback(() => {
     shouldContinueRef.current = false;
     isProcessingRef.current = false;
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch {}
+      recognitionRef.current = null;
+    }
     audioRef.current?.pause();
     audioRef.current = null;
+    previewAudioRef.current?.pause();
+    previewAudioRef.current = null;
     cameraStreamRef.current?.getTracks().forEach(t => t.stop());
     cameraStreamRef.current = null;
     screenStreamRef.current?.getTracks().forEach(t => t.stop());
@@ -300,9 +351,10 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
     setScreenShareActive(false);
     setMicMuted(false);
     setCurrentInterim("");
+    setPreviewPlaying(false);
   }, []);
 
-  // Camera toggle — direct gesture handler
+  // Camera toggle
   const toggleCamera = async () => {
     if (cameraActive) {
       cameraStreamRef.current?.getTracks().forEach(t => t.stop());
@@ -315,30 +367,24 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
         });
         cameraStreamRef.current = stream;
         setCameraActive(true);
-        // Stop screen share if active
         if (screenStreamRef.current) {
           screenStreamRef.current.getTracks().forEach(t => t.stop());
           screenStreamRef.current = null;
           setScreenShareActive(false);
         }
       } catch (err: any) {
-        if (err.name === "NotAllowedError") {
-          toast.error("Camera access denied. Check browser permissions.");
-        } else {
-          toast.error("Could not access camera");
-        }
+        toast.error(err.name === "NotAllowedError" ? "Camera access denied" : "Could not access camera");
       }
     }
   };
 
-  // Assign camera stream to video element when active
   useEffect(() => {
     if (cameraActive && cameraVideoRef.current && cameraStreamRef.current) {
       cameraVideoRef.current.srcObject = cameraStreamRef.current;
     }
   }, [cameraActive]);
 
-  // Screen share toggle — direct gesture handler
+  // Screen share toggle (desktop only)
   const toggleScreenShare = async () => {
     if (screenShareActive) {
       screenStreamRef.current?.getTracks().forEach(t => t.stop());
@@ -353,23 +399,17 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
           setScreenShareActive(false);
         };
         setScreenShareActive(true);
-        // Stop camera if active
         if (cameraStreamRef.current) {
           cameraStreamRef.current.getTracks().forEach(t => t.stop());
           cameraStreamRef.current = null;
           setCameraActive(false);
         }
       } catch (err: any) {
-        if (err.name === "NotAllowedError") {
-          toast.error("Screen share cancelled or denied.");
-        } else {
-          toast.error("Screen sharing failed");
-        }
+        toast.error(err.name === "NotAllowedError" ? "Screen share denied" : "Screen sharing not available");
       }
     }
   };
 
-  // Assign screen stream to video element
   useEffect(() => {
     if (screenShareActive && screenVideoRef.current && screenStreamRef.current) {
       screenVideoRef.current.srcObject = screenStreamRef.current;
@@ -382,12 +422,21 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
       if (callState === "listening") startListening();
     } else {
       setMicMuted(true);
-      recognitionRef.current?.stop();
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch {}
+        recognitionRef.current = null;
+      }
     }
   };
 
   const handleEndCall = () => {
-    endCall();
+    const finalTranscript = transcriptRef.current;
+    cleanup();
+    // Persist transcript to chat
+    if (finalTranscript.length > 0 && onCallEnd) {
+      onCallEnd(finalTranscript);
+    }
+    setTranscript([]);
     setCallState("idle");
     onClose();
   };
@@ -400,39 +449,24 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
-      {/* Backdrop */}
       <div className="absolute inset-0 bg-background/80 backdrop-blur-md" onClick={isInCall ? undefined : handleEndCall} />
-
-      {/* Hidden canvas for frame capture */}
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Fullscreen Camera/Screen View */}
+      {/* Fullscreen Camera/Screen — call UI overlays on top */}
       {showVideoFeed && isInCall && (
         <div className="absolute inset-0 z-[101] bg-black">
           {cameraActive && (
-            <video
-              ref={cameraVideoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover"
-            />
+            <video ref={cameraVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
           )}
           {screenShareActive && (
-            <video
-              ref={screenVideoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-contain bg-black"
-            />
+            <video ref={screenVideoRef} autoPlay playsInline muted className="w-full h-full object-contain bg-black" />
           )}
         </div>
       )}
 
       {/* Call Card */}
       <div className={`relative z-[102] w-full mx-4 rounded-3xl border bg-card shadow-2xl overflow-hidden animate-in zoom-in-95 fade-in duration-300 ${
-        showVideoFeed && isInCall ? "max-w-sm bg-card/90 backdrop-blur-lg" : "max-w-lg"
+        showVideoFeed && isInCall ? "max-w-sm bg-card/80 backdrop-blur-xl" : "max-w-lg"
       }`}>
 
         {/* ── SETUP SCREEN ── */}
@@ -453,7 +487,7 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
               </Button>
             </div>
 
-            {/* Voice Selection — native dropdown */}
+            {/* Voice Selection */}
             <div className="space-y-2">
               <label className="text-sm font-medium">Choose Voice</label>
               <div className="flex gap-2">
@@ -480,7 +514,7 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
                   disabled={previewPlaying}
                   title="Preview voice"
                 >
-                  {previewPlaying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                  {previewPlaying ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                 </Button>
               </div>
             </div>
@@ -494,7 +528,7 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
                 className="mt-0.5"
               />
               <label htmlFor="consent" className="text-xs text-muted-foreground leading-relaxed cursor-pointer">
-                I allow temporary audio/video capture for this session. Audio and video are processed in real-time and not stored permanently. Session data is discarded when the call ends.
+                I consent to audio/video capture. Transcripts will be saved to my chat history for future reference.
               </label>
             </div>
 
@@ -506,9 +540,9 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
 
         {/* ── IN-CALL SCREEN ── */}
         {isInCall && (
-          <div className="flex flex-col" style={{ height: showVideoFeed ? "auto" : "min(80vh, 600px)" }}>
+          <div className="flex flex-col" style={{ maxHeight: "85vh" }}>
             {/* Header */}
-            <div className="px-4 py-3 border-b flex items-center justify-between">
+            <div className="px-4 py-3 border-b flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
                 <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
                   <Brain className="h-4 w-4 text-primary" />
@@ -518,7 +552,6 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
                   <p className="text-[10px] text-muted-foreground">{selectedVoiceData?.name} • {selectedVoiceData?.desc}</p>
                 </div>
               </div>
-              {/* Mid-call voice switcher — native dropdown */}
               <div className="relative">
                 <select
                   value={selectedVoice}
@@ -526,9 +559,7 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
                   className="h-7 text-xs rounded-md bg-muted/50 border-none px-2 pr-6 appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring"
                 >
                   {VOICES.map(v => (
-                    <option key={v.id} value={v.id}>
-                      {v.name} ({v.gender})
-                    </option>
+                    <option key={v.id} value={v.id}>{v.name} ({v.gender})</option>
                   ))}
                 </select>
                 <Volume2 className="absolute right-1.5 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none text-muted-foreground" />
@@ -536,9 +567,8 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
             </div>
 
             {/* Main Area */}
-            <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden p-4 min-h-[200px]">
-              {/* Animated State Indicator */}
-              <div className="relative mb-6">
+            <div className="flex flex-col items-center justify-center p-4 min-h-[180px] shrink-0">
+              <div className="relative mb-4">
                 {callState === "listening" && (
                   <>
                     <div className="absolute inset-0 rounded-full bg-primary/10 animate-ping" style={{ animationDuration: "2s" }} />
@@ -562,15 +592,8 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
                   {callState === "speaking" && (
                     <div className="flex items-end gap-1 h-8">
                       {[0, 1, 2, 3, 4].map(i => (
-                        <div
-                          key={i}
-                          className="w-1.5 bg-primary rounded-full animate-bounce"
-                          style={{
-                            height: `${10 + Math.random() * 22}px`,
-                            animationDelay: `${i * 100}ms`,
-                            animationDuration: "0.6s",
-                          }}
-                        />
+                        <div key={i} className="w-1.5 bg-primary rounded-full animate-bounce"
+                          style={{ height: `${10 + Math.random() * 22}px`, animationDelay: `${i * 100}ms`, animationDuration: "0.6s" }} />
                       ))}
                     </div>
                   )}
@@ -588,7 +611,6 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
                  callState === "speaking" ? "Listen to the response" : ""}
               </p>
 
-              {/* Interim transcript while listening */}
               {callState === "listening" && currentInterim && (
                 <div className="mt-3 px-4 py-2 rounded-xl bg-muted/50 border max-w-sm">
                   <p className="text-sm text-muted-foreground italic">"{currentInterim}"</p>
@@ -598,14 +620,12 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
 
             {/* Transcript Panel */}
             {transcript.length > 0 && (
-              <div className="border-t max-h-40">
-                <div ref={scrollRef} className="overflow-y-auto p-3 space-y-2 max-h-40">
+              <div className="border-t flex-1 min-h-0 max-h-48 overflow-hidden">
+                <div ref={scrollRef} className="overflow-y-auto p-3 space-y-2 h-full">
                   {transcript.map((entry, i) => (
                     <div key={i} className={`flex ${entry.role === "user" ? "justify-end" : "justify-start"}`}>
                       <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs ${
-                        entry.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-foreground"
+                        entry.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"
                       }`}>
                         {entry.text}
                       </div>
@@ -616,10 +636,9 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
             )}
 
             {/* Controls Bar */}
-            <div className="p-4 border-t flex items-center justify-center">
+            <div className="p-4 border-t flex items-center justify-center shrink-0">
               <div className="flex items-center gap-3 px-6 py-2 rounded-full bg-muted/50 border">
-                <button
-                  onClick={toggleCamera}
+                <button onClick={toggleCamera}
                   className={`h-12 w-12 rounded-full flex items-center justify-center transition-all ${
                     cameraActive ? "bg-primary text-primary-foreground" : "bg-background border hover:bg-muted"
                   }`}
@@ -628,18 +647,19 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
                   {cameraActive ? <Camera className="h-5 w-5" /> : <CameraOff className="h-5 w-5" />}
                 </button>
 
-                <button
-                  onClick={toggleScreenShare}
-                  className={`h-12 w-12 rounded-full flex items-center justify-center transition-all ${
-                    screenShareActive ? "bg-primary text-primary-foreground" : "bg-background border hover:bg-muted"
-                  }`}
-                  title={screenShareActive ? "Stop sharing" : "Share screen"}
-                >
-                  {screenShareActive ? <Monitor className="h-5 w-5" /> : <MonitorOff className="h-5 w-5" />}
-                </button>
+                {/* Screen share — hide on mobile since it's not supported */}
+                {!isMobile && (
+                  <button onClick={toggleScreenShare}
+                    className={`h-12 w-12 rounded-full flex items-center justify-center transition-all ${
+                      screenShareActive ? "bg-primary text-primary-foreground" : "bg-background border hover:bg-muted"
+                    }`}
+                    title={screenShareActive ? "Stop sharing" : "Share screen"}
+                  >
+                    {screenShareActive ? <Monitor className="h-5 w-5" /> : <MonitorOff className="h-5 w-5" />}
+                  </button>
+                )}
 
-                <button
-                  onClick={toggleMic}
+                <button onClick={toggleMic}
                   className={`h-12 w-12 rounded-full flex items-center justify-center transition-all ${
                     micMuted ? "bg-destructive/10 text-destructive border-destructive/30" : "bg-background border hover:bg-muted"
                   }`}
@@ -648,8 +668,7 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
                   {micMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                 </button>
 
-                <button
-                  onClick={handleEndCall}
+                <button onClick={handleEndCall}
                   className="h-12 w-12 rounded-full flex items-center justify-center bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-all"
                   title="End call"
                 >
@@ -660,14 +679,12 @@ export default function VoiceCallAssistant({ open, onClose }: Props) {
           </div>
         )}
 
-        {/* Call ended state */}
+        {/* Call ended */}
         {callState === "idle" && (
           <div className="p-6 text-center space-y-4">
             <Brain className="h-12 w-12 mx-auto text-primary/40" />
-            <p className="text-sm text-muted-foreground">Call ended</p>
-            <Button onClick={() => setCallState("setup")} variant="outline">
-              Start New Call
-            </Button>
+            <p className="text-sm text-muted-foreground">Call ended — transcript saved to chat</p>
+            <Button onClick={() => setCallState("setup")} variant="outline">Start New Call</Button>
           </div>
         )}
       </div>
