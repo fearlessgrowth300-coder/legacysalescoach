@@ -81,7 +81,7 @@ serve(async (req) => {
     ].join("\n\n") : "";
 
     const visionDirective = frame
-      ? "\n\nIMPORTANT VISION RULES: A camera/screen frame is attached. You CAN see it. Describe exactly what is visible before giving advice. Never claim you cannot see the frame. If the frame is unclear, say what is unclear and ask for a steadier frame."
+      ? "\n\nCRITICAL VISION RULES — YOU MUST FOLLOW THESE:\n1. An image frame from the user's camera or screen IS attached to this message as an image_url.\n2. You ABSOLUTELY CAN see this image. You have full vision/multimodal capability.\n3. ALWAYS start your response by describing what you see in the image BEFORE giving advice.\n4. NEVER say 'I cannot see', 'I'm a voice assistant', 'I only process audio', or anything similar.\n5. If the image is blurry or unclear, say exactly what parts are unclear and ask for a steadier frame.\n6. Analyze text, UI elements, faces, objects, screens — everything visible in the frame."
       : "";
 
     const isBlast = mode === "blast";

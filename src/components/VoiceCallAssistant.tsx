@@ -477,11 +477,16 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
     }
 
     try {
-      const candidates: MediaStreamConstraints[] = [
-        { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } },
-        { video: { facingMode: { ideal: "user" }, width: { ideal: 1280 }, height: { ideal: 720 } } },
-        { video: true },
-      ];
+      const candidates: MediaStreamConstraints[] = isMobile
+        ? [
+            { video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } } },
+            { video: { facingMode: "environment" } },
+            { video: true },
+          ]
+        : [
+            { video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } },
+            { video: true },
+          ];
 
       let stream: MediaStream | null = null;
       for (const constraints of candidates) {
@@ -498,10 +503,13 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
       videoStreamRef.current = stream;
       setVideoActive(true);
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => {});
-      }
+      // Bind video element after a tick so React has rendered
+      requestAnimationFrame(() => {
+        if (videoRef.current && videoStreamRef.current) {
+          videoRef.current.srcObject = videoStreamRef.current;
+          videoRef.current.play().catch(() => {});
+        }
+      });
 
       // Stop screen share if active
       if (screenStreamRef.current) {
