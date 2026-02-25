@@ -57,6 +57,8 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
   const shouldContinueRef = useRef(false);
   const selectedVoiceRef = useRef(selectedVoice);
   const transcriptRef = useRef<TranscriptEntry[]>([]);
+  const lastProcessedRef = useRef<{ text: string; at: number }>({ text: "", at: 0 });
+  const previewAbortRef = useRef<AbortController | null>(null);
 
   // Keep refs in sync
   useEffect(() => { selectedVoiceRef.current = selectedVoice; }, [selectedVoice]);
@@ -83,43 +85,115 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
     };
   };
 
-  // ─── PREVIEW: Cancel previous, play new ───
-  const previewVoice = async (voiceId: string) => {
+  const stopPreviewPlayback = useCallback(() => {
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
       previewAudioRef.current.currentTime = 0;
       previewAudioRef.current = null;
     }
+
+    setPreviewPlaying(false);
+  }, []);
+
+  const speakFallback = useCallback((text: string, voiceId: string) => {
+    return new Promise<void>((resolve) => {
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+        resolve();
+        return;
+      }
+
+      try {
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        const selectedMeta = VOICES.find((v) => v.id === voiceId);
+        const voices = window.speechSynthesis.getVoices();
+        const genderHint = selectedMeta?.gender?.toLowerCase() || "";
+
+        let browserVoice = voices.find((v) =>
+          /^en/i.test(v.lang) &&
+          (genderHint === "female"
+            ? /female|zira|samantha|victoria|ava/i.test(v.name.toLowerCase())
+            : /male|david|alex|daniel|google uk english male/i.test(v.name.toLowerCase()))
+        );
+
+        if (!browserVoice) browserVoice = voices.find((v) => /^en/i.test(v.lang)) || voices[0];
+        if (browserVoice) utterance.voice = browserVoice;
+
+        utterance.rate = voiceId === "pFZP5JQG7iQjIQuC4Bku" ? 1.05 : 1;
+        utterance.pitch = genderHint === "female" ? 1.08 : 0.96;
+
+        const timeout = window.setTimeout(() => resolve(), 15000);
+        utterance.onend = () => {
+          window.clearTimeout(timeout);
+          resolve();
+        };
+        utterance.onerror = () => {
+          window.clearTimeout(timeout);
+          resolve();
+        };
+
+        window.speechSynthesis.speak(utterance);
+      } catch {
+        resolve();
+      }
+    });
+  }, []);
+
+  // ─── PREVIEW: Cancel previous, play new ───
+  const previewVoice = async (voiceId: string) => {
+    stopPreviewPlayback();
+
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
     setPreviewPlaying(true);
+
     try {
       const headers = await getAuthHeaders();
       const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/voice-brain`, {
         method: "POST",
         headers,
+        signal: controller.signal,
         body: JSON.stringify({
           question: "Hello! I'm your AI Brain assistant. How can I help you today?",
           mode: "blast",
           voiceId,
         }),
       });
+
       if (!resp.ok) {
         const errData = await resp.json().catch(() => ({}));
         throw new Error(errData.error || `HTTP ${resp.status}`);
       }
+
       const data = await resp.json();
       if (data.audio) {
-        const audio = new Audio(`data:audio/mpeg;base64,${data.audio}`);
-        previewAudioRef.current = audio;
-        audio.onended = () => { setPreviewPlaying(false); previewAudioRef.current = null; };
-        audio.onerror = () => { setPreviewPlaying(false); previewAudioRef.current = null; toast.error("Audio playback failed"); };
-        await audio.play();
+        await new Promise<void>((resolve, reject) => {
+          const audio = new Audio(`data:audio/mpeg;base64,${data.audio}`);
+          previewAudioRef.current = audio;
+          audio.onended = () => {
+            previewAudioRef.current = null;
+            resolve();
+          };
+          audio.onerror = () => {
+            previewAudioRef.current = null;
+            reject(new Error("Audio playback failed"));
+          };
+          audio.play().catch(reject);
+        });
       } else {
-        setPreviewPlaying(false);
-        toast.error("No audio received — try again");
+        await speakFallback(data.text || "Voice preview unavailable. Using device fallback voice.", voiceId);
       }
     } catch (e: any) {
+      if (e?.name !== "AbortError") {
+        toast.error(e.message || "Preview failed");
+      }
+    } finally {
+      if (previewAbortRef.current === controller) previewAbortRef.current = null;
       setPreviewPlaying(false);
-      toast.error(e.message || "Preview failed");
     }
   };
 
@@ -143,13 +217,13 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
       return;
     }
 
-    if (previewAudioRef.current) {
-      previewAudioRef.current.pause();
-      previewAudioRef.current = null;
-      setPreviewPlaying(false);
-    }
+    stopPreviewPlayback();
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
 
     shouldContinueRef.current = true;
+    lastProcessedRef.current = { text: "", at: 0 };
     setCallState("listening");
     setTranscript([]);
     setCurrentInterim("");
@@ -179,22 +253,25 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
 
     recognition.onresult = (event: any) => {
       let interim = "";
-      finalText = "";
-      for (let i = 0; i < event.results.length; i++) {
-        const t = event.results[i][0].transcript;
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = (event.results[i][0].transcript || "").trim();
+        if (!t) continue;
         if (event.results[i].isFinal) {
-          finalText += t;
+          finalText = `${finalText} ${t}`.trim();
         } else {
-          interim += t;
+          interim = `${interim} ${t}`.trim();
         }
       }
-      setCurrentInterim(finalText || interim);
+
+      const liveText = `${finalText} ${interim}`.trim();
+      setCurrentInterim(liveText);
 
       clearTimeout(silenceTimer);
       if (finalText.trim()) {
         silenceTimer = setTimeout(() => {
           try { recognition.stop(); } catch {}
-        }, 1500);
+        }, 1200);
       }
     };
 
@@ -202,10 +279,22 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
       clearTimeout(silenceTimer);
       recognitionRef.current = null;
       const text = finalText.trim();
+
       if (text && shouldContinueRef.current) {
-        setCurrentInterim("");
-        await processUserInput(text);
-      } else if (shouldContinueRef.current && !isProcessingRef.current) {
+        const normalized = text.toLowerCase();
+        const isRecentDuplicate =
+          normalized === lastProcessedRef.current.text &&
+          Date.now() - lastProcessedRef.current.at < 2500;
+
+        if (!isRecentDuplicate) {
+          lastProcessedRef.current = { text: normalized, at: Date.now() };
+          setCurrentInterim("");
+          await processUserInput(text);
+          return;
+        }
+      }
+
+      if (shouldContinueRef.current && !isProcessingRef.current) {
         setCurrentInterim("");
         setTimeout(() => startListening(), 150);
       }
@@ -261,8 +350,13 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
 
     try {
       const headers = await getAuthHeaders();
-      const frameBase64 = captureFrame();
+      let frameBase64 = captureFrame();
       const voiceId = selectedVoiceRef.current;
+
+      if (!frameBase64 && (videoActive || screenShareActive)) {
+        await new Promise((resolve) => setTimeout(resolve, 180));
+        frameBase64 = captureFrame();
+      }
 
       const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/voice-brain`, {
         method: "POST",
@@ -290,8 +384,16 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
       if (data.audio) {
         setCallState("speaking");
         await playAudioResponse(data.audio);
+      } else if (data.text) {
+        // Fallback if backend TTS is unavailable
+        setCallState("speaking");
+        await speakFallback(data.text, voiceId);
+        isProcessingRef.current = false;
+        if (shouldContinueRef.current) {
+          setCallState("listening");
+          startListening();
+        }
       } else {
-        // No audio — continue listening
         isProcessingRef.current = false;
         if (shouldContinueRef.current) {
           setCallState("listening");
@@ -332,8 +434,6 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
 
       audio.play().catch((err) => {
         console.error("Audio play() failed:", err);
-        // Try user-interaction workaround
-        toast.error("Audio blocked — tap screen to enable");
         finish();
       });
     });
@@ -348,74 +448,126 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
     }
     audioRef.current?.pause();
     audioRef.current = null;
-    previewAudioRef.current?.pause();
-    previewAudioRef.current = null;
+    stopPreviewPlayback();
     videoStreamRef.current?.getTracks().forEach(t => t.stop());
     videoStreamRef.current = null;
     screenStreamRef.current?.getTracks().forEach(t => t.stop());
     screenStreamRef.current = null;
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     setVideoActive(false);
     setScreenShareActive(false);
     setMicMuted(false);
     setCurrentInterim("");
     setPreviewPlaying(false);
-  }, []);
+  }, [stopPreviewPlayback]);
 
   // Video toggle
   const toggleVideo = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast.error("Camera is not supported on this browser");
+      return;
+    }
+
     if (videoActive) {
       videoStreamRef.current?.getTracks().forEach(t => t.stop());
       videoStreamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
       setVideoActive(false);
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
-        });
-        videoStreamRef.current = stream;
-        setVideoActive(true);
-        // Stop screen share if active
-        if (screenStreamRef.current) {
-          screenStreamRef.current.getTracks().forEach(t => t.stop());
-          screenStreamRef.current = null;
-          setScreenShareActive(false);
+      return;
+    }
+
+    try {
+      const candidates: MediaStreamConstraints[] = [
+        { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } },
+        { video: { facingMode: { ideal: "user" }, width: { ideal: 1280 }, height: { ideal: 720 } } },
+        { video: true },
+      ];
+
+      let stream: MediaStream | null = null;
+      for (const constraints of candidates) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          if (stream) break;
+        } catch {
+          // Try next candidate
         }
-      } catch (err: any) {
-        toast.error(err.name === "NotAllowedError" ? "Camera access denied" : "Could not access camera");
       }
+
+      if (!stream) throw new Error("camera_unavailable");
+
+      videoStreamRef.current = stream;
+      setVideoActive(true);
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+
+      // Stop screen share if active
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(t => t.stop());
+        screenStreamRef.current = null;
+        if (screenVideoRef.current) screenVideoRef.current.srcObject = null;
+        setScreenShareActive(false);
+      }
+    } catch (err: any) {
+      toast.error(err?.name === "NotAllowedError" ? "Camera access denied" : "Could not access camera");
     }
   };
 
   useEffect(() => {
     if (videoActive && videoRef.current && videoStreamRef.current) {
       videoRef.current.srcObject = videoStreamRef.current;
+      videoRef.current.play().catch(() => {});
     }
   }, [videoActive]);
 
   // Screen share toggle
   const toggleScreenShare = async () => {
+    const canShareScreen = !!navigator.mediaDevices?.getDisplayMedia;
+    if (!canShareScreen) {
+      toast.error("Screen sharing is not supported on this device/browser");
+      return;
+    }
+
     if (screenShareActive) {
       screenStreamRef.current?.getTracks().forEach(t => t.stop());
       screenStreamRef.current = null;
+      if (screenVideoRef.current) screenVideoRef.current.srcObject = null;
       setScreenShareActive(false);
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        screenStreamRef.current = stream;
-        stream.getVideoTracks()[0].onended = () => {
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      screenStreamRef.current = stream;
+      const [track] = stream.getVideoTracks();
+      if (track) {
+        track.onended = () => {
           screenStreamRef.current = null;
+          if (screenVideoRef.current) screenVideoRef.current.srcObject = null;
           setScreenShareActive(false);
         };
-        setScreenShareActive(true);
-        if (videoStreamRef.current) {
-          videoStreamRef.current.getTracks().forEach(t => t.stop());
-          videoStreamRef.current = null;
-          setVideoActive(false);
-        }
-      } catch (err: any) {
-        if (err.name !== "NotAllowedError") {
-          toast.error("Screen sharing not available");
-        }
+      }
+
+      setScreenShareActive(true);
+
+      if (screenVideoRef.current) {
+        screenVideoRef.current.srcObject = stream;
+        await screenVideoRef.current.play().catch(() => {});
+      }
+
+      if (videoStreamRef.current) {
+        videoStreamRef.current.getTracks().forEach(t => t.stop());
+        videoStreamRef.current = null;
+        if (videoRef.current) videoRef.current.srcObject = null;
+        setVideoActive(false);
+      }
+    } catch (err: any) {
+      if (err?.name === "NotAllowedError") {
+        toast.error("Screen share was cancelled");
+      } else {
+        toast.error("Screen sharing not available");
       }
     }
   };
@@ -423,6 +575,7 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
   useEffect(() => {
     if (screenShareActive && screenVideoRef.current && screenStreamRef.current) {
       screenVideoRef.current.srcObject = screenStreamRef.current;
+      screenVideoRef.current.play().catch(() => {});
     }
   }, [screenShareActive]);
 
@@ -452,8 +605,8 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
 
   if (!open) return null;
 
-  const selectedVoiceData = VOICES.find(v => v.id === selectedVoice);
   const isInCall = callState !== "idle" && callState !== "setup";
+  const canShareScreen = !!navigator.mediaDevices?.getDisplayMedia;
   const showVideoFeed = videoActive || screenShareActive;
 
   return (
@@ -504,9 +657,8 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
                   <Button
                     size="icon"
                     variant="outline"
-                    onClick={() => previewVoice(selectedVoice)}
-                    disabled={previewPlaying}
-                    title="Preview voice"
+                    onClick={() => (previewPlaying ? stopPreviewPlayback() : previewVoice(selectedVoice))}
+                    title={previewPlaying ? "Stop preview" : "Preview voice"}
                   >
                     {previewPlaying ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                   </Button>
@@ -685,10 +837,15 @@ export default function VoiceCallAssistant({ open, onClose, onCallEnd }: Props) 
 
               {/* Screen share */}
               <button onClick={toggleScreenShare}
+                disabled={!canShareScreen}
                 className={`h-14 w-14 rounded-full flex items-center justify-center transition-all border-2 ${
-                  screenShareActive ? "bg-white text-black border-white" : "bg-white/10 text-white border-white/20 hover:bg-white/20"
+                  !canShareScreen
+                    ? "bg-white/5 text-white/40 border-white/10 cursor-not-allowed"
+                    : screenShareActive
+                      ? "bg-white text-black border-white"
+                      : "bg-white/10 text-white border-white/20 hover:bg-white/20"
                 }`}
-                title={screenShareActive ? "Stop sharing" : "Share screen"}
+                title={!canShareScreen ? "Screen sharing unsupported on this device" : screenShareActive ? "Stop sharing" : "Share screen"}
               >
                 {screenShareActive ? <Monitor className="h-6 w-6" /> : <MonitorOff className="h-6 w-6" />}
               </button>

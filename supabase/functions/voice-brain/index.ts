@@ -80,10 +80,14 @@ serve(async (req) => {
       }).join("\n"),
     ].join("\n\n") : "";
 
+    const visionDirective = frame
+      ? "\n\nIMPORTANT VISION RULES: A camera/screen frame is attached. You CAN see it. Describe exactly what is visible before giving advice. Never claim you cannot see the frame. If the frame is unclear, say what is unclear and ask for a steadier frame."
+      : "";
+
     const isBlast = mode === "blast";
     const systemPrompt = isBlast
-      ? `You are "The Brain" voice assistant in BLAST mode. Give a punchy, 2-3 sentence tactical answer ONLY from uploaded knowledge. ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`
-      : `You are "The Brain" voice assistant. Give concise, strategic advice ONLY from uploaded knowledge. Keep answers under 4 sentences for voice clarity. Reference source titles naturally. ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`;
+      ? `You are \"The Brain\" voice assistant in BLAST mode. Give a punchy, 2-3 sentence tactical answer ONLY from uploaded knowledge.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`
+      : `You are \"The Brain\" voice assistant. Give concise, strategic advice ONLY from uploaded knowledge. Keep answers under 4 sentences for voice clarity. Reference source titles naturally.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`;
 
     // Build user message — support vision frame
     const userContent: any = frame
@@ -100,7 +104,7 @@ serve(async (req) => {
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: systemPrompt + (frame ? "\n\nThe user is also showing you a live camera/screen frame. Analyze what you see and incorporate it into your answer." : "") },
+          { role: "system", content: systemPrompt },
           { role: "user", content: userContent },
         ],
         temperature: 0.7,
