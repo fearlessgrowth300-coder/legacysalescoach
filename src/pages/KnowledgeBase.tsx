@@ -135,6 +135,32 @@ export default function KnowledgeBase() {
     setLearningsDialogOpen(true);
   };
 
+  const runWithRetry = async <T = any,>(
+    fn: () => PromiseLike<T> | T,
+    retries = 2,
+    delayMs = 800
+  ): Promise<T> => {
+    let lastError: any;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fn();
+      } catch (error: any) {
+        lastError = error;
+        if (attempt === retries) break;
+        await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
+      }
+    }
+    throw lastError;
+  };
+
+  const normalizeNetworkError = (error: any) => {
+    const msg = error?.message || "Unknown error";
+    if (/failed to fetch|networkerror|network request failed/i.test(msg)) {
+      return "Network error while uploading. Please retry on a stable connection.";
+    }
+    return msg;
+  };
+
   const addUrl = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.from("knowledge_base_items").insert({
@@ -175,29 +201,42 @@ export default function KnowledgeBase() {
   const addPdf = useMutation({
     mutationFn: async () => {
       if (!pdfFile) throw new Error("No file selected");
-      
+
       setPdfProgress({ step: "Uploading file...", percent: 10 });
       const filePath = `${user!.id}/${Date.now()}-${pdfFile.name}`;
-      const { error: uploadError } = await supabase.storage.from("knowledge-files").upload(filePath, pdfFile);
-      if (uploadError) throw uploadError;
+      const uploadResult = await runWithRetry(
+        () => supabase.storage.from("knowledge-files").upload(filePath, pdfFile),
+        2,
+        900
+      );
+      if (uploadResult.error) throw uploadResult.error;
 
       setPdfProgress({ step: "Creating record...", percent: 25 });
-      const { data, error } = await supabase.from("knowledge_base_items").insert({
-        user_id: user!.id,
-        title: pdfTitle || pdfFile.name,
-        type: "pdf",
-        brain_type: pdfBrainType,
-        status: "processing",
-        file_path: filePath,
-      }).select().single();
-      if (error) throw error;
+      const insertResult = await runWithRetry(
+        () => supabase.from("knowledge_base_items").insert({
+          user_id: user!.id,
+          title: pdfTitle || pdfFile.name,
+          type: "pdf",
+          brain_type: pdfBrainType,
+          status: "processing",
+          file_path: filePath,
+        }).select().single(),
+        1,
+        600
+      );
+      if (insertResult.error) throw insertResult.error;
+      const data = insertResult.data;
 
       setPdfProgress({ step: "Processing PDF in background...", percent: 50 });
 
-      // Fire edge function in background
-      supabase.functions.invoke("process-knowledge", {
-        body: { itemId: data.id, type: "pdf", filePath },
-      }).then((result) => {
+      // Fire processing in background (with one retry for transient network issues)
+      void runWithRetry(
+        () => supabase.functions.invoke("process-knowledge", {
+          body: { itemId: data.id, type: "pdf", filePath },
+        }),
+        1,
+        1200
+      ).then((result) => {
         if (result.error || result.data?.error) {
           console.error("PDF processing error:", result.data?.error || result.error?.message);
         }
@@ -218,7 +257,7 @@ export default function KnowledgeBase() {
       return data;
     },
     onSuccess: () => {
-      toast.success("PDF processed successfully!");
+      toast.success("PDF uploaded and queued for processing");
       setTimeout(() => {
         setPdfDialogOpen(false);
         setPdfTitle("");
@@ -229,7 +268,7 @@ export default function KnowledgeBase() {
     },
     onError: (e: any) => {
       setPdfProgress(null);
-      toast.error(e.message);
+      toast.error(normalizeNetworkError(e));
     },
   });
 
