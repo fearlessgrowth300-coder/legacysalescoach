@@ -340,6 +340,7 @@ export default function PracticeCall() {
   const [loadingPast, setLoadingPast] = useState(false);
   const [learnContent, setLearnContent] = useState<any>(null);
   const [loadingLearn, setLoadingLearn] = useState(false);
+  const [companyProfile, setCompanyProfile] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -353,6 +354,8 @@ export default function PracticeCall() {
     if (!user) return;
     supabase.from("profiles").select("phone_number").eq("user_id", user.id).maybeSingle()
       .then(({ data }) => { if (data?.phone_number) setPhoneNumber(data.phone_number); });
+    supabase.from("company_profiles").select("*").eq("user_id", user.id).maybeSingle()
+      .then(({ data }) => { if (data) setCompanyProfile(data); });
   }, [user]);
 
   // Load past sessions
@@ -478,7 +481,9 @@ export default function PracticeCall() {
           phoneNumber: phoneNumber.trim(),
           scenarioId: selectedScenario.id,
           scenarioName: selectedScenario.name,
-          businessContext: businessContext || undefined,
+          businessContext: companyProfile
+            ? `Company: ${companyProfile.company_name}. Selling: ${companyProfile.what_selling || "N/A"}. Target: ${companyProfile.target_audience || "N/A"}. Pain points: ${companyProfile.pain_points || "N/A"}. Objections: ${companyProfile.objections || "N/A"}.`
+            : businessContext || undefined,
           customScenario: {
             name: selectedScenario.name,
             description: selectedScenario.description,
@@ -996,11 +1001,23 @@ export default function PracticeCall() {
                     <div className="h-2 w-2 rounded-full bg-emerald-500" />
                     Ready to Connect
                   </div>
-                  <div className="pt-6">
+                  {!phoneNumber && (
+                    <div className="px-2 w-full">
+                      <Input
+                        value={phoneNumber}
+                        onChange={(e) => setPhoneNumber(e.target.value)}
+                        placeholder="+1 (555) 123-4567"
+                        className="text-center text-sm"
+                        type="tel"
+                      />
+                    </div>
+                  )}
+                  <div className="pt-4">
                     <Button
                       size="lg"
                       className="h-16 w-16 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white"
-                      onClick={startCall}
+                      onClick={startPhoneCall}
+                      disabled={!phoneNumber.trim()}
                     >
                       <Phone className="h-7 w-7" />
                     </Button>
@@ -1019,6 +1036,7 @@ export default function PracticeCall() {
               <TabsList className="w-full justify-start overflow-x-auto">
                 <TabsTrigger value="scene" className="text-xs">ℹ️ Scene</TabsTrigger>
                 <TabsTrigger value="learn" className="text-xs">🎯 Learn</TabsTrigger>
+                <TabsTrigger value="transcript" className="text-xs">💬 Transcript</TabsTrigger>
                 <TabsTrigger value="prospect" className="text-xs">👤 Prospect</TabsTrigger>
                 <TabsTrigger value="business" className="text-xs">💼 Business</TabsTrigger>
               </TabsList>
@@ -1156,61 +1174,99 @@ export default function PracticeCall() {
                 )}
               </TabsContent>
 
+              <TabsContent value="transcript" className="mt-4 space-y-4">
+                {phoneTranscript.length > 0 ? (
+                  <div>
+                    <h3 className="font-bold text-lg mb-3 flex items-center gap-2">
+                      <MessageSquare className="h-5 w-5 text-primary" />
+                      Call Transcript
+                    </h3>
+                    <ScrollArea className="max-h-[400px]">
+                      <div className="space-y-3">
+                        {phoneTranscript.map((turn, i) => (
+                          <div key={i} className={`flex ${turn.role === "user" ? "justify-end" : "justify-start"}`}>
+                            <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                              turn.role === "user" ? "bg-primary text-primary-foreground rounded-br-md" : "bg-muted rounded-bl-md"
+                            }`}>
+                              <p className="text-xs font-medium mb-1">{turn.role === "user" ? "You" : selectedScenario?.prospectName}</p>
+                              <p className="text-sm">{turn.text}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  </div>
+                ) : (
+                  <div className="text-center py-12 space-y-3">
+                    <MessageSquare className="h-10 w-10 mx-auto text-muted-foreground/50" />
+                    <p className="text-sm text-muted-foreground">Start a call to see the live transcript here.</p>
+                    <p className="text-xs text-muted-foreground">Your conversation will appear in real-time as you speak.</p>
+                  </div>
+                )}
+              </TabsContent>
+
               <TabsContent value="business" className="mt-4 space-y-4">
                 <h3 className="font-bold">Scenario Context</h3>
-                {businessContext ? (
+                {companyProfile ? (
                   <div className="space-y-3">
-                    <p className="text-sm text-muted-foreground">This scenario will use your business context to make the practice realistic.</p>
-                    <div className="bg-muted/50 rounded-lg p-4">
-                      <p className="text-xs font-medium text-muted-foreground mb-1">Your Business</p>
-                      <p className="text-sm">{businessContext}</p>
+                    <p className="text-sm text-muted-foreground">The AI prospect will use your business context for realistic practice.</p>
+                    <div className="space-y-2">
+                      <div className="bg-muted/50 rounded-lg p-3">
+                        <p className="text-xs font-medium text-muted-foreground mb-1">Company</p>
+                        <p className="text-sm font-semibold">{companyProfile.company_name || "Not set"}</p>
+                      </div>
+                      {companyProfile.what_selling && (
+                        <div className="bg-muted/50 rounded-lg p-3">
+                          <p className="text-xs font-medium text-muted-foreground mb-1">What You Sell</p>
+                          <p className="text-sm">{companyProfile.what_selling}</p>
+                        </div>
+                      )}
+                      {companyProfile.target_audience && (
+                        <div className="bg-muted/50 rounded-lg p-3">
+                          <p className="text-xs font-medium text-muted-foreground mb-1">Target Audience</p>
+                          <p className="text-sm">{companyProfile.target_audience}</p>
+                        </div>
+                      )}
+                      {companyProfile.pain_points && (
+                        <div className="bg-muted/50 rounded-lg p-3">
+                          <p className="text-xs font-medium text-muted-foreground mb-1">Pain Points You Solve</p>
+                          <p className="text-sm">{companyProfile.pain_points}</p>
+                        </div>
+                      )}
+                      {companyProfile.objections && (
+                        <div className="bg-muted/50 rounded-lg p-3">
+                          <p className="text-xs font-medium text-muted-foreground mb-1">Common Objections</p>
+                          <p className="text-sm">{companyProfile.objections}</p>
+                        </div>
+                      )}
                     </div>
+                    <Button variant="outline" size="sm" className="w-full" onClick={() => window.location.href = "/company"}>
+                      Edit Company Profile
+                    </Button>
                   </div>
                 ) : (
                   <div className="text-center py-8 space-y-3">
-                    <p className="text-sm text-muted-foreground">No business context set. The AI will use a generic scenario.</p>
-                    <Button variant="outline" onClick={() => setShowBusinessSetup(true)}>
-                      <Target className="h-4 w-4 mr-2" />Set Up Your Business
+                    <Target className="h-10 w-10 mx-auto text-muted-foreground/50" />
+                    <p className="text-sm text-muted-foreground">Set up your company profile to make AI practice calls more realistic.</p>
+                    <Button variant="outline" onClick={() => window.location.href = "/company"}>
+                      <Target className="h-4 w-4 mr-2" />Set Up My Company
                     </Button>
                   </div>
                 )}
               </TabsContent>
             </Tabs>
 
-            {/* Phone Call Option */}
-            <div className="mt-6 space-y-3">
-              <div className="flex items-center gap-2 mb-2">
-                <Phone className="h-4 w-4 text-primary" />
-                <span className="text-sm font-semibold">Call My Phone</span>
-                <Badge variant="outline" className="text-[10px]">Real Call</Badge>
+            <div className="mt-6">
+              <div className="relative flex items-center mb-4">
+                <div className="flex-1 h-px bg-border" />
+                <span className="px-3 text-xs text-muted-foreground">or practice via text</span>
+                <div className="flex-1 h-px bg-border" />
               </div>
-              <div className="flex gap-2">
-                <Input
-                  value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value)}
-                  placeholder="+1 (555) 123-4567"
-                  className="flex-1"
-                  type="tel"
-                />
-                <Button onClick={startPhoneCall} disabled={!phoneNumber.trim()} className="shrink-0">
-                  <Phone className="h-4 w-4 mr-2" />Call Me
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                We'll call your phone. The AI prospect will answer based on this scenario.
-              </p>
+              <Button variant="outline" className="w-full h-12 text-base" onClick={startCall}>
+                <Gamepad2 className="h-5 w-5 mr-2" />
+                Start Text Practice →
+              </Button>
             </div>
-
-            <div className="relative flex items-center my-4">
-              <div className="flex-1 h-px bg-border" />
-              <span className="px-3 text-xs text-muted-foreground">or practice via text</span>
-              <div className="flex-1 h-px bg-border" />
-            </div>
-
-            <Button variant="outline" className="w-full h-12 text-base" onClick={startCall}>
-              <Gamepad2 className="h-5 w-5 mr-2" />
-              Start Text Practice →
-            </Button>
           </div>
         </div>
 
@@ -1271,49 +1327,125 @@ export default function PracticeCall() {
   // ========================
   // PHONE CONNECTED STATE (Real Twilio call in progress)
   // ========================
-  if (callState === "phone_connected") {
+  if (callState === "phone_connected" && selectedScenario) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[80vh] gap-6">
-        <div className="relative">
-          <div className="h-24 w-24 rounded-full bg-primary/20 flex items-center justify-center">
-            <Mic className="h-10 w-10 text-primary animate-pulse" />
-          </div>
-        </div>
-        <div className="text-center">
-          <h2 className="text-xl font-semibold">Call In Progress</h2>
-          <p className="text-sm text-muted-foreground">
-            Speaking with {selectedScenario?.prospectName} — {selectedScenario?.name}
-          </p>
-          <div className="flex items-center gap-2 justify-center mt-2">
-            <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
-            <span className="text-sm text-primary">Live</span>
-          </div>
-        </div>
+      <div className="px-4 py-6 md:py-8 max-w-5xl mx-auto overflow-x-hidden">
+        <button onClick={() => { setPhonePolling(false); setCallState("scenario_detail"); }} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-6 transition-colors">
+          <ArrowLeft className="h-4 w-4" />Back to scenarios
+        </button>
 
-        {/* Live transcript */}
-        {phoneTranscript.length > 0 && (
-          <Card className="max-w-lg w-full">
-            <CardContent className="py-4">
-              <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-primary" />Live Transcript
-              </h3>
-              <ScrollArea className="max-h-48">
-                <div className="space-y-2">
-                  {phoneTranscript.map((turn, i) => (
-                    <div key={i} className={`text-sm ${turn.role === "user" ? "text-primary font-medium" : "text-muted-foreground"}`}>
-                      <span className="text-xs font-bold mr-1">{turn.role === "user" ? "You:" : `${selectedScenario?.prospectName}:`}</span>
-                      {turn.text}
-                    </div>
-                  ))}
+        <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
+          <Gamepad2 className="h-6 w-6 text-primary" />
+          {selectedScenario.name} Practice
+        </h1>
+
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* Phone mockup - In Progress */}
+          <div className="lg:col-span-2">
+            <div className="border-[8px] border-foreground rounded-[2.5rem] p-1 max-w-[280px] mx-auto bg-background">
+              <div className="rounded-[2rem] overflow-hidden">
+                <div className="bg-foreground h-7 flex items-center justify-center">
+                  <div className="w-20 h-4 bg-foreground rounded-b-xl" />
                 </div>
-              </ScrollArea>
-            </CardContent>
-          </Card>
-        )}
+                <div className="p-6 text-center space-y-4 min-h-[350px] flex flex-col items-center justify-center">
+                  <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+                    <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                    Live Call
+                  </div>
+                  <div className="h-20 w-20 rounded-full bg-muted mx-auto flex items-center justify-center">
+                    <Mic className="h-10 w-10 text-primary animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg">{selectedScenario.prospectName}</h3>
+                    <p className="text-sm text-primary">{selectedScenario.prospectRole}</p>
+                    <p className="text-xs text-muted-foreground">{selectedScenario.prospectCompany}</p>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-primary font-medium">
+                    <Mic className="h-4 w-4 animate-pulse" />
+                    In Progress
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="lg"
+                    className="h-14 w-14 rounded-full"
+                    onClick={() => { setPhonePolling(false); setCallState("phone_ended"); if (phoneTranscript.length > 0) analyzePhoneCall(phoneTranscript); }}
+                  >
+                    <PhoneOff className="h-6 w-6" />
+                  </Button>
+                </div>
+                <div className="h-5 flex items-center justify-center">
+                  <div className="w-28 h-1 bg-foreground/20 rounded-full" />
+                </div>
+              </div>
+            </div>
+          </div>
 
-        <p className="text-xs text-muted-foreground max-w-sm text-center">
-          Hang up the phone when you're done. Your transcript and coaching will appear automatically.
-        </p>
+          {/* Tabs with Live Transcript */}
+          <div className="lg:col-span-3">
+            <Tabs value="transcript" defaultValue="transcript">
+              <TabsList className="w-full justify-start overflow-x-auto">
+                <TabsTrigger value="scene" className="text-xs">ℹ️ Scene</TabsTrigger>
+                <TabsTrigger value="learn" className="text-xs">🎯 Learn</TabsTrigger>
+                <TabsTrigger value="transcript" className="text-xs">💬 Transcript</TabsTrigger>
+                <TabsTrigger value="prospect" className="text-xs">👤 Prospect</TabsTrigger>
+                <TabsTrigger value="business" className="text-xs">💼 Business</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="transcript" className="mt-4">
+                <div>
+                  <h3 className="font-bold text-lg mb-3 flex items-center gap-2">
+                    <MessageSquare className="h-5 w-5 text-primary" />
+                    Live Transcript
+                    <span className="flex items-center gap-1 text-xs text-emerald-600">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />Live
+                    </span>
+                  </h3>
+                  {phoneTranscript.length > 0 ? (
+                    <ScrollArea className="max-h-[400px]">
+                      <div className="space-y-3">
+                        {phoneTranscript.map((turn, i) => (
+                          <div key={i} className={`flex ${turn.role === "user" ? "justify-end" : "justify-start"}`}>
+                            <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                              turn.role === "user" ? "bg-primary text-primary-foreground rounded-br-md" : "bg-muted rounded-bl-md"
+                            }`}>
+                              <p className="text-xs font-medium mb-1">{turn.role === "user" ? "You" : selectedScenario.prospectName}</p>
+                              <p className="text-sm">{turn.text}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  ) : (
+                    <div className="text-center py-12">
+                      <Mic className="h-10 w-10 mx-auto text-muted-foreground/50 animate-pulse mb-3" />
+                      <p className="text-sm text-muted-foreground">Waiting for conversation to start...</p>
+                      <p className="text-xs text-muted-foreground mt-1">Speak into your phone — transcript appears here in real-time.</p>
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="scene" className="mt-4 space-y-4">
+                <div>
+                  <h3 className="font-bold text-lg">{selectedScenario.name}</h3>
+                  <p className="text-sm text-muted-foreground mt-1">{selectedScenario.description}</p>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="prospect" className="mt-4 space-y-4">
+                <h3 className="font-bold">About {selectedScenario.prospectName}</h3>
+                <div className="bg-muted/50 rounded-lg p-3">
+                  <p className="text-sm font-semibold">{selectedScenario.prospectRole}</p>
+                  <p className="text-xs text-muted-foreground">{selectedScenario.prospectCompany}</p>
+                </div>
+              </TabsContent>
+            </Tabs>
+
+            <p className="text-xs text-muted-foreground mt-4 text-center">
+              Hang up the phone when you're done. Your coaching analysis will appear automatically.
+            </p>
+          </div>
+        </div>
       </div>
     );
   }
