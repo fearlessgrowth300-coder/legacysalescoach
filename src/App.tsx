@@ -18,6 +18,7 @@ import PracticeCall from "./pages/PracticeCall";
 import AiChat from "./pages/AiChat";
 import DashboardLayout from "./components/DashboardLayout";
 import Settings from "./pages/Settings";
+import Company from "./pages/Company";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -69,6 +70,7 @@ const App = () => {
             <Route path="/practice" element={<AuthenticatedRoute><PracticeCall /></AuthenticatedRoute>} />
             <Route path="/ai-chat" element={<AuthenticatedRoute><AiChat /></AuthenticatedRoute>} />
             <Route path="/settings" element={<AuthenticatedRoute><Settings /></AuthenticatedRoute>} />
+            <Route path="/company" element={<AuthenticatedRoute><Company /></AuthenticatedRoute>} />
             <Route path="/dashboard" element={<Navigate to="/chats" replace />} />
             <Route path="*" element={<NotFound />} />
       </Routes>

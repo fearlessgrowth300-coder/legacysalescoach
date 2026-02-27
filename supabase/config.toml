@@ -59,3 +59,6 @@ verify_jwt = false
 
 [functions.analyze-phone-call]
 verify_jwt = false
+
+[functions.generate-scenario-learn]
+verify_jwt = false

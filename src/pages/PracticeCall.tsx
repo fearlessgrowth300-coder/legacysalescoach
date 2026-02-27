@@ -13,10 +13,11 @@ import {
   MessageSquare, Trophy, RotateCcw, ChevronRight, Sparkles, Mic,
   Clock, Gamepad2, Search, Handshake, Award, AlertTriangle,
   TrendingUp, BarChart3, CheckCircle2, XCircle, ArrowLeft, User,
-  Shield, Diamond, Info, Zap
+  Shield, Diamond, Info, Zap, BookOpen, History, ChartLine
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
 
 // Rich scenario data with categories, difficulty, personas
 const SCENARIO_CATEGORIES = [
@@ -334,6 +335,11 @@ export default function PracticeCall() {
   const [phonePolling, setPhonePolling] = useState(false);
   const [phoneAnalysis, setPhoneAnalysis] = useState<PhoneAnalysis | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [topTab, setTopTab] = useState<"practice" | "results" | "progress">("practice");
+  const [pastSessions, setPastSessions] = useState<any[]>([]);
+  const [loadingPast, setLoadingPast] = useState(false);
+  const [learnContent, setLearnContent] = useState<any>(null);
+  const [loadingLearn, setLoadingLearn] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -348,6 +354,49 @@ export default function PracticeCall() {
     supabase.from("profiles").select("phone_number").eq("user_id", user.id).maybeSingle()
       .then(({ data }) => { if (data?.phone_number) setPhoneNumber(data.phone_number); });
   }, [user]);
+
+  // Load past sessions
+  const loadPastSessions = useCallback(async () => {
+    if (!user) return;
+    setLoadingPast(true);
+    const { data } = await supabase
+      .from("practice_call_sessions")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    setPastSessions(data || []);
+    setLoadingPast(false);
+  }, [user]);
+
+  useEffect(() => {
+    if (topTab === "results" || topTab === "progress") loadPastSessions();
+  }, [topTab, loadPastSessions]);
+
+  // Generate learn content from Brain
+  const generateLearnContent = useCallback(async (scenario: RichScenario) => {
+    setLoadingLearn(true);
+    setLearnContent(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("generate-scenario-learn", {
+        body: {
+          scenarioName: scenario.name,
+          scenarioDescription: scenario.description,
+          scenarioCategory: scenario.category,
+          prospectName: scenario.prospectName,
+          prospectRole: scenario.prospectRole,
+          prospectPersonality: scenario.prospectPersonality,
+          objectives: scenario.objectives,
+        },
+      });
+      if (error) throw error;
+      setLearnContent(data);
+    } catch (e: any) {
+      toast.error("Failed to generate learning content: " + (e.message || ""));
+    } finally {
+      setLoadingLearn(false);
+    }
+  }, []);
 
   // Analyze phone call transcript
   const analyzePhoneCall = useCallback(async (transcript: Array<{ role: string; text: string; timestamp: string }>) => {
@@ -409,6 +458,7 @@ export default function PracticeCall() {
     setSelectedScenario(scenario);
     setCallState("scenario_detail");
     setActiveDetailTab("scene");
+    setLearnContent(null);
   };
 
   const startPhoneCall = async () => {
@@ -604,104 +654,280 @@ export default function PracticeCall() {
   // IDLE STATE - Scenario Browse
   // ========================
   if (callState === "idle") {
+    // Compute progress data
+    const scenarioGroups: Record<string, any[]> = {};
+    pastSessions.forEach((s: any) => {
+      const key = s.scenario_name || s.scenario_id;
+      if (!scenarioGroups[key]) scenarioGroups[key] = [];
+      scenarioGroups[key].push(s);
+    });
+
     return (
       <div className="px-4 py-6 md:py-8 max-w-5xl mx-auto overflow-x-hidden">
         {/* Header */}
-        <div className="mb-8">
+        <div className="mb-6">
           <div className="flex items-center justify-between mb-2">
             <h1 className="text-xl md:text-3xl font-bold flex items-center gap-2 md:gap-3">
               Practice <Gamepad2 className="h-6 w-6 md:h-8 md:w-8 text-primary" />
             </h1>
-            <div className="flex items-center gap-3">
-              <Button variant="outline" size="sm" onClick={() => setShowBusinessSetup(true)}>
-                <Target className="h-4 w-4 mr-1" />
-                {businessContext ? "Your Biz" : "Set Up"}
-              </Button>
+            <div className="flex items-center gap-1 bg-muted rounded-full p-1">
+              <button
+                onClick={() => setTopTab("practice")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                  topTab === "practice" ? "bg-foreground text-background" : "text-muted-foreground"
+                }`}
+              >
+                <Gamepad2 className="h-4 w-4" />New Practice
+              </button>
+              <button
+                onClick={() => setTopTab("results")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                  topTab === "results" ? "bg-foreground text-background" : "text-muted-foreground"
+                }`}
+              >
+                <History className="h-4 w-4" />Past Results
+              </button>
+              <button
+                onClick={() => setTopTab("progress")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                  topTab === "progress" ? "bg-foreground text-background" : "text-muted-foreground"
+                }`}
+              >
+                <ChartLine className="h-4 w-4" />Progress
+              </button>
             </div>
           </div>
           <p className="text-muted-foreground">
-            Sharpen your skills through live AI role plays that drop you into realistic scenarios.
+            {topTab === "practice" ? "Sharpen your skills through live AI role plays that drop you into realistic scenarios." :
+             topTab === "results" ? "Review your past practice sessions and track your improvement over time." :
+             "See your improvement over time with beautiful charts showing your progress."}
           </p>
         </div>
 
-        {/* Category Tabs */}
-        <div className="flex items-center gap-2 mb-8 overflow-x-auto pb-2">
-          {SCENARIO_CATEGORIES.map(cat => (
-            <button
-              key={cat.id}
-              onClick={() => setActiveCategory(cat.id)}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap ${
-                activeCategory === cat.id
-                  ? "bg-foreground text-background"
-                  : "bg-muted text-muted-foreground hover:bg-accent"
-              }`}
-            >
-              <cat.icon className="h-4 w-4" />
-              {cat.label}
-            </button>
-          ))}
-          {businessContext && (
-            <div className="flex items-center gap-1.5 ml-auto text-sm text-muted-foreground">
-              <span className="text-amber-500">💡</span>
-              <span className="font-medium">Your Biz</span>
-              <span>= practice selling your product</span>
-            </div>
-          )}
-        </div>
-
-        {/* Grouped Scenarios */}
-        {(activeCategory === "all" ? SCENARIO_CATEGORIES.filter(c => c.id !== "all") : SCENARIO_CATEGORIES.filter(c => c.id === activeCategory)).map(cat => {
-          const categoryScenarios = RICH_SCENARIOS.filter(s => s.category === cat.id);
-          if (categoryScenarios.length === 0) return null;
-          return (
-            <div key={cat.id} className="mb-10">
-              <div className="flex items-center gap-2 mb-4">
-                <cat.icon className="h-5 w-5 text-primary" />
-                <h2 className="text-xl font-bold">{cat.label}</h2>
-                <div className="h-0.5 flex-1 bg-primary/20 rounded-full ml-2" />
+        {/* PAST RESULTS TAB */}
+        {topTab === "results" && (
+          <div>
+            {loadingPast ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {categoryScenarios.map(scenario => (
-                  <Card
-                    key={scenario.id}
-                    className="cursor-pointer hover:border-primary/50 transition-all hover:shadow-lg group"
-                    onClick={() => openScenarioDetail(scenario)}
-                  >
-                    <CardContent className="py-5">
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-base">{scenario.name}</h3>
-                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                            <Badge className={`text-xs ${difficultyColor[scenario.difficulty]}`}>
-                              {scenario.difficulty}
+            ) : pastSessions.length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <History className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
+                  <h4 className="font-bold">No Sessions Yet</h4>
+                  <p className="text-sm text-muted-foreground mt-1">Complete a practice call to see your results here</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b text-left">
+                      <th className="py-3 px-2 text-sm font-semibold text-muted-foreground">Date & Time</th>
+                      <th className="py-3 px-2 text-sm font-semibold text-muted-foreground">Duration</th>
+                      <th className="py-3 px-2 text-sm font-semibold text-muted-foreground">Scenario</th>
+                      <th className="py-3 px-2 text-sm font-semibold text-muted-foreground">Type</th>
+                      <th className="py-3 px-2 text-sm font-semibold text-muted-foreground text-right">Score / 100</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pastSessions.map((s: any) => {
+                      const date = new Date(s.created_at);
+                      const transcript = s.transcript || [];
+                      const duration = transcript.length > 1
+                        ? (() => {
+                            const first = new Date(transcript[0]?.timestamp || s.created_at);
+                            const last = new Date(transcript[transcript.length - 1]?.timestamp || s.created_at);
+                            const mins = Math.round((last.getTime() - first.getTime()) / 60000);
+                            return `${mins}:${String(Math.round(((last.getTime() - first.getTime()) % 60000) / 1000)).padStart(2, "0")}`;
+                          })()
+                        : "0:00";
+                      const score = s.overall_score || 0;
+                      return (
+                        <tr key={s.id} className="border-b hover:bg-muted/50">
+                          <td className="py-3 px-2">
+                            <p className="text-sm font-medium">{date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
+                            <p className="text-xs text-muted-foreground">{date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</p>
+                          </td>
+                          <td className="py-3 px-2 text-sm">{duration}</td>
+                          <td className="py-3 px-2">
+                            <p className="text-sm font-medium">{s.scenario_name || s.scenario_id}</p>
+                            <p className="text-xs text-muted-foreground flex items-center gap-1">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                              {s.status === "completed" ? "Analyzed" : s.status}
+                            </p>
+                          </td>
+                          <td className="py-3 px-2">
+                            <Badge variant="outline" className="text-xs flex items-center gap-1 w-fit">
+                              <Phone className="h-3 w-3" />Practice
                             </Badge>
-                            <span className="text-xs text-muted-foreground flex items-center gap-1">
-                              <Clock className="h-3 w-3" />{scenario.duration}
-                            </span>
-                            {businessContext && (
-                              <Badge variant="outline" className="text-xs">💡 Your Biz</Badge>
-                            )}
-                          </div>
-                        </div>
-                        <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center shrink-0 ml-3">
-                          <User className="h-6 w-6 text-muted-foreground" />
-                        </div>
-                      </div>
-                      <p className="text-sm text-muted-foreground line-clamp-2 mb-3">{scenario.description}</p>
-                      <div className="bg-muted/50 rounded-lg p-2.5 text-xs">
-                        <p className="font-medium mb-0.5">You'll be speaking with:</p>
-                        <p className="flex items-center gap-1">
-                          <User className="h-3 w-3" />{scenario.prospectName} - {scenario.prospectRole}
-                        </p>
-                        <p className="text-muted-foreground">🏢 {scenario.prospectCompany}</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+                          </td>
+                          <td className="py-3 px-2 text-right">
+                            <span className={`text-2xl font-bold ${
+                              score >= 70 ? "text-emerald-600 dark:text-emerald-400" :
+                              score >= 40 ? "text-amber-600 dark:text-amber-400" :
+                              "text-red-600 dark:text-red-400"
+                            }`}>{score}</span>
+                            <span className={`ml-1 inline-block w-8 h-2 rounded-full ${
+                              score >= 70 ? "bg-emerald-500" : score >= 40 ? "bg-amber-500" : "bg-red-500"
+                            }`} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* PROGRESS TAB */}
+        {topTab === "progress" && (
+          <div>
+            <div className="flex items-center gap-2 mb-6">
+              <ChartLine className="h-5 w-5 text-primary" />
+              <div>
+                <h3 className="font-bold text-lg">Your Progress</h3>
+                <p className="text-sm text-muted-foreground">Track your improvement across different scenarios</p>
               </div>
             </div>
-          );
-        })}
+            {Object.keys(scenarioGroups).length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <ChartLine className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
+                  <h4 className="font-bold">No Data Yet</h4>
+                  <p className="text-sm text-muted-foreground mt-1">Complete practice sessions to see your progress</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-6">
+                {Object.entries(scenarioGroups).map(([name, sessions]) => {
+                  const sorted = [...sessions].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+                  const scores = sorted.map((s: any) => s.overall_score || 0);
+                  const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+                  const best = Math.max(...scores);
+                  const isImproving = scores.length >= 2 && scores[scores.length - 1] > scores[0];
+                  const chartData = sorted.map((s: any, i: number) => ({
+                    name: `#${i + 1}`,
+                    score: s.overall_score || 0,
+                  }));
+
+                  return (
+                    <Card key={name}>
+                      <CardContent className="py-5">
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
+                              <Gamepad2 className="h-5 w-5 text-muted-foreground" />
+                            </div>
+                            <div>
+                              <h4 className="font-bold">{name}</h4>
+                              <p className="text-xs text-muted-foreground">
+                                {sessions.length} attempts • Best: <span className="font-bold">{best}</span> • Avg: <span className="font-bold">{avg}</span>
+                              </p>
+                            </div>
+                          </div>
+                          {isImproving && (
+                            <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                              <TrendingUp className="h-3 w-3 mr-1" />Improving
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="h-40">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                              <XAxis dataKey="name" className="text-xs" />
+                              <YAxis domain={[0, 100]} className="text-xs" />
+                              <Tooltip />
+                              <Area type="monotone" dataKey="score" stroke="hsl(var(--foreground))" fill="hsl(var(--muted))" strokeWidth={2} dot={{ r: 4, fill: "hsl(var(--foreground))" }} />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* NEW PRACTICE TAB (original scenario grid) */}
+        {topTab === "practice" && (
+          <>
+            {/* Category Tabs */}
+            <div className="flex items-center gap-2 mb-8 overflow-x-auto pb-2">
+              {SCENARIO_CATEGORIES.map(cat => (
+                <button
+                  key={cat.id}
+                  onClick={() => setActiveCategory(cat.id)}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap ${
+                    activeCategory === cat.id
+                      ? "bg-foreground text-background"
+                      : "bg-muted text-muted-foreground hover:bg-accent"
+                  }`}
+                >
+                  <cat.icon className="h-4 w-4" />
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Grouped Scenarios */}
+            {(activeCategory === "all" ? SCENARIO_CATEGORIES.filter(c => c.id !== "all") : SCENARIO_CATEGORIES.filter(c => c.id === activeCategory)).map(cat => {
+              const categoryScenarios = RICH_SCENARIOS.filter(s => s.category === cat.id);
+              if (categoryScenarios.length === 0) return null;
+              return (
+                <div key={cat.id} className="mb-10">
+                  <div className="flex items-center gap-2 mb-4">
+                    <cat.icon className="h-5 w-5 text-primary" />
+                    <h2 className="text-xl font-bold">{cat.label}</h2>
+                    <div className="h-0.5 flex-1 bg-primary/20 rounded-full ml-2" />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {categoryScenarios.map(scenario => (
+                      <Card
+                        key={scenario.id}
+                        className="cursor-pointer hover:border-primary/50 transition-all hover:shadow-lg group"
+                        onClick={() => openScenarioDetail(scenario)}
+                      >
+                        <CardContent className="py-5">
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex-1 min-w-0">
+                              <h3 className="font-bold text-base">{scenario.name}</h3>
+                              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                <Badge className={`text-xs ${difficultyColor[scenario.difficulty]}`}>
+                                  {scenario.difficulty}
+                                </Badge>
+                                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                  <Clock className="h-3 w-3" />{scenario.duration}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center shrink-0 ml-3">
+                              <User className="h-6 w-6 text-muted-foreground" />
+                            </div>
+                          </div>
+                          <p className="text-sm text-muted-foreground line-clamp-2 mb-3">{scenario.description}</p>
+                          <div className="bg-muted/50 rounded-lg p-2.5 text-xs">
+                            <p className="font-medium mb-0.5">You'll be speaking with:</p>
+                            <p className="flex items-center gap-1">
+                              <User className="h-3 w-3" />{scenario.prospectName} - {scenario.prospectRole}
+                            </p>
+                            <p className="text-muted-foreground">🏢 {scenario.prospectCompany}</p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
 
         {/* Business Setup Dialog */}
         {showBusinessSetup && (
@@ -717,17 +943,13 @@ export default function PracticeCall() {
                 <Textarea
                   value={businessContext}
                   onChange={(e) => setBusinessContext(e.target.value)}
-                  placeholder="Describe your business, product, or opportunity. E.g., 'I sell health supplements through a network marketing company. Our flagship product is...' Include what you sell, who you sell to, and common objections you face."
+                  placeholder="Describe your business..."
                   rows={5}
                   className="text-sm"
                 />
                 <div className="flex gap-2">
-                  <Button className="flex-1" onClick={() => setShowBusinessSetup(false)}>
-                    Save & Close
-                  </Button>
-                  <Button variant="outline" onClick={() => setShowBusinessSetup(false)}>
-                    Maybe Later
-                  </Button>
+                  <Button className="flex-1" onClick={() => setShowBusinessSetup(false)}>Save & Close</Button>
+                  <Button variant="outline" onClick={() => setShowBusinessSetup(false)}>Maybe Later</Button>
                 </div>
               </CardContent>
             </Card>
@@ -819,41 +1041,91 @@ export default function PracticeCall() {
               </TabsContent>
 
               <TabsContent value="learn" className="mt-4 space-y-4">
-                {selectedScenario.examplePhrases && (
-                  <div>
-                    <h4 className="font-semibold text-sm mb-2">💬 Example Phrases</h4>
-                    <div className="space-y-2">
-                      {selectedScenario.examplePhrases.map((phrase, i) => (
-                        <div key={i} className="bg-muted/50 rounded-lg p-3 text-sm text-muted-foreground border-l-2 border-primary/30">
-                          {phrase}
-                        </div>
-                      ))}
+                {!learnContent && !loadingLearn && (
+                  <div className="text-center py-8 space-y-3">
+                    <BookOpen className="h-10 w-10 mx-auto text-muted-foreground/50" />
+                    <p className="text-sm text-muted-foreground">Generate personalized learning content from your Brain's knowledge.</p>
+                    <Button onClick={() => generateLearnContent(selectedScenario)}>
+                      <Sparkles className="h-4 w-4 mr-2" />Generate Learning Guide
+                    </Button>
+                  </div>
+                )}
+                {loadingLearn && (
+                  <div className="flex flex-col items-center justify-center py-12 gap-3">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    <p className="text-sm text-muted-foreground">Your Brain is generating learning material...</p>
+                  </div>
+                )}
+                {learnContent && (
+                  <>
+                    <div className="bg-primary/5 rounded-lg p-4 border border-primary/10">
+                      <h4 className="font-bold text-base mb-1">{learnContent.frameworkName || "Sales Framework"}</h4>
+                      <p className="text-sm text-muted-foreground">{learnContent.frameworkDescription}</p>
                     </div>
-                  </div>
-                )}
-                {selectedScenario.successMetrics && (
-                  <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-4">
-                    <h4 className="font-semibold text-sm flex items-center gap-1.5 mb-2">✅ Success Metrics</h4>
-                    <ul className="space-y-1">
-                      {selectedScenario.successMetrics.map((m, i) => (
-                        <li key={i} className="text-sm flex items-start gap-2 text-emerald-700 dark:text-emerald-400">
-                          <span>🟢</span>{m}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {selectedScenario.commonMistakes && (
-                  <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4">
-                    <h4 className="font-semibold text-sm flex items-center gap-1.5 mb-2">🚫 Common Mistakes</h4>
-                    <ul className="space-y-1">
-                      {selectedScenario.commonMistakes.map((m, i) => (
-                        <li key={i} className="text-sm flex items-start gap-2 text-red-600 dark:text-red-400">
-                          <span>🟠</span>{m}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                    {learnContent.keyLearningPoints?.length > 0 && (
+                      <div>
+                        <h4 className="font-semibold text-sm flex items-center gap-1.5 mb-2">🎯 Key Learning Points</h4>
+                        <div className="space-y-2">
+                          {learnContent.keyLearningPoints.map((point: string, i: number) => (
+                            <div key={i} className="text-sm text-muted-foreground flex items-start gap-2 bg-muted/50 rounded-lg p-3">
+                              <CheckCircle2 className="h-4 w-4 text-primary mt-0.5 shrink-0" />{point}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {learnContent.examplePhrases?.length > 0 && (
+                      <div>
+                        <h4 className="font-semibold text-sm mb-2">💬 Example Phrases</h4>
+                        <div className="space-y-2">
+                          {learnContent.examplePhrases.map((p: any, i: number) => (
+                            <div key={i} className="bg-muted/50 rounded-lg p-3 text-sm text-muted-foreground border-l-2 border-primary/30">
+                              <span className="font-medium text-foreground">{p.label} ({p.code}): </span>"{p.phrase}"
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {learnContent.successMetrics?.length > 0 && (
+                      <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-4">
+                        <h4 className="font-semibold text-sm flex items-center gap-1.5 mb-2">✅ Success Metrics</h4>
+                        <ul className="space-y-1">
+                          {learnContent.successMetrics.map((m: string, i: number) => (
+                            <li key={i} className="text-sm flex items-start gap-2 text-emerald-700 dark:text-emerald-400">
+                              <span>🟢</span>{m}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {learnContent.commonMistakes?.length > 0 && (
+                      <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4">
+                        <h4 className="font-semibold text-sm flex items-center gap-1.5 mb-2">🚫 Common Mistakes</h4>
+                        <ul className="space-y-1">
+                          {learnContent.commonMistakes.map((m: string, i: number) => (
+                            <li key={i} className="text-sm flex items-start gap-2 text-red-600 dark:text-red-400">
+                              <span>🟠</span>{m}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {learnContent.proTips?.length > 0 && (
+                      <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-4">
+                        <h4 className="font-semibold text-sm flex items-center gap-1.5 mb-2">💡 Pro Tips from Your Brain</h4>
+                        <ul className="space-y-1">
+                          {learnContent.proTips.map((t: string, i: number) => (
+                            <li key={i} className="text-sm flex items-start gap-2">
+                              <Lightbulb className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />{t}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <Button variant="outline" size="sm" onClick={() => generateLearnContent(selectedScenario)} className="w-full">
+                      <RotateCcw className="h-4 w-4 mr-2" />Regenerate
+                    </Button>
+                  </>
                 )}
               </TabsContent>
 
