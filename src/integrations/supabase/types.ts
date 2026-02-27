@@ -129,6 +129,84 @@ export type Database = {
           },
         ]
       }
+      company_materials: {
+        Row: {
+          content: string | null
+          created_at: string
+          file_path: string | null
+          format: string
+          id: string
+          status: string
+          title: string
+          type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content?: string | null
+          created_at?: string
+          file_path?: string | null
+          format?: string
+          id?: string
+          status?: string
+          title: string
+          type?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string | null
+          created_at?: string
+          file_path?: string | null
+          format?: string
+          id?: string
+          status?: string
+          title?: string
+          type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      company_profiles: {
+        Row: {
+          business_type: string
+          company_name: string
+          created_at: string
+          id: string
+          objections: string | null
+          pain_points: string | null
+          target_audience: string | null
+          updated_at: string
+          user_id: string
+          what_selling: string | null
+        }
+        Insert: {
+          business_type?: string
+          company_name?: string
+          created_at?: string
+          id?: string
+          objections?: string | null
+          pain_points?: string | null
+          target_audience?: string | null
+          updated_at?: string
+          user_id: string
+          what_selling?: string | null
+        }
+        Update: {
+          business_type?: string
+          company_name?: string
+          created_at?: string
+          id?: string
+          objections?: string | null
+          pain_points?: string | null
+          target_audience?: string | null
+          updated_at?: string
+          user_id?: string
+          what_selling?: string | null
+        }
+        Relationships: []
+      }
       conversation_analytics: {
         Row: {
           ai_suggestions_used: number

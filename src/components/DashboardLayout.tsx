@@ -2,7 +2,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import {
-  MessageSquare, Brain, Briefcase, BarChart3, LogOut,
+  MessageSquare, Brain, Briefcase, BarChart3, LogOut, Building2,
   Sparkles, Moon, Sun, Settings, Phone, Bot, BookOpen, MoreHorizontal,
 } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
@@ -19,6 +19,7 @@ const moreTabs = [
   { icon: BookOpen, label: "Knowledge Base", path: "/knowledge-base" },
   { icon: Briefcase, label: "Workspaces", path: "/workspaces" },
   { icon: BarChart3, label: "Analytics", path: "/analytics" },
+  { icon: Building2, label: "My Company", path: "/company" },
   { icon: Settings, label: "Settings", path: "/settings" },
 ];
 
