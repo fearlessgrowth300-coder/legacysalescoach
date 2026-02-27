@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,7 +12,8 @@ import {
   Phone, PhoneOff, Send, Loader2, Star, Target, Lightbulb,
   MessageSquare, Trophy, RotateCcw, ChevronRight, Sparkles, Mic,
   Clock, Gamepad2, Search, Handshake, Award, AlertTriangle,
-  TrendingUp, BarChart3, CheckCircle2, XCircle, ArrowLeft, User
+  TrendingUp, BarChart3, CheckCircle2, XCircle, ArrowLeft, User,
+  Shield, Diamond, Info, Zap
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -281,6 +282,27 @@ type Message = {
   };
 };
 
+type PhoneAnalysis = {
+  overallScore: number;
+  scoreLabel: string;
+  scoreMessage: string;
+  sections: Array<{ name: string; icon: string; score: number; feedback: string }>;
+  highlightReel: {
+    bestMoment: { quote: string; timestamp: string; explanation: string };
+    needsWork: { quote: string; timestamp: string; explanation: string };
+  };
+  keyTakeaways: { didWell: string[]; focusAreas: string[] };
+  objectionReplay: Array<{ objection: string; response: string; handled: boolean }>;
+  callAnalytics: {
+    talkListenRatio: number;
+    talkSpeed: number;
+    longestMonologue: string;
+    objectionsHandled: string;
+    userWordCount: number;
+    prospectWordCount: number;
+  };
+};
+
 type CallState = "idle" | "scenario_detail" | "ringing" | "connected" | "ended" | "phone_ringing" | "phone_connected" | "phone_ended";
 
 const difficultyColor: Record<Difficulty, string> = {
@@ -310,6 +332,8 @@ export default function PracticeCall() {
   const [phoneCallStatus, setPhoneCallStatus] = useState("");
   const [phoneTranscript, setPhoneTranscript] = useState<Array<{ role: string; text: string; timestamp: string }>>([]);
   const [phonePolling, setPhonePolling] = useState(false);
+  const [phoneAnalysis, setPhoneAnalysis] = useState<PhoneAnalysis | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -325,6 +349,31 @@ export default function PracticeCall() {
       .then(({ data }) => { if (data?.phone_number) setPhoneNumber(data.phone_number); });
   }, [user]);
 
+  // Analyze phone call transcript
+  const analyzePhoneCall = useCallback(async (transcript: Array<{ role: string; text: string; timestamp: string }>) => {
+    if (transcript.length === 0 || isAnalyzing) return;
+    setIsAnalyzing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("analyze-phone-call", {
+        body: {
+          sessionId: phoneSessionId,
+          transcript,
+          scenarioName: selectedScenario?.name,
+          prospectName: selectedScenario?.prospectName,
+          prospectRole: selectedScenario?.prospectRole,
+          prospectCompany: selectedScenario?.prospectCompany,
+        },
+      });
+      if (error) throw error;
+      setPhoneAnalysis(data);
+    } catch (e: any) {
+      console.error("Analysis failed:", e);
+      toast.error("Coaching analysis failed. You can still review your transcript.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [phoneSessionId, selectedScenario, isAnalyzing]);
+
   // Poll for phone call status
   useEffect(() => {
     if (!phoneSessionId || !phonePolling) return;
@@ -339,6 +388,10 @@ export default function PracticeCall() {
           if (data.status === "completed" || data.status === "failed") {
             setPhonePolling(false);
             setCallState("phone_ended");
+            // Trigger analysis
+            if (data.transcript && data.transcript.length > 0) {
+              analyzePhoneCall(data.transcript);
+            }
           } else if (data.status === "in-progress") {
             setCallState("phone_connected");
           }
@@ -346,7 +399,7 @@ export default function PracticeCall() {
       } catch {}
     }, 3000);
     return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
-  }, [phoneSessionId, phonePolling]);
+  }, [phoneSessionId, phonePolling, analyzePhoneCall]);
 
   const filteredScenarios = activeCategory === "all"
     ? RICH_SCENARIOS
@@ -997,68 +1050,363 @@ export default function PracticeCall() {
   // PHONE ENDED STATE (Post-call analysis)
   // ========================
   if (callState === "phone_ended") {
-    const turnCount = phoneTranscript.filter(t => t.role === "user").length;
+    const a = phoneAnalysis;
+    const sectionIcons: Record<string, React.ReactNode> = {
+      handshake: <Handshake className="h-5 w-5 text-amber-500" />,
+      search: <Search className="h-5 w-5 text-purple-500" />,
+      diamond: <Diamond className="h-5 w-5 text-blue-500" />,
+      shield: <Shield className="h-5 w-5 text-indigo-500" />,
+      target: <Target className="h-5 w-5 text-red-500" />,
+    };
+
+    const getScoreBadgeColor = (score: number) => {
+      if (score >= 70) return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400";
+      if (score >= 40) return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
+      return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
+    };
+
+    const getAnalyticStatus = (value: number, min: number, max: number) => value >= min && value <= max;
+
     return (
-      <div className="px-4 py-6 md:py-8 max-w-3xl mx-auto overflow-x-hidden">
-        <div className="text-center mb-6 sm:mb-8">
-          <Trophy className="h-10 w-10 sm:h-12 sm:w-12 mx-auto mb-3 text-primary" />
-          <h1 className="text-2xl sm:text-3xl font-bold mb-1">Phone Practice Complete</h1>
-          <p className="text-sm text-muted-foreground">{selectedScenario?.name}</p>
-        </div>
+      <div className="px-4 py-6 md:py-8 max-w-4xl mx-auto overflow-x-hidden">
+        <button onClick={() => { setPhoneAnalysis(null); resetCall(); }} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-6 transition-colors">
+          <ArrowLeft className="h-4 w-4" />Back to scenarios
+        </button>
 
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <Card>
-            <CardContent className="p-4 text-center">
-              <p className="text-xs text-muted-foreground mb-1">Your Turns</p>
-              <p className="text-2xl font-bold">{turnCount}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4 text-center">
-              <p className="text-xs text-muted-foreground mb-1">Total Turns</p>
-              <p className="text-2xl font-bold">{phoneTranscript.length}</p>
-            </CardContent>
-          </Card>
-        </div>
+        <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
+          🐺 {selectedScenario?.name} Practice
+        </h1>
 
-        {/* Full Transcript */}
-        <Card className="mb-6">
-          <CardContent className="py-4">
-            <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
-              <MessageSquare className="h-4 w-4 text-primary" />Full Call Transcript
-            </h3>
-            <div className="space-y-3">
-              {phoneTranscript.map((turn, i) => (
-                <div key={i} className={`flex ${turn.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                    turn.role === "user"
-                      ? "bg-primary text-primary-foreground rounded-br-md"
-                      : "bg-muted rounded-bl-md"
-                  }`}>
-                    <p className="text-xs font-medium mb-1">
-                      {turn.role === "user" ? "You" : selectedScenario?.prospectName}
-                    </p>
-                    <p className="text-sm">{turn.text}</p>
-                  </div>
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mb-8">
+          {/* Phone mockup */}
+          <div className="lg:col-span-2">
+            <div className="border-[8px] border-foreground rounded-[2.5rem] p-1 max-w-[280px] mx-auto bg-background">
+              <div className="rounded-[2rem] overflow-hidden">
+                <div className="bg-foreground h-7 flex items-center justify-center">
+                  <div className="w-20 h-4 bg-foreground rounded-b-xl" />
                 </div>
-              ))}
-              {phoneTranscript.length === 0 && (
-                <p className="text-sm text-muted-foreground text-center py-4">No transcript recorded. The call may have been too short.</p>
-              )}
+                <div className="p-6 text-center space-y-4 min-h-[300px] flex flex-col items-center justify-center">
+                  <div className="h-20 w-20 rounded-full bg-muted mx-auto flex items-center justify-center">
+                    <User className="h-10 w-10 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg">{selectedScenario?.prospectName}</h3>
+                    <p className="text-sm text-primary">{selectedScenario?.prospectRole}</p>
+                    <p className="text-xs text-muted-foreground">{selectedScenario?.prospectCompany}</p>
+                  </div>
+                  {isAnalyzing ? (
+                    <div className="flex flex-col items-center gap-2">
+                      <Loader2 className="h-8 w-8 text-primary animate-spin" />
+                      <p className="text-sm text-muted-foreground">Analyzing...</p>
+                    </div>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="h-10 w-10 text-emerald-500" />
+                      <p className="font-semibold">Complete!</p>
+                      <Button variant="outline" size="sm" onClick={() => {
+                        setPhoneTranscript([]);
+                        setPhoneSessionId(null);
+                        setPhoneAnalysis(null);
+                        startPhoneCall();
+                      }}>
+                        Try Again
+                      </Button>
+                    </>
+                  )}
+                </div>
+                <div className="h-5 flex items-center justify-center">
+                  <div className="w-28 h-1 bg-foreground/20 rounded-full" />
+                </div>
+              </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
 
-        <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 justify-center">
-          <Button variant="outline" size="sm" onClick={resetCall}>
-            <RotateCcw className="h-4 w-4 mr-2" />Try Another
-          </Button>
-          <Button size="sm" onClick={() => {
+          {/* Results content */}
+          <div className="lg:col-span-3">
+            {isAnalyzing ? (
+              <div className="flex flex-col items-center justify-center h-full gap-4 py-12">
+                <Loader2 className="h-10 w-10 text-primary animate-spin" />
+                <div className="text-center">
+                  <h2 className="text-xl font-bold mb-1">Analyzing Your Call</h2>
+                  <p className="text-sm text-muted-foreground">Our AI coach is reviewing your transcript...</p>
+                </div>
+              </div>
+            ) : a ? (
+              <Tabs defaultValue="results" className="w-full">
+                <TabsList className="w-full justify-start overflow-x-auto">
+                  <TabsTrigger value="results" className="text-xs">📊 Results</TabsTrigger>
+                  <TabsTrigger value="transcript" className="text-xs">💬 Transcript</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="results" className="mt-4 space-y-6">
+                  {/* Overall Score */}
+                  <Card className="border-primary/20">
+                    <CardContent className="py-5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="text-2xl">💪</span>
+                          <div>
+                            <h3 className="font-bold text-lg">{a.scoreLabel}</h3>
+                            <p className="text-sm text-muted-foreground">{a.scoreMessage}</p>
+                          </div>
+                        </div>
+                        <div className={`text-3xl font-bold rounded-xl px-4 py-2 ${getScoreBadgeColor(a.overallScore)}`}>
+                          {a.overallScore}
+                          <span className="text-sm font-normal">/100</span>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Breakdown by Section */}
+                  <div>
+                    <h3 className="font-bold text-lg mb-3 flex items-center gap-2">
+                      <BarChart3 className="h-5 w-5 text-primary" />Breakdown by Section
+                    </h3>
+                    <div className="space-y-3">
+                      {a.sections.map((section, i) => (
+                        <Card key={i}>
+                          <CardContent className="py-4">
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                {sectionIcons[section.icon] || <Star className="h-5 w-5 text-primary" />}
+                                <h4 className="font-bold text-sm">{section.name}</h4>
+                              </div>
+                              <span className={`text-sm font-bold px-2 py-0.5 rounded ${getScoreBadgeColor(section.score)}`}>
+                                {section.score}/100
+                              </span>
+                            </div>
+                            <p className="text-sm text-muted-foreground">{section.feedback}</p>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Highlight Reel */}
+                  {a.highlightReel && (
+                    <Card>
+                      <CardContent className="py-5">
+                        <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                          <Zap className="h-5 w-5 text-primary" />Highlight Reel
+                        </h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="rounded-xl border-2 border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/10 p-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="flex items-center gap-1 text-sm font-bold text-emerald-600 dark:text-emerald-400">⭐ Your Best Moment</span>
+                              <span className="text-xs text-muted-foreground">{a.highlightReel.bestMoment.timestamp}</span>
+                            </div>
+                            <p className="text-sm font-medium mb-2 italic">"{a.highlightReel.bestMoment.quote}"</p>
+                            <p className="text-xs text-muted-foreground">{a.highlightReel.bestMoment.explanation}</p>
+                          </div>
+                          <div className="rounded-xl border-2 border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10 p-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="flex items-center gap-1 text-sm font-bold text-amber-600 dark:text-amber-400">🔶 Needs Work</span>
+                              <span className="text-xs text-muted-foreground">{a.highlightReel.needsWork.timestamp}</span>
+                            </div>
+                            <p className="text-sm font-medium mb-2 italic">"{a.highlightReel.needsWork.quote}"</p>
+                            <p className="text-xs text-muted-foreground">{a.highlightReel.needsWork.explanation}</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Key Takeaways */}
+                  {a.keyTakeaways && (
+                    <Card>
+                      <CardContent className="py-5">
+                        <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                          <Sparkles className="h-5 w-5 text-amber-500" />Key Takeaways
+                        </h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="rounded-xl border-2 border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/10 p-4">
+                            <h4 className="font-bold text-sm text-emerald-600 dark:text-emerald-400 flex items-center gap-1 mb-3">
+                              <CheckCircle2 className="h-4 w-4" /> What You Did Well
+                            </h4>
+                            <div className="space-y-2">
+                              {a.keyTakeaways.didWell.map((item, i) => (
+                                <p key={i} className="text-sm flex items-start gap-2"><span className="text-emerald-500 mt-0.5">✓</span>{item}</p>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-border p-4">
+                            <h4 className="font-bold text-sm flex items-center gap-1 mb-3">
+                              <Lightbulb className="h-4 w-4 text-amber-500" /> Focus Areas
+                            </h4>
+                            <div className="space-y-2">
+                              {a.keyTakeaways.focusAreas.map((item, i) => (
+                                <p key={i} className="text-sm flex items-start gap-2">
+                                  <span className="text-amber-500 font-bold mt-0.5">{i + 1}</span>
+                                  <span className="text-muted-foreground">{item}</span>
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Objection Replay */}
+                  {a.objectionReplay && a.objectionReplay.length > 0 && (
+                    <Card>
+                      <CardContent className="py-5">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="font-bold text-lg flex items-center gap-2">
+                            <Shield className="h-5 w-5 text-indigo-500" />Objection Replay
+                          </h3>
+                          <span className="text-sm text-muted-foreground">
+                            {a.objectionReplay.filter(o => o.handled).length}/{a.objectionReplay.length} handled
+                          </span>
+                        </div>
+                        <div className="space-y-3">
+                          {a.objectionReplay.map((obj, i) => (
+                            <div key={i} className={`rounded-xl p-4 border-l-4 ${
+                              obj.handled ? "border-l-emerald-500 bg-emerald-50/50 dark:bg-emerald-900/10" : "border-l-red-400 bg-red-50/50 dark:bg-red-900/10"
+                            }`}>
+                              <div className="flex items-start gap-2 mb-1">
+                                {obj.handled ? <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" /> : <XCircle className="h-4 w-4 text-red-400 mt-0.5 shrink-0" />}
+                                <p className="text-sm font-medium">"{obj.objection}"</p>
+                              </div>
+                              <p className="text-xs text-muted-foreground ml-6">Your response: "{obj.response}"</p>
+                            </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Call Analytics */}
+                  {a.callAnalytics && (
+                    <Card>
+                      <CardContent className="py-5">
+                        <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                          <BarChart3 className="h-5 w-5 text-primary" />Call Analytics
+                        </h3>
+                        <div className="grid grid-cols-2 gap-3 mb-4">
+                          <div className="rounded-xl border p-4">
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="text-sm text-muted-foreground">Talk/Listen Ratio</p>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                            </div>
+                            <p className="text-2xl font-bold">{a.callAnalytics.talkListenRatio}%</p>
+                            <p className={`text-xs flex items-center gap-1 ${getAnalyticStatus(a.callAnalytics.talkListenRatio, 40, 60) ? "text-emerald-600" : "text-red-500"}`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${getAnalyticStatus(a.callAnalytics.talkListenRatio, 40, 60) ? "bg-emerald-500" : "bg-red-500"}`} />
+                              Recommended: 40-60%
+                            </p>
+                          </div>
+                          <div className="rounded-xl border p-4">
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="text-sm text-muted-foreground">Talk Speed</p>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                            </div>
+                            <p className="text-2xl font-bold">{a.callAnalytics.talkSpeed} <span className="text-sm font-normal">wpm</span></p>
+                            <p className={`text-xs flex items-center gap-1 ${getAnalyticStatus(a.callAnalytics.talkSpeed, 110, 160) ? "text-emerald-600" : "text-red-500"}`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${getAnalyticStatus(a.callAnalytics.talkSpeed, 110, 160) ? "bg-emerald-500" : "bg-red-500"}`} />
+                              Recommended: 110-160
+                            </p>
+                          </div>
+                          <div className="rounded-xl border p-4">
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="text-sm text-muted-foreground">Longest Monologue</p>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                            </div>
+                            <p className="text-2xl font-bold">{a.callAnalytics.longestMonologue}</p>
+                            <p className="text-xs text-muted-foreground flex items-center gap-1">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Recommended: 10s-60s
+                            </p>
+                          </div>
+                          <div className="rounded-xl border p-4">
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="text-sm text-muted-foreground">Objections Handled</p>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                            </div>
+                            <p className="text-2xl font-bold">{a.callAnalytics.objectionsHandled}</p>
+                            <p className="text-xs text-muted-foreground flex items-center gap-1">
+                              <span className="h-1.5 w-1.5 rounded-full bg-red-500" />Recommended: 100%
+                            </p>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="rounded-xl bg-muted/50 p-3 text-center">
+                            <p className="text-xl font-bold">{a.callAnalytics.userWordCount}</p>
+                            <p className="text-xs text-muted-foreground">Your Words</p>
+                          </div>
+                          <div className="rounded-xl bg-muted/50 p-3 text-center">
+                            <p className="text-xl font-bold">{a.callAnalytics.prospectWordCount}</p>
+                            <p className="text-xs text-muted-foreground">Prospect Words</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="transcript" className="mt-4">
+                  <Card>
+                    <CardContent className="py-4">
+                      <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
+                        <MessageSquare className="h-4 w-4 text-primary" />Full Call Transcript
+                      </h3>
+                      <div className="space-y-3">
+                        {phoneTranscript.map((turn, i) => (
+                          <div key={i} className={`flex ${turn.role === "user" ? "justify-end" : "justify-start"}`}>
+                            <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                              turn.role === "user" ? "bg-primary text-primary-foreground rounded-br-md" : "bg-muted rounded-bl-md"
+                            }`}>
+                              <p className="text-xs font-medium mb-1">{turn.role === "user" ? "You" : selectedScenario?.prospectName}</p>
+                              <p className="text-sm">{turn.text}</p>
+                            </div>
+                          </div>
+                        ))}
+                        {phoneTranscript.length === 0 && (
+                          <p className="text-sm text-muted-foreground text-center py-4">No transcript recorded.</p>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+              </Tabs>
+            ) : (
+              <Card>
+                <CardContent className="py-4">
+                  <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
+                    <MessageSquare className="h-4 w-4 text-primary" />Call Transcript
+                  </h3>
+                  <div className="space-y-3">
+                    {phoneTranscript.map((turn, i) => (
+                      <div key={i} className={`text-sm ${turn.role === "user" ? "text-primary font-medium" : "text-muted-foreground"}`}>
+                        <span className="text-xs font-bold mr-1">{turn.role === "user" ? "You:" : `${selectedScenario?.prospectName}:`}</span>
+                        {turn.text}
+                      </div>
+                    ))}
+                    {phoneTranscript.length === 0 && (
+                      <p className="text-sm text-muted-foreground text-center py-4">No transcript recorded.</p>
+                    )}
+                  </div>
+                  {phoneTranscript.length > 0 && (
+                    <Button className="mt-4 w-full" onClick={() => analyzePhoneCall(phoneTranscript)}>
+                      <Sparkles className="h-4 w-4 mr-2" />Analyze My Call
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+          <Button size="lg" className="bg-primary" onClick={() => {
             setPhoneTranscript([]);
             setPhoneSessionId(null);
+            setPhoneAnalysis(null);
             startPhoneCall();
           }}>
-            <Phone className="h-4 w-4 mr-2" />Call Again
+            <Mic className="h-4 w-4 mr-2" />Practice Again
+          </Button>
+          <Button variant="outline" size="lg" onClick={() => { setPhoneAnalysis(null); resetCall(); }}>
+            <Gamepad2 className="h-4 w-4 mr-2" />Choose New Scenario
           </Button>
         </div>
       </div>
