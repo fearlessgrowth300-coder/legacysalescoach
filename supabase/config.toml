@@ -50,3 +50,9 @@ verify_jwt = false
 
 [functions.voice-brain]
 verify_jwt = false
+
+[functions.twilio-practice-call]
+verify_jwt = false
+
+[functions.twilio-practice-webhook]
+verify_jwt = false
