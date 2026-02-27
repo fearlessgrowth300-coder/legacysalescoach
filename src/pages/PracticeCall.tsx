@@ -281,7 +281,7 @@ type Message = {
   };
 };
 
-type CallState = "idle" | "scenario_detail" | "ringing" | "connected" | "ended";
+type CallState = "idle" | "scenario_detail" | "ringing" | "connected" | "ended" | "phone_ringing" | "phone_connected" | "phone_ended";
 
 const difficultyColor: Record<Difficulty, string> = {
   Easy: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
@@ -305,12 +305,48 @@ export default function PracticeCall() {
   const [allFeedback, setAllFeedback] = useState<string[]>([]);
   const [allTechniques, setAllTechniques] = useState<string[]>([]);
   const [allStages, setAllStages] = useState<string[]>([]);
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [phoneSessionId, setPhoneSessionId] = useState<string | null>(null);
+  const [phoneCallStatus, setPhoneCallStatus] = useState("");
+  const [phoneTranscript, setPhoneTranscript] = useState<Array<{ role: string; text: string; timestamp: string }>>([]);
+  const [phonePolling, setPhonePolling] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Load saved phone number from profile
+  useEffect(() => {
+    if (!user) return;
+    supabase.from("profiles").select("phone_number").eq("user_id", user.id).maybeSingle()
+      .then(({ data }) => { if (data?.phone_number) setPhoneNumber(data.phone_number); });
+  }, [user]);
+
+  // Poll for phone call status
+  useEffect(() => {
+    if (!phoneSessionId || !phonePolling) return;
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        const { data } = await supabase.functions.invoke("twilio-practice-call", {
+          body: { action: "status", sessionId: phoneSessionId },
+        });
+        if (data) {
+          setPhoneCallStatus(data.status);
+          if (data.transcript) setPhoneTranscript(data.transcript);
+          if (data.status === "completed" || data.status === "failed") {
+            setPhonePolling(false);
+            setCallState("phone_ended");
+          } else if (data.status === "in-progress") {
+            setCallState("phone_connected");
+          }
+        }
+      } catch {}
+    }, 3000);
+    return () => { if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); };
+  }, [phoneSessionId, phonePolling]);
 
   const filteredScenarios = activeCategory === "all"
     ? RICH_SCENARIOS
@@ -320,6 +356,43 @@ export default function PracticeCall() {
     setSelectedScenario(scenario);
     setCallState("scenario_detail");
     setActiveDetailTab("scene");
+  };
+
+  const startPhoneCall = async () => {
+    if (!selectedScenario || !phoneNumber.trim()) {
+      toast.error("Please enter your phone number first");
+      return;
+    }
+    setCallState("phone_ringing");
+    setPhoneTranscript([]);
+    setPhoneSessionId(null);
+    setPhoneCallStatus("initiating");
+
+    try {
+      const { data, error } = await supabase.functions.invoke("twilio-practice-call", {
+        body: {
+          action: "initiate",
+          phoneNumber: phoneNumber.trim(),
+          scenarioId: selectedScenario.id,
+          scenarioName: selectedScenario.name,
+          businessContext: businessContext || undefined,
+          customScenario: {
+            name: selectedScenario.name,
+            description: selectedScenario.description,
+            persona: `You are ${selectedScenario.prospectName}, ${selectedScenario.prospectRole} at ${selectedScenario.prospectCompany}. Personality: ${selectedScenario.prospectPersonality}`,
+          },
+        },
+      });
+      if (error) throw error;
+
+      setPhoneSessionId(data.sessionId);
+      setPhoneCallStatus(data.status);
+      setPhonePolling(true);
+      toast.success("Calling your phone now! Pick up to start practicing.");
+    } catch (e: any) {
+      toast.error("Failed to start call: " + (e.message || "Unknown error"));
+      setCallState("scenario_detail");
+    }
   };
 
   const startCall = async () => {
@@ -779,9 +852,39 @@ export default function PracticeCall() {
               </TabsContent>
             </Tabs>
 
-            <Button className="w-full mt-6 h-12 text-base" onClick={startCall}>
+            {/* Phone Call Option */}
+            <div className="mt-6 space-y-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Phone className="h-4 w-4 text-primary" />
+                <span className="text-sm font-semibold">Call My Phone</span>
+                <Badge variant="outline" className="text-[10px]">Real Call</Badge>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  placeholder="+1 (555) 123-4567"
+                  className="flex-1"
+                  type="tel"
+                />
+                <Button onClick={startPhoneCall} disabled={!phoneNumber.trim()} className="shrink-0">
+                  <Phone className="h-4 w-4 mr-2" />Call Me
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                We'll call your phone. The AI prospect will answer based on this scenario.
+              </p>
+            </div>
+
+            <div className="relative flex items-center my-4">
+              <div className="flex-1 h-px bg-border" />
+              <span className="px-3 text-xs text-muted-foreground">or practice via text</span>
+              <div className="flex-1 h-px bg-border" />
+            </div>
+
+            <Button variant="outline" className="w-full h-12 text-base" onClick={startCall}>
               <Gamepad2 className="h-5 w-5 mr-2" />
-              Start Practice →
+              Start Text Practice →
             </Button>
           </div>
         </div>
@@ -811,7 +914,159 @@ export default function PracticeCall() {
   }
 
   // ========================
-  // RINGING STATE
+  // PHONE RINGING STATE (Real Twilio call)
+  // ========================
+  if (callState === "phone_ringing") {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[80vh] gap-6">
+        <div className="relative">
+          <div className="h-24 w-24 rounded-full bg-primary/20 flex items-center justify-center animate-pulse">
+            <Phone className="h-10 w-10 text-primary animate-bounce" />
+          </div>
+          <div className="absolute -inset-4 rounded-full border-2 border-primary/30 animate-ping" />
+        </div>
+        <div className="text-center">
+          <h2 className="text-xl font-semibold">Calling Your Phone</h2>
+          <p className="text-sm text-muted-foreground">{phoneNumber}</p>
+          <p className="text-muted-foreground animate-pulse mt-2">
+            {phoneCallStatus === "ringing" ? "Ringing..." : "Connecting..."}
+          </p>
+          <p className="text-xs text-muted-foreground mt-3">Pick up to talk with {selectedScenario?.prospectName}</p>
+        </div>
+        <Button variant="destructive" size="lg" onClick={() => {
+          setPhonePolling(false);
+          setCallState("scenario_detail");
+        }}>
+          <PhoneOff className="h-5 w-5 mr-2" />Cancel
+        </Button>
+      </div>
+    );
+  }
+
+  // ========================
+  // PHONE CONNECTED STATE (Real Twilio call in progress)
+  // ========================
+  if (callState === "phone_connected") {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[80vh] gap-6">
+        <div className="relative">
+          <div className="h-24 w-24 rounded-full bg-primary/20 flex items-center justify-center">
+            <Mic className="h-10 w-10 text-primary animate-pulse" />
+          </div>
+        </div>
+        <div className="text-center">
+          <h2 className="text-xl font-semibold">Call In Progress</h2>
+          <p className="text-sm text-muted-foreground">
+            Speaking with {selectedScenario?.prospectName} — {selectedScenario?.name}
+          </p>
+          <div className="flex items-center gap-2 justify-center mt-2">
+            <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+            <span className="text-sm text-primary">Live</span>
+          </div>
+        </div>
+
+        {/* Live transcript */}
+        {phoneTranscript.length > 0 && (
+          <Card className="max-w-lg w-full">
+            <CardContent className="py-4">
+              <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-primary" />Live Transcript
+              </h3>
+              <ScrollArea className="max-h-48">
+                <div className="space-y-2">
+                  {phoneTranscript.map((turn, i) => (
+                    <div key={i} className={`text-sm ${turn.role === "user" ? "text-primary font-medium" : "text-muted-foreground"}`}>
+                      <span className="text-xs font-bold mr-1">{turn.role === "user" ? "You:" : `${selectedScenario?.prospectName}:`}</span>
+                      {turn.text}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        )}
+
+        <p className="text-xs text-muted-foreground max-w-sm text-center">
+          Hang up the phone when you're done. Your transcript and coaching will appear automatically.
+        </p>
+      </div>
+    );
+  }
+
+  // ========================
+  // PHONE ENDED STATE (Post-call analysis)
+  // ========================
+  if (callState === "phone_ended") {
+    const turnCount = phoneTranscript.filter(t => t.role === "user").length;
+    return (
+      <div className="px-4 py-6 md:py-8 max-w-3xl mx-auto overflow-x-hidden">
+        <div className="text-center mb-6 sm:mb-8">
+          <Trophy className="h-10 w-10 sm:h-12 sm:w-12 mx-auto mb-3 text-primary" />
+          <h1 className="text-2xl sm:text-3xl font-bold mb-1">Phone Practice Complete</h1>
+          <p className="text-sm text-muted-foreground">{selectedScenario?.name}</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <Card>
+            <CardContent className="p-4 text-center">
+              <p className="text-xs text-muted-foreground mb-1">Your Turns</p>
+              <p className="text-2xl font-bold">{turnCount}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4 text-center">
+              <p className="text-xs text-muted-foreground mb-1">Total Turns</p>
+              <p className="text-2xl font-bold">{phoneTranscript.length}</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Full Transcript */}
+        <Card className="mb-6">
+          <CardContent className="py-4">
+            <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-primary" />Full Call Transcript
+            </h3>
+            <div className="space-y-3">
+              {phoneTranscript.map((turn, i) => (
+                <div key={i} className={`flex ${turn.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                    turn.role === "user"
+                      ? "bg-primary text-primary-foreground rounded-br-md"
+                      : "bg-muted rounded-bl-md"
+                  }`}>
+                    <p className="text-xs font-medium mb-1">
+                      {turn.role === "user" ? "You" : selectedScenario?.prospectName}
+                    </p>
+                    <p className="text-sm">{turn.text}</p>
+                  </div>
+                </div>
+              ))}
+              {phoneTranscript.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-4">No transcript recorded. The call may have been too short.</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 justify-center">
+          <Button variant="outline" size="sm" onClick={resetCall}>
+            <RotateCcw className="h-4 w-4 mr-2" />Try Another
+          </Button>
+          <Button size="sm" onClick={() => {
+            setPhoneTranscript([]);
+            setPhoneSessionId(null);
+            startPhoneCall();
+          }}>
+            <Phone className="h-4 w-4 mr-2" />Call Again
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // ========================
+  // RINGING STATE (Text practice)
   // ========================
   if (callState === "ringing") {
     return (
