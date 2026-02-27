@@ -62,3 +62,6 @@ verify_jwt = false
 
 [functions.generate-scenario-learn]
 verify_jwt = false
+
+[functions.live-call-assist]
+verify_jwt = false
