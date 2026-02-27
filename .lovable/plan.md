@@ -1,84 +1,81 @@
 
+# Twilio Practice Calling Integration
 
-# Clean Up Sales Brain + Fix Embedding Errors + Re-Process All Uploads
+## Overview
+When you click "Start Call" on a practice scenario, Twilio will call your real phone number. The AI prospect will answer based on the scenario you chose, using your brain's knowledge to coach you. The conversation flows naturally over a real phone call.
 
-## Root Cause of the Error
+## How It Works
+1. You select a scenario and enter your phone number
+2. Click "Start Call" -- Twilio calls your phone
+3. When you pick up, the AI prospect greets you based on the scenario
+4. You speak, the AI transcribes via Twilio's speech recognition, generates a response using the existing practice-call AI, and speaks it back using text-to-speech
+5. The conversation continues turn-by-turn until you hang up
+6. After the call ends, you see your full transcript and coaching analysis in the app
 
-The `108d46782f06b3e49fe98201db0f6b69` error traces back to **Embedding API 400 errors** visible in the process-knowledge logs. The function calls the Lovable AI Gateway with model `text-embedding-3-small`, which is returning HTTP 400 for every embedding request. This means:
-- Principles ARE being extracted (10 per upload) but stored WITHOUT embeddings
-- Raw vector chunks fail entirely ("Stored 0 raw embedded chunks")
-- The Brain's semantic search (`match_sales_brain`, `match_knowledge_chunks`) returns nothing because embeddings are null
+## Setup Required (from you)
+You'll need 3 things from your Twilio Console (https://console.twilio.com):
+- **Account SID** (found on dashboard)
+- **Auth Token** (found on dashboard)
+- **Twilio Phone Number** (a number you've purchased that can make outbound calls)
 
-**The fix**: Switch to a supported embedding model on the gateway, then re-process everything.
+## Technical Plan
 
-## Current State
-- **sales_brain**: 242 rows (most without working embeddings)
-- **knowledge_base_items**: 129 uploads (91 URLs + 37 PDFs), all status "ready"
-- **sales_brain table**: Missing `relevance_score` column
+### 1. Store Twilio Credentials
+Add 3 secrets: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`
 
----
+### 2. Create Edge Function: `twilio-practice-call`
+This function handles two actions:
+- **`initiate`**: Called from the app when user clicks "Start Call". Makes an outbound call via Twilio REST API to the user's phone number, pointing the call's webhook URL to the `twilio-practice-webhook` function
+- **`status`**: Receives call status updates (ringing, answered, completed) and forwards them to the app
 
-## Implementation Steps
+### 3. Create Edge Function: `twilio-practice-webhook`
+This is the TwiML webhook that Twilio hits during the call:
+- On first request: Plays the AI prospect's opening line using `<Say>` and starts listening with `<Gather input="speech">`
+- On each speech input: Sends the transcribed text to the existing `practice-call` AI logic, gets the prospect response, speaks it back with `<Say>`, and loops with another `<Gather>`
+- Stores each exchange in a temporary session (in-memory or database) for post-call analysis
 
-### Step 1: Add `relevance_score` column to `sales_brain`
-Add a float column `relevance_score` with a default of 70 for better search ranking.
+### 4. Update Practice Call UI (`PracticeCall.tsx`)
+- Add a phone number input field (saved to user profile for convenience)
+- Add "Call My Phone" button alongside the existing text-based practice
+- Show real-time call status (ringing, connected, in-progress)
+- When call ends, display the full transcript with coaching scores (reusing existing analysis UI)
 
-### Step 2: Fix the embedding model in `process-knowledge`
-Change the embedding call from `text-embedding-3-small` to a model supported by the Lovable AI Gateway. The gateway supports Google and OpenAI models -- we need to verify which embedding model works and switch to it. If the gateway doesn't support embeddings at all, we'll skip embeddings and rely on text-based retrieval (which the brain-chat function already does).
+### 5. Database Changes
+- Add `phone_number` column to `profiles` table (optional, for saving the user's number)
+- Create `practice_call_sessions` table to store call transcripts and scores:
+  - `id`, `user_id`, `scenario_id`, `twilio_call_sid`, `transcript` (jsonb), `overall_score`, `status`, `created_at`
 
-### Step 3: Create a `reprocess-brain` edge function
-A new backend function that:
-1. Deletes all existing `sales_brain` rows for the authenticated user
-2. Deletes all existing `knowledge_chunks` rows for the user
-3. Fetches all `knowledge_base_items` for the user
-4. For each item: calls the existing `process-knowledge` function internally (or duplicates the extraction logic) to re-extract content and generate 12-15 principles
-5. Returns a report: "Cleaned! Added X new principles from Y uploads."
-
-This function will need a longer timeout since it processes 129 items. To handle this within edge function limits, it will:
-- Process items in batches
-- Use `EdgeRuntime.waitUntil` for background processing
-- Update a status row the frontend can poll
-
-### Step 4: Add a "Re-process Brain" button to the UI
-Add a button (likely in the Knowledge Base or Brain Stats page) that:
-- Calls the `reprocess-brain` function
-- Shows a progress indicator
-- Displays the final report toast: "Cleaned! Added X new principles from Y uploads."
-
-### Step 5: Deploy and test
-
----
-
-## Technical Details
-
-### Database Migration
-```sql
-ALTER TABLE public.sales_brain 
-ADD COLUMN IF NOT EXISTS relevance_score float DEFAULT 70;
+### 6. Call Flow Diagram
+```text
+[App] ---> twilio-practice-call (initiate)
+                |
+                v
+         Twilio REST API ---> Calls user's phone
+                |
+                v
+         User answers ---> Twilio hits twilio-practice-webhook
+                |
+                v
+         AI generates prospect greeting (TwiML <Say>)
+                |
+                v
+         <Gather speech> listens to user
+                |
+                v
+         User speaks ---> Twilio transcribes ---> webhook receives text
+                |
+                v
+         practice-call AI generates response ---> <Say> speaks it back
+                |
+                v
+         Loop until hangup ---> Call ends ---> status callback
+                |
+                v
+         App shows transcript + coaching analysis
 ```
 
-### New Edge Function: `reprocess-brain`
-- Authenticates the user
-- Truncates their sales_brain + knowledge_chunks
-- Loops through each knowledge_base_item
-- For videos/URLs: re-fetches transcript via the preview-url function
-- For PDFs: re-downloads from storage and re-extracts via Gemini
-- Generates 12-15 principles per item using the same AI extraction
-- Inserts into sales_brain with full metadata, workspace_id = null
-- Attempts embeddings with corrected model (or skips if unsupported)
-- Returns summary report
-
-### Files to Create/Modify
-1. **Database migration** -- Add `relevance_score` column
-2. **`supabase/functions/reprocess-brain/index.ts`** -- NEW: bulk re-processing function
-3. **`supabase/functions/process-knowledge/index.ts`** -- Fix embedding model
-4. **`supabase/config.toml`** -- Add reprocess-brain function config
-5. **`src/pages/KnowledgeBase.tsx`** or **`src/pages/BrainStats.tsx`** -- Add re-process button + progress UI
-
-### Edge Function Timeout Strategy
-Since 129 items cannot be processed in a single 60s function call, the reprocess-brain function will:
-1. Delete old data immediately
-2. Process items in the foreground (batch of ~5 at a time)
-3. Use streaming response to keep the connection alive
-4. Or: use a job-based approach where it kicks off processing and the frontend polls for completion
-
+### Important Notes
+- Twilio charges per minute for outbound calls (check your Twilio pricing)
+- The webhook URL must be publicly accessible -- the deployed edge function URL works for this
+- Speech recognition language defaults to English (configurable)
+- Each call turn has a ~2-3 second AI processing delay (similar to talking to a real person thinking)
