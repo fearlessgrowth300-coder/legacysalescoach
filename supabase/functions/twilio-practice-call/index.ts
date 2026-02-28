@@ -155,6 +155,52 @@ serve(async (req) => {
       });
     }
 
+    if (action === "hangup") {
+      // Explicitly terminate a Twilio call
+      if (!sessionId) {
+        return new Response(JSON.stringify({ error: "sessionId required" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { data: session } = await supabase
+        .from("practice_call_sessions")
+        .select("twilio_call_sid")
+        .eq("id", sessionId)
+        .eq("user_id", user.id)
+        .single();
+
+      if (!session?.twilio_call_sid) {
+        return new Response(JSON.stringify({ error: "Session or call not found" }), {
+          status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Terminate the call via Twilio REST API
+      const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls/${session.twilio_call_sid}.json`;
+      const twilioResponse = await fetch(twilioUrl, {
+        method: "POST",
+        headers: {
+          Authorization: "Basic " + btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`),
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ Status: "completed" }).toString(),
+      });
+
+      // Update session status
+      await supabase.from("practice_call_sessions")
+        .update({ status: "completed" })
+        .eq("id", sessionId);
+
+      return new Response(JSON.stringify({
+        success: true,
+        status: "completed",
+        twilioStatus: twilioResponse.ok ? "terminated" : "termination_attempted",
+      }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // Handle Twilio status callback (no auth - comes from Twilio)
     return new Response(JSON.stringify({ error: "Invalid action" }), {
       status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
