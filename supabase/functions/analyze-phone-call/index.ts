@@ -170,10 +170,10 @@ IMPORTANT: Return ONLY valid JSON, no markdown, no code fences.`;
       throw new Error("Failed to parse analysis");
     }
 
-    // Save score to session if sessionId provided
+    // Save score and mark session as completed if sessionId provided
     if (sessionId) {
       await supabase.from("practice_call_sessions")
-        .update({ overall_score: analysis.overallScore })
+        .update({ overall_score: analysis.overallScore, status: "completed" })
         .eq("id", sessionId)
         .eq("user_id", user.id);
     }
