@@ -34,7 +34,7 @@ serve(async (req) => {
       });
     }
 
-    const { action, phoneNumber, scenarioId, scenarioName, businessContext, customScenario, sessionId } = await req.json();
+    const { action, phoneNumber, scenarioId, scenarioName, businessContext, customScenario, sessionId, voiceId } = await req.json();
 
     if (action === "initiate") {
       if (!phoneNumber || !scenarioId) {
@@ -83,6 +83,7 @@ serve(async (req) => {
       if (customScenario?.description) scenarioParams.set("sd", customScenario.description.substring(0, 500));
       if (customScenario?.persona) scenarioParams.set("sp", customScenario.persona.substring(0, 500));
       if (businessContext) scenarioParams.set("bc", businessContext.substring(0, 500));
+      if (voiceId) scenarioParams.set("vi", voiceId);
 
       const fullWebhookUrl = `${webhookUrl}&${scenarioParams.toString()}`;
 
