@@ -57,6 +57,9 @@ verify_jwt = false
 [functions.twilio-practice-webhook]
 verify_jwt = false
 
+[functions.twilio-tts]
+verify_jwt = false
+
 [functions.analyze-phone-call]
 verify_jwt = false
 

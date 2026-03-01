@@ -33,22 +33,25 @@ function escapeXml(text: string): string {
     .replace(/'/g, "&apos;");
 }
 
+function ttsUrl(text: string): string {
+  const baseUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/twilio-tts`;
+  return `${baseUrl}?text=${encodeURIComponent(text)}`;
+}
+
 function twimlGather(text: string, sessionId: string, params: string): string {
   const baseUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/twilio-practice-webhook`;
   const actionUrl = `${baseUrl}?sessionId=${sessionId}&${params}`;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Matthew">${escapeXml(text)}</Say>
+  <Play>${escapeXml(ttsUrl(text))}</Play>
   <Gather input="speech" timeout="6" speechTimeout="auto" action="${escapeXml(actionUrl)}" method="POST">
-    <Say voice="Polly.Matthew"></Say>
   </Gather>
   <Pause length="2"/>
-  <Say voice="Polly.Matthew">Are you still there?</Say>
+  <Play>${escapeXml(ttsUrl("Are you still there?"))}</Play>
   <Gather input="speech" timeout="8" speechTimeout="auto" action="${escapeXml(actionUrl)}" method="POST">
-    <Say voice="Polly.Matthew"></Say>
   </Gather>
-  <Say voice="Polly.Matthew">It seems like you've stepped away. Thanks for practicing — goodbye!</Say>
+  <Play>${escapeXml(ttsUrl("It seems like you've stepped away. Thanks for practicing — goodbye!"))}</Play>
   <Hangup/>
 </Response>`;
 }
@@ -56,7 +59,7 @@ function twimlGather(text: string, sessionId: string, params: string): string {
 function twimlHangup(text: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Matthew">${escapeXml(text)}</Say>
+  <Play>${escapeXml(ttsUrl(text))}</Play>
   <Hangup/>
 </Response>`;
 }
