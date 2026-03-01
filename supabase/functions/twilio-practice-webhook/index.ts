@@ -33,33 +33,35 @@ function escapeXml(text: string): string {
     .replace(/'/g, "&apos;");
 }
 
-function ttsUrl(text: string): string {
+function ttsUrl(text: string, voiceId?: string): string {
   const baseUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/twilio-tts`;
-  return `${baseUrl}?text=${encodeURIComponent(text)}`;
+  const params = new URLSearchParams({ text });
+  if (voiceId) params.set("voiceId", voiceId);
+  return `${baseUrl}?${params.toString()}`;
 }
 
-function twimlGather(text: string, sessionId: string, params: string): string {
+function twimlGather(text: string, sessionId: string, params: string, voiceId?: string): string {
   const baseUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/twilio-practice-webhook`;
   const actionUrl = `${baseUrl}?sessionId=${sessionId}&${params}`;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Play>${escapeXml(ttsUrl(text))}</Play>
+  <Play>${escapeXml(ttsUrl(text, voiceId))}</Play>
   <Gather input="speech" timeout="6" speechTimeout="auto" action="${escapeXml(actionUrl)}" method="POST">
   </Gather>
   <Pause length="2"/>
-  <Play>${escapeXml(ttsUrl("Are you still there?"))}</Play>
+  <Play>${escapeXml(ttsUrl("Are you still there?", voiceId))}</Play>
   <Gather input="speech" timeout="8" speechTimeout="auto" action="${escapeXml(actionUrl)}" method="POST">
   </Gather>
-  <Play>${escapeXml(ttsUrl("It seems like you've stepped away. Thanks for practicing — goodbye!"))}</Play>
+  <Play>${escapeXml(ttsUrl("It seems like you've stepped away. Thanks for practicing — goodbye!", voiceId))}</Play>
   <Hangup/>
 </Response>`;
 }
 
-function twimlHangup(text: string): string {
+function twimlHangup(text: string, voiceId?: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Play>${escapeXml(ttsUrl(text))}</Play>
+  <Play>${escapeXml(ttsUrl(text, voiceId))}</Play>
   <Hangup/>
 </Response>`;
 }
@@ -129,12 +131,14 @@ serve(async (req) => {
     const scenarioDescription = url.searchParams.get("sd") || "";
     const scenarioPersona = url.searchParams.get("sp") || "You are a realistic prospect. Push back naturally.";
     const businessContext = url.searchParams.get("bc") || "";
+    const voiceId = url.searchParams.get("vi") || undefined; // ElevenLabs voice ID
     // Preserve params for subsequent turns
     const paramsForward = new URLSearchParams();
     if (url.searchParams.get("sn")) paramsForward.set("sn", url.searchParams.get("sn")!);
     if (url.searchParams.get("sd")) paramsForward.set("sd", url.searchParams.get("sd")!);
     if (url.searchParams.get("sp")) paramsForward.set("sp", url.searchParams.get("sp")!);
     if (url.searchParams.get("bc")) paramsForward.set("bc", url.searchParams.get("bc")!);
+    if (url.searchParams.get("vi")) paramsForward.set("vi", url.searchParams.get("vi")!);
     const forwardParams = paramsForward.toString();
 
     // Build conversation from transcript
@@ -155,7 +159,7 @@ serve(async (req) => {
         // Explicitly terminate via Twilio API
         await terminateTwilioCall(callSid || session.twilio_call_sid);
 
-        return new Response(twimlHangup("Thanks for the practice! Great conversation. Talk soon!"), {
+        return new Response(twimlHangup("Thanks for the practice! Great conversation. Talk soon!", voiceId), {
           headers: { "Content-Type": "text/xml" },
         });
       }
@@ -169,7 +173,7 @@ serve(async (req) => {
         .update({ transcript, status: "completed" })
         .eq("id", sessionId);
       await terminateTwilioCall(callSid || session.twilio_call_sid);
-      return new Response(twimlHangup(endMsg), {
+      return new Response(twimlHangup(endMsg, voiceId), {
         headers: { "Content-Type": "text/xml" },
       });
     }
@@ -259,7 +263,7 @@ RULES:
 
     if (!aiResponse.ok) {
       console.error("AI error:", aiResponse.status);
-      return new Response(twimlGather("I'm having a moment. Let me get back to you.", sessionId, forwardParams), {
+      return new Response(twimlGather("I'm having a moment. Let me get back to you.", sessionId, forwardParams, voiceId), {
         headers: { "Content-Type": "text/xml" },
       });
     }
@@ -288,13 +292,13 @@ RULES:
       .eq("id", sessionId);
 
     if (aiIndicatesEnd) {
-      return new Response(twimlHangup(prospectResponse), {
+      return new Response(twimlHangup(prospectResponse, voiceId), {
         headers: { "Content-Type": "text/xml" },
       });
     }
 
     // Return TwiML with gather for next turn
-    return new Response(twimlGather(prospectResponse, sessionId, forwardParams), {
+    return new Response(twimlGather(prospectResponse, sessionId, forwardParams, voiceId), {
       headers: { "Content-Type": "text/xml" },
     });
 

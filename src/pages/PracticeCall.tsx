@@ -33,6 +33,8 @@ const SCENARIO_CATEGORIES = [
 
 type Difficulty = "Easy" | "Medium" | "Hard";
 
+type ProspectGender = "male" | "female";
+
 type RichScenario = {
   id: string;
   name: string;
@@ -44,6 +46,7 @@ type RichScenario = {
   prospectRole: string;
   prospectCompany: string;
   prospectPersonality: string;
+  prospectGender: ProspectGender;
   objectives: string[];
   examplePhrases?: string[];
   successMetrics?: string[];
@@ -51,12 +54,33 @@ type RichScenario = {
   expectedObjections?: string[];
 };
 
+// ElevenLabs voice mapping by gender
+const ELEVENLABS_VOICES: Record<ProspectGender, { id: string; name: string }[]> = {
+  male: [
+    { id: "JBFqnCBsd6RMkjVDRZzb", name: "George" },
+    { id: "iP95p4xoKVk53GoZ742B", name: "Chris" },
+    { id: "nPczCjzI2devNBz1zQrb", name: "Brian" },
+  ],
+  female: [
+    { id: "EXAVITQu4vr4xnSDxMaL", name: "Sarah" },
+    { id: "FGY2WhTYpPnrIDTdsKH5", name: "Laura" },
+    { id: "cgSgspJ2msm6clMCkdW9", name: "Jessica" },
+  ],
+};
+
+function getVoiceForScenario(scenario: RichScenario): string {
+  const voices = ELEVENLABS_VOICES[scenario.prospectGender];
+  const hash = scenario.id.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+  return voices[hash % voices.length].id;
+}
+
 const RICH_SCENARIOS: RichScenario[] = [
   // OPENING
   {
     id: "cold_call_easy", name: "Cold Call - Easy Mode", category: "opening", difficulty: "Easy", duration: "3 min",
     description: "Practice cold calling with Jenna, an ops manager who got burned by a vendor 6 months ago.",
     prospectName: "Jenna", prospectRole: "Operations Manager", prospectCompany: "Apex Solutions",
+    prospectGender: "female",
     prospectPersonality: "Cautious but open-minded. Had a bad vendor experience recently.",
     objectives: ["Build initial rapport", "Identify a pain point quickly", "Get permission to continue"],
     expectedObjections: ["We already have a solution", "I got burned last time", "Send me an email instead"],
@@ -65,6 +89,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "cold_call_b2b", name: "Cold Call (B2B)", category: "opening", difficulty: "Hard", duration: "5 min",
     description: "Advanced cold calling with Tom, a procurement drill sergeant who gives you 30 seconds.",
     prospectName: "Tom", prospectRole: "Procurement Manager", prospectCompany: "Sterling Industries",
+    prospectGender: "male",
     prospectPersonality: "Aggressive, time-conscious, alpha-type. Will cut you off fast.",
     objectives: ["Hook within 10 seconds", "Earn the right to continue", "Schedule a follow-up"],
     expectedObjections: ["I don't take cold calls", "You have 30 seconds", "We're locked into a contract"],
@@ -73,6 +98,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "cold_dm_approach", name: "Cold DM Approach", category: "opening", difficulty: "Easy", duration: "3 min",
     description: "You found a prospect on Instagram. Start a conversation naturally without being salesy.",
     prospectName: "Sarah", prospectRole: "Online Store Owner", prospectCompany: "Self-employed",
+    prospectGender: "female",
     prospectPersonality: "Gets DMs from salespeople daily. Only engages if it feels genuine.",
     objectives: ["Start naturally", "Show genuine interest", "Transition to business without being pushy"],
   },
@@ -80,6 +106,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "network_marketing_invite", name: "Network Marketing Invite", category: "opening", difficulty: "Medium", duration: "4 min",
     description: "Invite a warm contact to look at your business opportunity without triggering 'pyramid scheme' alarm.",
     prospectName: "Mike", prospectRole: "Office Worker", prospectCompany: "Corporate job, 9-5",
+    prospectGender: "male",
     prospectPersonality: "Friend/acquaintance. Slightly negative about MLM. Will ask 'is this a pyramid scheme?'",
     objectives: ["Approach with genuine care", "Pique curiosity without overselling", "Get them to look at a presentation"],
     commonMistakes: ["Pitching too hard too fast", "Getting defensive about 'pyramid scheme'", "Overselling the income"],
@@ -89,6 +116,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "consultative_selling", name: "Consultative Selling", category: "discovery", difficulty: "Medium", duration: "5 min",
     description: "Guide Kwame to discover his own problems — he knows something's wrong but can't articulate it.",
     prospectName: "Kwame", prospectRole: "Operations Lead", prospectCompany: "Harmon & Associates",
+    prospectGender: "male",
     prospectPersonality: "Thoughtful, needs time to process. Knows there's a problem but can't name it.",
     objectives: ["Use open-ended questions", "Help them articulate their pain", "Don't pitch until they self-discover"],
     examplePhrases: ["Walk me through your typical day when [problem area] comes up...", "What happens when that doesn't get handled?", "How long has that been going on?"],
@@ -97,6 +125,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "focus_on_prospect", name: "Focus on Prospect", category: "discovery", difficulty: "Medium", duration: "4 min",
     description: "Practice active listening with Clara who rapid-fires pains. Mirror and reflect without pitching early.",
     prospectName: "Clara", prospectRole: "VP of Sales", prospectCompany: "Velocity Partners",
+    prospectGender: "female",
     prospectPersonality: "Fast talker, shares lots of problems at once. Tests if you listen or just pitch.",
     objectives: ["Mirror their language", "Prioritize their pains", "Resist the urge to pitch"],
   },
@@ -104,6 +133,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "follow_up_call", name: "Follow Up Call", category: "discovery", difficulty: "Medium", duration: "4 min",
     description: "Follow up with someone who said 'let me think about it' last week. Re-engage without being pushy.",
     prospectName: "Rachel", prospectRole: "Marketing Director", prospectCompany: "BrightWave Digital",
+    prospectGender: "female",
     prospectPersonality: "Said she'd think about it but forgot. Not hostile but needs re-engagement.",
     objectives: ["Re-establish rapport", "Discover what held them back", "Create new urgency"],
   },
@@ -111,6 +141,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "referral_ask", name: "Ask for Referrals", category: "discovery", difficulty: "Easy", duration: "3 min",
     description: "Your happy customer just got great results. Ask them for referrals naturally.",
     prospectName: "David", prospectRole: "Happy Customer", prospectCompany: "Your existing client",
+    prospectGender: "male",
     prospectPersonality: "Loves your product but never thought about referring. Needs guidance.",
     objectives: ["Anchor to their success", "Make referring easy", "Get specific names"],
   },
@@ -119,6 +150,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "objection_price", name: "Handle Price Objection", category: "closing", difficulty: "Hard", duration: "5 min",
     description: "The prospect loves your product but says it's too expensive. Reframe value without discounting.",
     prospectName: "Derek", prospectRole: "Head of Sales Enablement", prospectCompany: "Catalyst Media Group",
+    prospectGender: "male",
     prospectPersonality: "Genuinely likes it but gut reaction is 'too expensive'. Push back 2-3 times.",
     objectives: ["Reframe cost as investment", "Quantify the ROI", "Create urgency to act now"],
     examplePhrases: ["I hear you on the price. Let me ask — what's it costing you right now to NOT solve this?", "If this saves you [X hours/dollars] per month, when does it pay for itself?"],
@@ -127,6 +159,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "renewal_save", name: "Renewal Save", category: "closing", difficulty: "Hard", duration: "5 min",
     description: "Save an at-risk renewal with Derek, a frustrated customer whose team hasn't fully adopted your product.",
     prospectName: "Derek", prospectRole: "Head of Sales Enablement", prospectCompany: "Catalyst Media Group",
+    prospectGender: "male",
     prospectPersonality: "Frustrated, feels let down. Considering churning.",
     objectives: ["Acknowledge frustration", "Identify adoption blockers", "Propose a success plan"],
   },
@@ -134,6 +167,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "saas_pricing", name: "SaaS Pricing & Procurement", category: "closing", difficulty: "Hard", duration: "5 min",
     description: "Post-demo, pre-close. Linda from procurement says your pricing is 'higher than expected' and brings up competitors.",
     prospectName: "Linda", prospectRole: "Head of Procurement", prospectCompany: "Quantum Dynamics",
+    prospectGender: "female",
     prospectPersonality: "Professional, analytical. Uses competitor pricing as leverage.",
     objectives: ["Defend value without discounting", "Differentiate from competitors", "Move toward contract"],
   },
@@ -141,6 +175,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "enterprise_multi_stakeholder", name: "Enterprise Multi-Stakeholder", category: "closing", difficulty: "Hard", duration: "6 min",
     description: "Buying committee alignment call. Chris has the CFO worried about ROI and IT worried about security.",
     prospectName: "Chris", prospectRole: "VP of Operations (Your Champion)", prospectCompany: "Horizon Financial",
+    prospectGender: "male",
     prospectPersonality: "On your side but can't push it through alone. Needs help aligning stakeholders.",
     objectives: ["Address CFO's ROI concerns", "Handle IT's security objections", "Align all stakeholders"],
   },
@@ -149,6 +184,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "sell_pen", name: "Sell To The Wolf", category: "challenge", difficulty: "Hard", duration: "2 min",
     description: "The classic 'sell me this pen' challenge with Jordan, an aggressive stock broker.",
     prospectName: "Jordan", prospectRole: "Stock Broker", prospectCompany: "Wall Street Securities",
+    prospectGender: "male",
     prospectPersonality: "Aggressive, money-focused, impatient, alpha-type Wall Street personality.",
     objectives: ["Identify buying signals", "Create urgency appropriately", "Close with confidence"],
     examplePhrases: ['Problem: "What happens when you\'re in that 5pm meeting and need to jot down that critical action item?"', 'Solution: "You need reliable capture in any situation"', 'Trial close: "If this prevents the 5pm scramble, worth trying?"'],
@@ -160,6 +196,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "product_demo", name: "Product Demo Pitch", category: "challenge", difficulty: "Medium", duration: "5 min",
     description: "Demo your product to a skeptical decision-maker who's seen 10 demos this week.",
     prospectName: "Alex", prospectRole: "CTO", prospectCompany: "NovaTech Solutions",
+    prospectGender: "male",
     prospectPersonality: "Tech-savvy, demo-fatigued, wants to see something different.",
     objectives: ["Lead with their specific problem", "Show, don't tell", "Get a verbal commitment"],
   },
@@ -167,6 +204,7 @@ const RICH_SCENARIOS: RichScenario[] = [
     id: "team_building", name: "Team Building Pitch", category: "challenge", difficulty: "Medium", duration: "5 min",
     description: "Recruit a potential team member to join your business. They're talented but risk-averse.",
     prospectName: "Lisa", prospectRole: "Senior Sales Rep", prospectCompany: "Currently employed, stable job",
+    prospectGender: "female",
     prospectPersonality: "Great at sales, curious about entrepreneurship, but fears instability.",
     objectives: ["Paint the vision", "Address fear of instability", "Show a realistic path to success"],
     commonMistakes: ["Overselling income potential", "Dismissing their concerns", "Making it sound too easy"],
@@ -343,17 +381,18 @@ export default function PracticeCall() {
     return businessContext || undefined;
   }, [companyProfile, businessContext]);
 
-  const speakText = useCallback((text: string): Promise<void> => {
+  const speakText = useCallback((text: string, gender: ProspectGender = "male"): Promise<void> => {
     return new Promise((resolve) => {
       if (!('speechSynthesis' in window)) { resolve(); return; }
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 1.0;
-      utterance.pitch = 1.0;
-      // Try to get a male voice
+      utterance.pitch = gender === "female" ? 1.1 : 0.9;
       const voices = window.speechSynthesis.getVoices();
-      const maleVoice = voices.find(v => v.name.includes("Male") || v.name.includes("Daniel") || v.name.includes("James") || v.name.includes("David"));
-      if (maleVoice) utterance.voice = maleVoice;
+      const genderVoice = gender === "female"
+        ? voices.find(v => v.name.includes("Female") || v.name.includes("Samantha") || v.name.includes("Victoria") || v.name.includes("Karen") || v.name.includes("Zira"))
+        : voices.find(v => v.name.includes("Male") || v.name.includes("Daniel") || v.name.includes("James") || v.name.includes("David"));
+      if (genderVoice) utterance.voice = genderVoice;
       utterance.onend = () => { setIsSpeaking(false); resolve(); };
       utterance.onerror = () => { setIsSpeaking(false); resolve(); };
       synthRef.current = utterance;
@@ -435,7 +474,7 @@ export default function PracticeCall() {
         .eq("id", sessionId);
 
       // Speak AI response
-      await speakText(aiText);
+      await speakText(aiText, scenario.prospectGender);
 
       // Check if conversation ended
       if (data.conversationStage === "won" || data.conversationStage === "lost") {
@@ -530,7 +569,7 @@ export default function PracticeCall() {
           .eq("id", session.id);
 
         // Speak the opening line
-        await speakText(aiText);
+        await speakText(aiText, selectedScenario.prospectGender);
 
         // Start conversation loop
         voiceConversationLoop(selectedScenario, initialTranscript, session.id);
