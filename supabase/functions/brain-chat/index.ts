@@ -226,9 +226,9 @@ serve(async (req) => {
       if (!seenIds.has(p.id)) { finalPrinciples.push(p); seenIds.add(p.id); }
     }
 
-    // Take generous amounts — no longer capped at 15
-    const principles = finalPrinciples.slice(0, 100);
-    const chunks = diverseChunks.slice(0, 80);
+    // Higher retrieval cap so larger libraries are represented better
+    const principles = finalPrinciples.slice(0, 140);
+    const chunks = diverseChunks.slice(0, 120);
 
     const totalChunks = chunks.length + principles.length;
     const sourceTypes = new Set<string>();

@@ -212,6 +212,22 @@ export default function AiChat() {
     if (data) setConversations(data as Conversation[]);
   };
 
+  const touchConversation = async (convId: string, titleOverride?: string) => {
+    const updatePayload: Partial<Conversation> & { updated_at: string } = {
+      updated_at: new Date().toISOString(),
+      ...(titleOverride ? { title: titleOverride } : {}),
+    };
+
+    await supabase.from("ai_conversations").update(updatePayload).eq("id", convId);
+
+    setConversations((prev) => {
+      const existing = prev.find((c) => c.id === convId);
+      if (!existing) return prev;
+      const updated = { ...existing, ...updatePayload } as Conversation;
+      return [updated, ...prev.filter((c) => c.id !== convId)];
+    });
+  };
+
   useEffect(() => {
     if (!activeConvId) { setMessages([]); setFollowUps([]); return; }
     loadMessages(activeConvId);
@@ -451,10 +467,28 @@ export default function AiChat() {
     if (!user) return null;
     const ext = blob.type.split("/").pop() || "jpg";
     const path = `${user.id}/ai-chat/${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const { error } = await supabase.storage.from("chat-screenshots").upload(path, blob, { contentType: blob.type });
-    if (error) { console.error("Upload error:", error); toast.error(`Failed to upload image ${index + 1}`); return null; }
-    const { data: { publicUrl } } = supabase.storage.from("chat-screenshots").getPublicUrl(path);
-    return publicUrl;
+
+    let lastError: any = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const { error } = await supabase.storage.from("chat-screenshots").upload(path, blob, {
+        contentType: blob.type,
+        upsert: true,
+      });
+
+      if (!error) {
+        const { data: { publicUrl } } = supabase.storage.from("chat-screenshots").getPublicUrl(path);
+        return publicUrl;
+      }
+
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+      }
+    }
+
+    console.error("Upload error:", lastError);
+    toast.error(`Failed to upload image ${index + 1}`);
+    return null;
   };
 
   const feedLinkToBrain = async (url: string) => {
@@ -532,8 +566,9 @@ export default function AiChat() {
     }
 
     if (messages.length === 0 && text) {
-      await supabase.from("ai_conversations").update({ title: text.substring(0, 60) }).eq("id", convId);
-      setConversations(prev => prev.map(c => c.id === convId ? { ...c, title: text.substring(0, 60) } : c));
+      await touchConversation(convId, text.substring(0, 60));
+    } else {
+      await touchConversation(convId);
     }
 
     setMessages(prev => prev.map(m => m.id === savedMsg?.id ? { ...m, status: "delivered" as const } : m));

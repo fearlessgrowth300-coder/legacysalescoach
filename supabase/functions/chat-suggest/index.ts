@@ -142,6 +142,11 @@ You have been exactly where the prospect is now — zero sales, empty DMs, waste
   const brainGroundingInstructions = brainChunks ? `
 
 ===== SECONDARY: BRAIN-GROUNDED KNOWLEDGE (Use AFTER following Custom Framework) =====
+PRIORITY ORDER FOR FRIEND MODE:
+1) Workspace custom framework + style fingerprint
+2) Workspace training conversations and workspace-specific chunks
+3) Core sales principles/chunks from uploads
+
 You have retrieved the following knowledge from the user's uploaded videos, PDFs, and structured principles. Weave these naturally into your reply ONLY after following the Custom Framework rules:
 
 ${brainChunks}
@@ -154,6 +159,7 @@ HOW TO REFERENCE BRAIN KNOWLEDGE:
 - "This reminds me of that exact part in the [source name] video..."
 
 RULES:
+- You MUST anchor every reply in workspace context first (framework/style/training examples)
 - You MUST use at least 1-2 retrieved principles/chunks in EVERY reply
 - Reference them NATURALLY — like recalling something you learned, not reading a textbook
 - Pull specific phrases, examples, or frameworks from the chunks
@@ -540,12 +546,12 @@ serve(async (req) => {
     // 5. Pull workspace conversation chunks (private — includes training data)
     const { data: wsConvoChunks } = await supabase
       .from("knowledge_chunks")
-      .select("content, category, source_type, trigger_phrases, source_id")
+      .select("content, category, source_type, trigger_phrases, source_id, created_at")
       .eq("user_id", user.id)
       .eq("workspace_id", prospect.workspace_id)
       .in("source_type", ["conversation", "training_conversation"])
-      .order("relevance_score", { ascending: false })
-      .limit(15);
+      .order("created_at", { ascending: false })
+      .limit(40);
 
     // 6. Pull actual training conversation examples
     const { data: trainingExamples } = await supabase
@@ -555,7 +561,7 @@ serve(async (req) => {
       .eq("status", "ready")
       .not("content", "is", null)
       .order("created_at", { ascending: false })
-      .limit(5);
+      .limit(8);
 
     // 7. Fetch all KB titles for Global Knowledge Map
     const { data: kbItems } = await supabase
@@ -607,42 +613,67 @@ serve(async (req) => {
       return result;
     }
 
+    const queryTerms = brainQuery.toLowerCase().split(/\s+/).filter((t) => t.length > 3);
+
     // Diverse core chunks (max 4 per source)
     const diverseCoreChunks = diversityRerank(brainKnowledge || [], "source_id", 4);
 
-    // Score and rank by relevance to current context
-    const queryTerms = brainQuery.toLowerCase().split(/\s+/).filter(t => t.length > 3);
-    const allChunks = [...diverseCoreChunks, ...(wsConvoChunks || [])];
-    const scoredChunks = allChunks.map((chunk: any) => {
-      const text = (chunk.content + " " + (chunk.trigger_phrases || "")).toLowerCase();
-      let score = 0;
-      queryTerms.forEach(term => { if (text.includes(term)) score++; });
+    // Score workspace chunks with higher priority weight
+    const scoredWorkspaceChunks = (wsConvoChunks || []).map((chunk: any, idx: number) => {
+      const text = `${chunk.content || ""} ${chunk.trigger_phrases || ""}`.toLowerCase();
+      let score = 6 - Math.min(idx, 5); // recency bias for workspace memory
+      queryTerms.forEach((term) => {
+        if (text.includes(term)) score += 2;
+      });
       return { ...chunk, matchScore: score };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-    // Take generous amount — up to 30 top-ranked chunks
-    const topChunks = scoredChunks.slice(0, 30);
+    // Score core chunks separately
+    const scoredCoreChunks = diverseCoreChunks.map((chunk: any) => {
+      const text = `${chunk.content || ""} ${chunk.trigger_phrases || ""}`.toLowerCase();
+      let score = 0;
+      queryTerms.forEach((term) => {
+        if (text.includes(term)) score += 1;
+      });
+      return { ...chunk, matchScore: score };
+    }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-    // Diverse principles (max 5 per source)
+    // Force workspace-first retrieval so friend replies stay in user style/framework
+    const workspaceFirst = scoredWorkspaceChunks.slice(0, 20);
+    const remainingSlots = Math.max(35 - workspaceFirst.length, 10);
+    const topChunks = [...workspaceFirst, ...scoredCoreChunks.slice(0, remainingSlots)].slice(0, 35);
+
+    // Diverse principles (max 5 per source), then score to current query
     const diversePrinciples = diversityRerank(salesPrinciples || [], "source_id", 5);
-    
+    const scoredPrinciples = diversePrinciples.map((sp: any) => {
+      const text = `${sp.principle_name || ""} ${sp.what_i_learned || ""} ${sp.how_to_apply || ""}`.toLowerCase();
+      let score = 0;
+      queryTerms.forEach((term) => {
+        if (text.includes(term)) score += 1;
+      });
+      return { ...sp, matchScore: score };
+    }).sort((a: any, b: any) => b.matchScore - a.matchScore);
+
+    const topPrinciples = scoredPrinciples.slice(0, 60);
+
     // Categorize sources for metadata
     const sourceTypes = new Set<string>();
     topChunks.forEach((c: any) => sourceTypes.add(c.source_type || "unknown"));
-    
+    topPrinciples.forEach((p: any) => sourceTypes.add(p.source_type || "unknown"));
+
     // Build brain context string with diversity and real source names
     let brainChunksFormatted = "";
     if (topChunks.length > 0) {
       brainChunksFormatted = topChunks.map((c: any, i: number) => {
         const realSource = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : (c.source_type || "unknown");
-        return `[BRAIN CHUNK ${i + 1}] (Source: "${realSource}", Category: ${c.category}):\n${c.content.substring(0, 600)}`;
+        return `[BRAIN CHUNK ${i + 1}] (Source: "${realSource}", Category: ${c.category}):\n${(c.content || "").substring(0, 600)}`;
       }).join("\n\n");
     }
 
     // Add structured CORE sales principles with real source names
-    if (diversePrinciples && diversePrinciples.length > 0) {
+    if (topPrinciples && topPrinciples.length > 0) {
       brainChunksFormatted += "\n\n[CORE PRINCIPLES FROM UPLOADED VIDEOS & PDFs]:\n" + 
-        diversePrinciples.slice(0, 40).map((sp: any) => {
+        topPrinciples.map((sp: any) => {
           const realSource = sp.source_id && kbMap[sp.source_id] ? kbMap[sp.source_id] : sp.source_name;
           return `• ${sp.principle_name}: ${sp.what_i_learned}\n  How to apply: ${sp.how_to_apply}\n  (From: "${realSource}")`;
         }).join("\n");
