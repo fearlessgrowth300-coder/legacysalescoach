@@ -539,7 +539,22 @@ export default function KnowledgeBase() {
                 <div>
                   <Label>PDF File *</Label>
                   <input ref={fileInputRef} type="file" accept=".pdf" className="hidden"
-                    onChange={(e) => { const file = e.target.files?.[0]; if (file) { setPdfFile(file); if (!pdfTitle) setPdfTitle(file.name.replace(".pdf", "")); } }} />
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      if (!file.name.toLowerCase().endsWith(".pdf")) {
+                        toast.error("Please select a PDF file");
+                        e.target.value = "";
+                        return;
+                      }
+                      if (file.size > 20 * 1024 * 1024) {
+                        toast.error("PDF must be under 20MB to upload reliably");
+                        e.target.value = "";
+                        return;
+                      }
+                      setPdfFile(file);
+                      if (!pdfTitle) setPdfTitle(file.name.replace(".pdf", ""));
+                    }} />
                   <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors">
                     {pdfFile ? (
                       <div className="flex items-center justify-center gap-2">
