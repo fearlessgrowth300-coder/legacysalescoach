@@ -141,32 +141,32 @@ You have been exactly where the prospect is now — zero sales, empty DMs, waste
 
   const brainGroundingInstructions = brainChunks ? `
 
-===== SECONDARY: BRAIN-GROUNDED KNOWLEDGE (Use AFTER following Custom Framework) =====
-PRIORITY ORDER FOR FRIEND MODE:
-1) Workspace custom framework + style fingerprint
-2) Workspace training conversations and workspace-specific chunks
-3) Core sales principles/chunks from uploads
+===== BRAIN-GROUNDED KNOWLEDGE (MANDATORY in every reply) =====
+RETRIEVAL PRIORITY ORDER FOR FRIEND MODE:
+1) 🎯 TRAINING CONVERSATION EXAMPLES — Your voice, your style, your exact patterns (HIGHEST PRIORITY)
+2) Workspace custom framework + style fingerprint
+3) Workspace-specific conversation chunks
+4) Core sales principles/chunks from uploaded videos & PDFs
 
-You have retrieved the following knowledge from the user's uploaded videos, PDFs, and structured principles. Weave these naturally into your reply ONLY after following the Custom Framework rules:
+You have retrieved the following knowledge. You MUST use it:
 
 ${brainChunks}
 
-HOW TO REFERENCE BRAIN KNOWLEDGE:
-- "From the video I uploaded about objection handling..."
-- "This is what the book taught us to do when they say..."
-- "One of the principles I extracted from your Grant Cardone training says..."
-- "Pulling from 3 principles I learned from your uploads..."
-- "This reminds me of that exact part in the [source name] video..."
+HOW TO USE BRAIN KNOWLEDGE IN FRIEND MODE:
+- Weave principles into your reply as if they are YOUR OWN lived experiences
+- "I remember struggling with that exact thing until I learned..."
+- "What changed for me was when I realized..."  
+- "From everything I've learned, the biggest mistake people make is..."
+- Connect MULTIPLE principles together — don't just use one
+- The prospect should feel like you're sharing wisdom from experience, NOT reading a textbook
 
-RULES:
-- You MUST anchor every reply in workspace context first (framework/style/training examples)
-- You MUST use at least 1-2 retrieved principles/chunks in EVERY reply
-- Reference them NATURALLY — like recalling something you learned, not reading a textbook
-- Pull specific phrases, examples, or frameworks from the chunks
-- If chunks contain objection handling, USE those exact techniques
-- If chunks contain success stories, WEAVE them into your vulnerability stories
-- NEVER say "according to the knowledge base" — speak as if this is YOUR lived experience
+ABSOLUTE RULES:
+- You MUST reference at least 2-3 brain principles/chunks in EVERY reply
+- You MUST sound like the training conversation examples (your voice template)
+- NEVER say "according to the knowledge base" — speak as YOUR lived experience
 - NEVER mention other workspaces, other niches, or conversations from other prospects
+- When the prospect shares pain, use the brain's objection handling and emotional trigger techniques to go DEEPER — don't just empathize, DRIVE them to see the full cost of staying stuck
+- Your goal is to make the prospect CLOSE THEMSELVES by revealing their own pain so deeply they can't ignore it
 ` : `
 
 ===== NO BRAIN KNOWLEDGE AVAILABLE =====
@@ -250,11 +250,24 @@ Use these to create urgency WITHOUT looking desperate:
 ===== CONVERSATION FLOW RULES =====
 
 1. DETECT EMOTIONAL TONE first (confused, skeptical, broke, excited, scared)
-2. Select appropriate vulnerability story that matches their state
-3. Ask ONE deep psychological question at a time
+2. Select appropriate vulnerability story that matches their state — pull from training examples
+3. Ask ONE deep psychological question at a time — use questions from brain principles
 4. WAIT for their reply before escalating
-5. Escalate emotional intensity GRADUALLY
+5. Escalate emotional intensity GRADUALLY using techniques from uploaded sales content
 6. If they resist → go BACK to bonding, NOT forward to selling
+7. When prospect reveals pain → use brain's implication techniques to make them feel the FULL COST of staying stuck
+8. When prospect shows readiness → use brain's closing frameworks naturally, as a friend suggesting help
+9. ALWAYS cross-reference: what does the training data say you should sound like + what does the brain say is the best strategy for this type of prospect?
+
+===== CLOSING PSYCHOLOGY (FROM BRAIN) =====
+The friend's job is NOT to pitch. The friend's job is to:
+- Help the prospect FEEL their current pain so deeply they can't ignore it
+- Help them see the FUTURE pain if they don't change (cost of inaction)
+- Help them realize they can't solve it alone (without being pushy)
+- Naturally introduce the idea of getting help (expert/mentor/program)
+- Make the prospect ASK for help rather than being sold to
+
+EVERY reply should move the prospect one step closer to closing THEMSELVES. Use the brain's sales principles to guide this — but deliver it in your training data's voice.
 
 END every reply with ONE question that moves the conversation forward. Make it a question that's hard to ignore.`;
 }
@@ -541,7 +554,7 @@ serve(async (req) => {
       .eq("user_id", user.id)
       .eq("workspace_id", prospect.workspace_id)
       .order("created_at", { ascending: false })
-      .limit(10);
+      .limit(15);
 
     // 5. Pull workspace conversation chunks (private — includes training data)
     const { data: wsConvoChunks } = await supabase
@@ -551,9 +564,9 @@ serve(async (req) => {
       .eq("workspace_id", prospect.workspace_id)
       .in("source_type", ["conversation", "training_conversation"])
       .order("created_at", { ascending: false })
-      .limit(40);
+      .limit(60);
 
-    // 6. Pull actual training conversation examples
+    // 6. Pull actual training conversation examples (CRITICAL for friend mode voice matching)
     const { data: trainingExamples } = await supabase
       .from("workspace_training_data")
       .select("content, title, style_analysis")
@@ -561,7 +574,7 @@ serve(async (req) => {
       .eq("status", "ready")
       .not("content", "is", null)
       .order("created_at", { ascending: false })
-      .limit(8);
+      .limit(10);
 
     // 7. Fetch all KB titles for Global Knowledge Map
     const { data: kbItems } = await supabase
@@ -639,9 +652,15 @@ serve(async (req) => {
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
     // Force workspace-first retrieval so friend replies stay in user style/framework
-    const workspaceFirst = scoredWorkspaceChunks.slice(0, 20);
-    const remainingSlots = Math.max(35 - workspaceFirst.length, 10);
-    const topChunks = [...workspaceFirst, ...scoredCoreChunks.slice(0, remainingSlots)].slice(0, 35);
+    const workspaceFirst = scoredWorkspaceChunks.slice(0, 25);
+    
+    // Dynamic retrieval caps: scale with total KB items
+    const kbCount = kbItems?.length || 0;
+    const chunksCap = Math.min(Math.max(35, kbCount * 8), 150);
+    const principlesCap = Math.min(Math.max(60, kbCount * 10), 200);
+    
+    const remainingSlots = Math.max(chunksCap - workspaceFirst.length, 15);
+    const topChunks = [...workspaceFirst, ...scoredCoreChunks.slice(0, remainingSlots)].slice(0, chunksCap);
 
     // Diverse principles (max 5 per source), then score to current query
     const diversePrinciples = diversityRerank(salesPrinciples || [], "source_id", 5);
@@ -654,7 +673,7 @@ serve(async (req) => {
       return { ...sp, matchScore: score };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-    const topPrinciples = scoredPrinciples.slice(0, 60);
+    const topPrinciples = scoredPrinciples.slice(0, principlesCap);
 
     // Categorize sources for metadata
     const sourceTypes = new Set<string>();
@@ -694,16 +713,24 @@ serve(async (req) => {
       brainChunksFormatted += `\n\n===== GLOBAL KNOWLEDGE MAP (ALL FILES) =====\n${globalKnowledgeMap}\n===== END MAP =====\n`;
     }
 
-    // Add actual training conversation examples
+    // TRAINING EXAMPLES — inject BEFORE brain chunks so they have highest priority in friend mode
     if (trainingExamples && trainingExamples.length > 0) {
-      brainChunksFormatted += "\n\n===== TRAINING CONVERSATION EXAMPLES (MATCH THIS EXACT STYLE) =====\n";
-      brainChunksFormatted += "These are REAL conversations the user had. Study them carefully and replicate the EXACT tone, message length, emoji usage, and conversation flow:\n\n";
+      let trainingSection = "\n\n===== 🎯 TRAINING CONVERSATION EXAMPLES (HIGHEST PRIORITY — YOUR VOICE) =====\n";
+      trainingSection += "These are REAL conversations the user had with prospects. This is HOW YOU TALK. Every reply MUST sound like it came from this same person.\n";
+      trainingSection += "Study the message length, emoji patterns, vulnerability style, question style, and tone CAREFULLY. This is your PRIMARY voice template.\n\n";
       for (const ex of trainingExamples) {
         const content = (ex.content as string) || "";
-        brainChunksFormatted += `--- "${ex.title}" ---\n${content.substring(0, 4000)}\n\n`;
+        trainingSection += `--- "${ex.title}" ---\n${content.substring(0, 5000)}\n`;
+        if (ex.style_analysis) {
+          const sa = ex.style_analysis as any;
+          trainingSection += `[Style: tone=${sa.emotional_tone || "unknown"}, length=${sa.avg_message_length || "unknown"}, emoji=${sa.emoji_pattern || "unknown"}, CTA=${sa.cta_softness || "unknown"}]\n`;
+        }
+        trainingSection += "\n";
       }
-      brainChunksFormatted += "===== END TRAINING EXAMPLES =====\n";
-      brainChunksFormatted += "CRITICAL: Your reply MUST sound like it came from the same person who wrote the messages above. Match their exact patterns.\n";
+      trainingSection += "===== END TRAINING EXAMPLES =====\n";
+      trainingSection += "ABSOLUTE RULE: Your reply MUST match this person's EXACT conversational style — same message length, same emoji density, same vulnerability level, same question style. If the training shows short punchy messages, do NOT write paragraphs. If it shows emojis, USE emojis. If it shows vulnerability stories, INCLUDE them.\n";
+      // Prepend training section so it appears BEFORE brain chunks
+      brainChunksFormatted = trainingSection + brainChunksFormatted;
     }
 
     const knowledgeContext = "";
