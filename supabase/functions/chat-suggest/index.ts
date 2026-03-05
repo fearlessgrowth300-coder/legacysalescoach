@@ -997,8 +997,19 @@ ${jsonFormat}
       emotional_trigger: "offer",
       closing: "closing",
     };
+    // Only advance stage if there are enough messages to justify progression
+    // Opener → Rapport requires at least 4 messages (2 exchanges)
+    // Rapport → Pain requires at least 8 messages
+    const minMessagesForStage: Record<string, number> = {
+      rapport: 4,
+      pain_discovery: 8,
+      offer: 14,
+      closing: 20,
+    };
     const newStage = stageMap[detectedPattern];
-    if (newStage && prospect.conversation_stage !== newStage) {
+    const msgCount = history.length;
+    const minRequired = newStage ? (minMessagesForStage[newStage] || 0) : 0;
+    if (newStage && prospect.conversation_stage !== newStage && msgCount >= minRequired) {
       supabase.from("prospects").update({ conversation_stage: newStage }).eq("id", prospectId).then(() => {});
     }
 

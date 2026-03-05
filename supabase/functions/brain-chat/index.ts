@@ -11,8 +11,8 @@ function getCorsHeaders(req: Request) {
 }
 
 const MAX_MESSAGE_LENGTH = 30000;
-const MAX_MESSAGES = 200;
-const MAX_TOTAL_CHARS = 120000;
+const MAX_MESSAGES = 2000;
+const MAX_TOTAL_CHARS = 500000;
 
 // ─── Helpers ───
 
@@ -226,9 +226,12 @@ serve(async (req) => {
       if (!seenIds.has(p.id)) { finalPrinciples.push(p); seenIds.add(p.id); }
     }
 
-    // Higher retrieval cap so larger libraries are represented better
-    const principles = finalPrinciples.slice(0, 140);
-    const chunks = diverseChunks.slice(0, 120);
+    // Dynamic retrieval caps: scale with library size (min 140, grows with uploads)
+    const uploadCount = totalUploads || 0;
+    const principlesCap = Math.min(Math.max(140, uploadCount * 20), 500);
+    const chunksCap = Math.min(Math.max(120, uploadCount * 15), 400);
+    const principles = finalPrinciples.slice(0, principlesCap);
+    const chunks = diverseChunks.slice(0, chunksCap);
 
     const totalChunks = chunks.length + principles.length;
     const sourceTypes = new Set<string>();

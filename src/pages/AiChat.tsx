@@ -165,6 +165,10 @@ export default function AiChat() {
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
+  // Rename state
+  const [renamingConvId, setRenamingConvId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState("");
+
   // Voice Assistant state
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceLoading, setVoiceLoading] = useState(false);
@@ -282,6 +286,20 @@ export default function AiChat() {
       setMessages([]);
     }
     setDeleteConfirmId(null);
+  };
+
+  const startRename = (conv: Conversation) => {
+    setRenamingConvId(conv.id);
+    setRenameText(conv.title);
+  };
+
+  const finishRename = async (convId: string) => {
+    const trimmed = renameText.trim();
+    if (trimmed && trimmed !== conversations.find(c => c.id === convId)?.title) {
+      await supabase.from("ai_conversations").update({ title: trimmed }).eq("id", convId);
+      setConversations(prev => prev.map(c => c.id === convId ? { ...c, title: trimmed } : c));
+    }
+    setRenamingConvId(null);
   };
 
   const toggleVoice = () => {
@@ -860,10 +878,21 @@ export default function AiChat() {
               <SwipeToDelete key={conv.id} onDelete={() => confirmDeleteConversation(conv.id)}>
                 <div className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} onClick={() => { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); }}>
                   <MessageSquare className="h-4 w-4 shrink-0" />
-                  <span className="truncate flex-1">{conv.title}</span>
-                  <Button size="icon" variant="ghost" className="h-6 w-6 hidden md:opacity-0 md:group-hover:opacity-100 md:inline-flex shrink-0" onClick={(e) => { e.stopPropagation(); confirmDeleteConversation(conv.id); }}>
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
+                  {renamingConvId === conv.id ? (
+                    <form className="flex-1 flex gap-1" onSubmit={(e) => { e.preventDefault(); finishRename(conv.id); }}>
+                      <Input value={renameText} onChange={(e) => setRenameText(e.target.value)} className="h-6 text-xs px-1" autoFocus onBlur={() => finishRename(conv.id)} onKeyDown={(e) => { if (e.key === "Escape") { setRenamingConvId(null); } }} />
+                    </form>
+                  ) : (
+                    <span className="truncate flex-1" onDoubleClick={(e) => { e.stopPropagation(); startRename(conv); }}>{conv.title}</span>
+                  )}
+                  <div className="flex gap-0.5 shrink-0">
+                    <Button size="icon" variant="ghost" className="h-6 w-6 hidden md:opacity-0 md:group-hover:opacity-100 md:inline-flex" onClick={(e) => { e.stopPropagation(); startRename(conv); }} title="Rename">
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-6 w-6 hidden md:opacity-0 md:group-hover:opacity-100 md:inline-flex" onClick={(e) => { e.stopPropagation(); confirmDeleteConversation(conv.id); }} title="Delete">
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
                 </div>
               </SwipeToDelete>
             ))}
