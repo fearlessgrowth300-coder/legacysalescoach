@@ -366,7 +366,7 @@ Q&A will be auto-saved as "ai_chat" but ai_chat is NEVER used in future retrieva
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
+        model: "google/gemini-2.5-flash",
         messages: [
           { role: "system", content: systemPrompt },
           ...validatedMessages,
