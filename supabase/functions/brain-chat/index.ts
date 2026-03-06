@@ -47,41 +47,11 @@ async function processMessage(m: any) {
       if (part.type === "image_url" && part.image_url?.url) {
         const url = part.image_url.url;
         if (url.startsWith("data:")) {
-          // Convert data URI to inline_data format for Gemini compatibility
-          const parsed = parseDataUri(url);
-          if (parsed) {
-            newContent.push({
-              type: "image_url",
-              image_url: { url: url },
-            });
-            // Also add inline_data format so Gemini can read it
-            newContent.push({
-              inline_data: {
-                mime_type: parsed.mimeType,
-                data: parsed.base64,
-              },
-            });
-          } else {
-            newContent.push(part);
-          }
+          newContent.push(part);
         } else {
           const b64 = await imageToBase64(url);
           if (b64) {
-            const parsed = parseDataUri(b64);
-            if (parsed) {
-              newContent.push({
-                type: "image_url",
-                image_url: { url: b64 },
-              });
-              newContent.push({
-                inline_data: {
-                  mime_type: parsed.mimeType,
-                  data: parsed.base64,
-                },
-              });
-            } else {
-              newContent.push({ type: "image_url", image_url: { url: b64 } });
-            }
+            newContent.push({ type: "image_url", image_url: { url: b64 } });
           } else {
             newContent.push({ type: "text", text: "[Image could not be loaded]" });
           }
