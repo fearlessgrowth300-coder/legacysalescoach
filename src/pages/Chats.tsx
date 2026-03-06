@@ -488,9 +488,51 @@ export default function Chats() {
     }
   };
 
+  // Detect TikTok URLs in text
+  const detectTikTokUrl = (text: string): string | null => {
+    const match = text.match(/https?:\/\/(?:www\.)?(?:tiktok\.com\/@?[^\s]+|vm\.tiktok\.com\/[^\s]+)/i);
+    return match ? match[0] : null;
+  };
+
   const handleSendInbound = async () => {
     if (!messageInput.trim() || !selectedProspectId) return;
     setIsAnalyzing(true);
+
+    const tiktokUrl = detectTikTokUrl(messageInput);
+    let enrichedMessage = messageInput;
+
+    // Auto-scrape TikTok profile if URL detected
+    if (tiktokUrl && activeWorkspace) {
+      toast.info("🔍 TikTok link detected — scraping profile...", { duration: 3000 });
+      try {
+        const { data: tiktokData, error: tiktokError } = await supabase.functions.invoke("fetch-tiktok", {
+          body: {
+            url: tiktokUrl,
+            workspaceId: activeWorkspace.id,
+            prospectId: selectedProspectId,
+          },
+        });
+        if (!tiktokError && tiktokData && !tiktokData.error) {
+          // Append full profile summary so chat-suggest has rich context
+          enrichedMessage = `${messageInput}\n\n--- TIKTOK PROFILE AUTO-SCRAPED ---\n${tiktokData.summary || ""}`;
+          if (tiktokData.suggestedComment) {
+            enrichedMessage += `\nSuggested Comment: ${tiktokData.suggestedComment}`;
+          }
+          toast.success(`✅ Scraped @${tiktokData.username} — ${tiktokData.followersCount} followers`, { duration: 4000 });
+
+          // Update prospect with TikTok data
+          await supabase.from("prospects").update({
+            tiktok_url: `https://tiktok.com/@${tiktokData.username}`,
+            profile_pic_url: tiktokData.profilePicUrl || undefined,
+            detected_interests: tiktokData.bio?.substring(0, 300) || undefined,
+          }).eq("id", selectedProspectId);
+          queryClient.invalidateQueries({ queryKey: ["selected-prospect"] });
+        }
+      } catch (e) {
+        console.error("TikTok auto-scrape error:", e);
+        toast.error("TikTok scrape failed — generating reply without it");
+      }
+    }
 
     await supabase.from("chat_messages").insert({
       user_id: user!.id,
@@ -504,7 +546,7 @@ export default function Chats() {
       const { data, error } = await supabase.functions.invoke("chat-suggest", {
         body: {
           prospectId: selectedProspectId,
-          message: messageInput,
+          message: enrichedMessage,
           threadType: currentThreadType,
         },
       });
@@ -514,13 +556,11 @@ export default function Chats() {
       setFeedbackMap({});
       if (data.conversationStage) setConversationStage(data.conversationStage);
       if (data.prospectType) setProspectType(data.prospectType);
-      // Show brain retrieval notification
       if (data.brainRetrieval && data.brainRetrieval.chunksRetrieved > 0) {
         const br = data.brainRetrieval;
         const sourceList = (br.sources || []).filter((s: string) => s !== "unknown").join(", ") || "brain";
         toast.info(`🔍 Pulled from brain: ${br.chunksRetrieved} chunks | Sources: ${sourceList}`, { duration: 4000 });
       }
-      // Show learning notification
       if (data.learningResult) {
         const lr = data.learningResult;
         toast.success(`🧠 Your AI friend just learned ${lr.chunksAdded || 1} new way${(lr.chunksAdded || 1) > 1 ? 's' : ''} to handle "${(data.prospectType || "prospects").replace(/_/g, " ")}" and added it to the brain`, { duration: 5000 });
