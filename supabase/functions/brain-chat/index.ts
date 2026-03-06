@@ -30,6 +30,13 @@ async function imageToBase64(url: string): Promise<string | null> {
   } catch { return null; }
 }
 
+// Parse a data URI into mime_type + raw base64
+function parseDataUri(dataUri: string): { mimeType: string; base64: string } | null {
+  const match = dataUri.match(/^data:([^;]+);base64,(.+)$/s);
+  if (!match) return null;
+  return { mimeType: match[1], base64: match[2] };
+}
+
 async function processMessage(m: any) {
   if (typeof m.content === "string" && m.content.length > MAX_MESSAGE_LENGTH) {
     return { ...m, content: m.content.substring(0, MAX_MESSAGE_LENGTH) + "\n\n[Message truncated — original was " + m.content.length + " chars]" };
@@ -40,11 +47,41 @@ async function processMessage(m: any) {
       if (part.type === "image_url" && part.image_url?.url) {
         const url = part.image_url.url;
         if (url.startsWith("data:")) {
-          newContent.push(part);
+          // Convert data URI to inline_data format for Gemini compatibility
+          const parsed = parseDataUri(url);
+          if (parsed) {
+            newContent.push({
+              type: "image_url",
+              image_url: { url: url },
+            });
+            // Also add inline_data format so Gemini can read it
+            newContent.push({
+              inline_data: {
+                mime_type: parsed.mimeType,
+                data: parsed.base64,
+              },
+            });
+          } else {
+            newContent.push(part);
+          }
         } else {
           const b64 = await imageToBase64(url);
           if (b64) {
-            newContent.push({ type: "image_url", image_url: { url: b64 } });
+            const parsed = parseDataUri(b64);
+            if (parsed) {
+              newContent.push({
+                type: "image_url",
+                image_url: { url: b64 },
+              });
+              newContent.push({
+                inline_data: {
+                  mime_type: parsed.mimeType,
+                  data: parsed.base64,
+                },
+              });
+            } else {
+              newContent.push({ type: "image_url", image_url: { url: b64 } });
+            }
           } else {
             newContent.push({ type: "text", text: "[Image could not be loaded]" });
           }
