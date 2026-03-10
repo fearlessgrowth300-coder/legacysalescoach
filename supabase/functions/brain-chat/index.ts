@@ -226,10 +226,11 @@ serve(async (req) => {
       if (!seenIds.has(p.id)) { finalPrinciples.push(p); seenIds.add(p.id); }
     }
 
-    // Dynamic retrieval caps: scale with library size (min 140, grows with uploads)
+    // Dynamic retrieval caps: pull ALL available chunks, scaling with library size
+    // No artificial floor — use everything the user has uploaded
     const uploadCount = totalUploads || 0;
-    const principlesCap = Math.min(Math.max(140, uploadCount * 20), 500);
-    const chunksCap = Math.min(Math.max(120, uploadCount * 15), 400);
+    const principlesCap = Math.min(Math.max(200, uploadCount * 25), 800);
+    const chunksCap = Math.min(Math.max(180, uploadCount * 20), 600);
     const principles = finalPrinciples.slice(0, principlesCap);
     const chunks = diverseChunks.slice(0, chunksCap);
 
@@ -306,7 +307,7 @@ Identify what's REALLY happening psychologically:
 - What stage of the buying journey are they in?
 
 **Step 3 — BRAIN RAG SEARCH:**
-Search ALL ${totalChunks} chunks across ALL ${uniqueSources.size} sources. Pull the TOP 12+ most relevant chunks — not random, but the EXACT paragraphs where experts talked about this specific situation (price objections, closing, follow-up, rapport, etc.).
+Search ALL ${totalChunks} chunks across ALL ${uniqueSources.size} sources. Pull EVERY relevant chunk — not just 12, but ALL chunks that touch this topic from EVERY source. The more uploads the user has, the more chunks you reference. Use ${totalChunks} chunks total — scan them ALL and cite every relevant one.
 
 Track each reference with: [Source Title] + [specific detail from that source]
 
@@ -347,11 +348,12 @@ For non-screenshot questions (asking for advice, strategies, techniques):
 Analyze the user's message for emotional subtext: Are they scared? Bored? Testing you? Overwhelmed? Excited? Skeptical? Identify the REAL question behind the words.
 
 **Step 2 — VAULT SCAN (Full Brain Search):**
-Search ALL ${totalChunks} chunks across ALL ${uniqueSources.size} sources for:
+Search ALL ${totalChunks} chunks across ALL ${uniqueSources.size} sources. Do NOT stop at 12 — pull EVERY chunk that is relevant. The user has uploaded this knowledge for a reason. Scan for:
 - Direct topic matches
 - Psychological state matches
 - Strategic frameworks that apply
 - Cross-source connections (combine insights from multiple uploads)
+- Reference AS MANY sources as possible — the more uploads, the more you cite
 
 **Step 3 — STRATEGIC SYNTHESIS:**
 Synthesize a reply using precise wording from the uploads. Connect principles from MULTIPLE sources when possible — don't rely on just one.
