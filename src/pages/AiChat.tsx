@@ -640,24 +640,17 @@ export default function AiChat() {
       } catch { return null; }
     };
 
-    // Build AI messages — use base64 data URIs directly (private bucket URLs won't work for edge fn)
+    // Build AI messages — only include images for the CURRENT message (skip old images for speed)
     const allMsgs = [...messages, userMsg];
     const aiMessages: any[] = [];
     for (let idx = 0; idx < allMsgs.length; idx++) {
       const m = allMsgs[idx];
       const isCurrentMsg = idx === messages.length;
 
-      let base64Imgs: string[] = [];
-      if (isCurrentMsg && displayPreviews.length > 0) {
-        base64Imgs = displayPreviews;
-      } else if (m.image_url && m.role === "user") {
-        const b64 = await downloadImageAsBase64(m.image_url);
-        if (b64) base64Imgs = [b64];
-      }
-
-      if (base64Imgs.length > 0 && m.role === "user") {
+      // Only attach images for the current message — old images slow everything down
+      if (isCurrentMsg && displayPreviews.length > 0 && m.role === "user") {
         const parts: any[] = [{ type: "text", text: m.content }];
-        for (const img of base64Imgs) {
+        for (const img of displayPreviews) {
           parts.push({ type: "image_url", image_url: { url: img } });
         }
         aiMessages.push({ role: m.role, content: parts });
