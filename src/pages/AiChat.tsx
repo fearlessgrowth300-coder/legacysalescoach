@@ -623,22 +623,7 @@ export default function AiChat() {
     setMessages(prev => prev.map(m => m.id === savedMsg?.id ? { ...m, status: "delivered" as const } : m));
     setIsTyping(true);
 
-    // Helper: download image from private storage via authenticated supabase client
-    const downloadImageAsBase64 = async (storageUrl: string): Promise<string | null> => {
-      try {
-        const match = storageUrl.match(/chat-screenshots\/(.+)$/);
-        if (!match) return null;
-        const path = match[1];
-        const { data, error } = await supabase.storage.from("chat-screenshots").download(path);
-        if (error || !data) return null;
-        return new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = () => resolve(null);
-          reader.readAsDataURL(data);
-        });
-      } catch { return null; }
-    };
+
 
     // Build AI messages — only include images for the CURRENT message (skip old images for speed)
     const allMsgs = [...messages, userMsg];
