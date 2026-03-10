@@ -237,6 +237,18 @@ export default function AiChat() {
     loadMessages(activeConvId);
   }, [activeConvId]);
 
+  // Download a storage image and return a local object URL for display
+  const getDisplayUrl = async (storageUrl: string): Promise<string | null> => {
+    try {
+      const match = storageUrl.match(/chat-screenshots\/(.+)$/);
+      if (!match) return storageUrl; // not a storage URL, return as-is
+      const path = match[1];
+      const { data, error } = await supabase.storage.from("chat-screenshots").download(path);
+      if (error || !data) return null;
+      return URL.createObjectURL(data);
+    } catch { return null; }
+  };
+
   const loadMessages = async (convId: string) => {
     const { data } = await supabase
       .from("ai_chat_messages")
@@ -253,6 +265,25 @@ export default function AiChat() {
         is_pinned: m.is_pinned,
       }));
       setMessages(mapped);
+
+      // Resolve storage URLs to displayable object URLs in background
+      const msgsWithImages = mapped.filter(m => m.image_url && m.role === "user");
+      if (msgsWithImages.length > 0) {
+        const resolved = await Promise.all(
+          msgsWithImages.map(async (m) => {
+            const displayUrl = await getDisplayUrl(m.image_url!);
+            return { id: m.id, displayUrl };
+          })
+        );
+        setMessages(prev => prev.map(m => {
+          const match = resolved.find(r => r.id === m.id);
+          if (match && match.displayUrl) {
+            return { ...m, image_urls: [match.displayUrl] };
+          }
+          return m;
+        }));
+      }
+
       const lastAssistant = [...mapped].reverse().find(m => m.role === "assistant");
       if (lastAssistant) setFollowUps(generateFollowUps(lastAssistant.content));
       else setFollowUps([]);
@@ -592,41 +623,19 @@ export default function AiChat() {
     setMessages(prev => prev.map(m => m.id === savedMsg?.id ? { ...m, status: "delivered" as const } : m));
     setIsTyping(true);
 
-    // Helper: download image from private storage via authenticated supabase client
-    const downloadImageAsBase64 = async (storageUrl: string): Promise<string | null> => {
-      try {
-        const match = storageUrl.match(/chat-screenshots\/(.+)$/);
-        if (!match) return null;
-        const path = match[1];
-        const { data, error } = await supabase.storage.from("chat-screenshots").download(path);
-        if (error || !data) return null;
-        return new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = () => resolve(null);
-          reader.readAsDataURL(data);
-        });
-      } catch { return null; }
-    };
 
-    // Build AI messages — use base64 data URIs directly (private bucket URLs won't work for edge fn)
+
+    // Build AI messages — only include images for the CURRENT message (skip old images for speed)
     const allMsgs = [...messages, userMsg];
     const aiMessages: any[] = [];
     for (let idx = 0; idx < allMsgs.length; idx++) {
       const m = allMsgs[idx];
       const isCurrentMsg = idx === messages.length;
 
-      let base64Imgs: string[] = [];
-      if (isCurrentMsg && displayPreviews.length > 0) {
-        base64Imgs = displayPreviews;
-      } else if (m.image_url && m.role === "user") {
-        const b64 = await downloadImageAsBase64(m.image_url);
-        if (b64) base64Imgs = [b64];
-      }
-
-      if (base64Imgs.length > 0 && m.role === "user") {
+      // Only attach images for the current message — old images slow everything down
+      if (isCurrentMsg && displayPreviews.length > 0 && m.role === "user") {
         const parts: any[] = [{ type: "text", text: m.content }];
-        for (const img of base64Imgs) {
+        for (const img of displayPreviews) {
           parts.push({ type: "image_url", image_url: { url: img } });
         }
         aiMessages.push({ role: m.role, content: parts });
