@@ -307,7 +307,7 @@ Identify what's REALLY happening psychologically:
 - What stage of the buying journey are they in?
 
 **Step 3 — BRAIN RAG SEARCH:**
-Search ALL ${totalChunks} chunks across ALL ${uniqueSources.size} sources. Pull the TOP 12+ most relevant chunks — not random, but the EXACT paragraphs where experts talked about this specific situation (price objections, closing, follow-up, rapport, etc.).
+Search ALL ${totalChunks} chunks across ALL ${uniqueSources.size} sources. Pull EVERY relevant chunk — not just 12, but ALL chunks that touch this topic from EVERY source. The more uploads the user has, the more chunks you reference. Use ${totalChunks} chunks total — scan them ALL and cite every relevant one.
 
 Track each reference with: [Source Title] + [specific detail from that source]
 
