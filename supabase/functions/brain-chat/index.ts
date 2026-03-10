@@ -348,11 +348,12 @@ For non-screenshot questions (asking for advice, strategies, techniques):
 Analyze the user's message for emotional subtext: Are they scared? Bored? Testing you? Overwhelmed? Excited? Skeptical? Identify the REAL question behind the words.
 
 **Step 2 — VAULT SCAN (Full Brain Search):**
-Search ALL ${totalChunks} chunks across ALL ${uniqueSources.size} sources for:
+Search ALL ${totalChunks} chunks across ALL ${uniqueSources.size} sources. Do NOT stop at 12 — pull EVERY chunk that is relevant. The user has uploaded this knowledge for a reason. Scan for:
 - Direct topic matches
 - Psychological state matches
 - Strategic frameworks that apply
 - Cross-source connections (combine insights from multiple uploads)
+- Reference AS MANY sources as possible — the more uploads, the more you cite
 
 **Step 3 — STRATEGIC SYNTHESIS:**
 Synthesize a reply using precise wording from the uploads. Connect principles from MULTIPLE sources when possible — don't rely on just one.
