@@ -745,9 +745,12 @@ export default function AiChat() {
     const newUploadedUrls = await Promise.all(editNewImages.map((blob, idx) => uploadImage(blob, idx)));
     const validNewUrls = newUploadedUrls.filter((u): u is string => u !== null);
 
-    // Combine existing kept images + new uploads
-    const allImageUrls = [...editImages, ...editNewPreviews];
-    const primaryUrl = validNewUrls[0] || (editImages[0] ? msg.image_url : null);
+    // Combine existing kept images + new uploaded URLs (not previews)
+    const allImageUrls = [...editImages, ...validNewUrls];
+    const primaryUrl = allImageUrls[0] || null;
+
+    // Keep the base64 previews for new images to send to AI (private bucket URLs won't work)
+    const newImageBase64s = [...editNewPreviews];
 
     if (msg.id) {
       await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true, image_url: primaryUrl }).eq("id", msg.id);
@@ -765,12 +768,53 @@ export default function AiChat() {
     setIsLoading(true);
     setIsTyping(true);
 
-    const aiMessages = truncated.map(m => {
-      if (m.image_url && m.role === "user") {
-        return { role: m.role, content: [{ type: "text", text: m.content }, { type: "image_url", image_url: { url: m.image_url } }] };
+    // Helper to download stored images as base64 for AI
+    const downloadImageAsBase64Edit = async (storageUrl: string): Promise<string | null> => {
+      try {
+        const match = storageUrl.match(/chat-screenshots\/(.+)$/);
+        if (!match) return null;
+        const path = match[1];
+        const { data, error } = await supabase.storage.from("chat-screenshots").download(path);
+        if (error || !data) return null;
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(data);
+        });
+      } catch { return null; }
+    };
+
+    // Build AI messages with proper base64 images
+    const editedMsgIdx = truncated.length - 1;
+    const aiMessages: any[] = [];
+    for (let idx = 0; idx < truncated.length; idx++) {
+      const m = truncated[idx];
+      const isEditedMsg = idx === editedMsgIdx;
+
+      let base64Imgs: string[] = [];
+      if (isEditedMsg) {
+        // For the edited message: use base64 previews for new images, download existing kept images
+        for (const existingUrl of editImages) {
+          const b64 = await downloadImageAsBase64Edit(existingUrl);
+          if (b64) base64Imgs.push(b64);
+        }
+        base64Imgs.push(...newImageBase64s);
+      } else if (m.image_url && m.role === "user") {
+        const b64 = await downloadImageAsBase64Edit(m.image_url);
+        if (b64) base64Imgs = [b64];
       }
-      return { role: m.role, content: m.content };
-    });
+
+      if (base64Imgs.length > 0 && m.role === "user") {
+        const parts: any[] = [{ type: "text", text: m.content }];
+        for (const img of base64Imgs) {
+          parts.push({ type: "image_url", image_url: { url: img } });
+        }
+        aiMessages.push({ role: m.role, content: parts });
+      } else {
+        aiMessages.push({ role: m.role, content: m.content });
+      }
+    }
 
     let assistantSoFar = "";
     const questionText = editText;
