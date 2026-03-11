@@ -169,6 +169,10 @@ export default function AiChat() {
   const [renamingConvId, setRenamingConvId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
 
+  // Long-press context menu
+  const [contextMenuConv, setContextMenuConv] = useState<{ id: string; x: number; y: number } | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Voice Assistant state
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceLoading, setVoiceLoading] = useState(false);
@@ -929,7 +933,19 @@ export default function AiChat() {
           <div className="p-2 space-y-1">
             {conversations.map(conv => (
               <SwipeToDelete key={conv.id} onDelete={() => confirmDeleteConversation(conv.id)} onSwipeRight={() => startRename(conv)}>
-                <div className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} onClick={() => { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); }}>
+                <div
+                  className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
+                  onClick={() => { if (!contextMenuConv) { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); } }}
+                  onTouchStart={(e) => {
+                    const touch = e.touches[0];
+                    longPressTimer.current = setTimeout(() => {
+                      setContextMenuConv({ id: conv.id, x: touch.clientX, y: touch.clientY });
+                    }, 500);
+                  }}
+                  onTouchEnd={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current); }}
+                  onTouchMove={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current); }}
+                  onContextMenu={(e) => { e.preventDefault(); setContextMenuConv({ id: conv.id, x: e.clientX, y: e.clientY }); }}
+                >
                   <MessageSquare className="h-4 w-4 shrink-0" />
                   {renamingConvId === conv.id ? (
                     <form className="flex-1 flex gap-1" onSubmit={(e) => { e.preventDefault(); finishRename(conv.id); }}>
@@ -951,6 +967,38 @@ export default function AiChat() {
             ))}
             {conversations.length === 0 && <p className="text-xs text-muted-foreground text-center p-4">No chats yet. Start a new one!</p>}
           </div>
+
+          {/* Long-press context menu */}
+          {contextMenuConv && (
+            <div className="fixed inset-0 z-50" onClick={() => setContextMenuConv(null)} onTouchStart={() => setContextMenuConv(null)}>
+              <div
+                className="absolute bg-popover border border-border rounded-lg shadow-lg py-1 min-w-[160px] z-50"
+                style={{ top: contextMenuConv.y, left: Math.min(contextMenuConv.x, window.innerWidth - 180) }}
+                onClick={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+              >
+                <button
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm hover:bg-muted transition-colors"
+                  onClick={() => { const c = conversations.find(c => c.id === contextMenuConv.id); if (c) startRename(c); setContextMenuConv(null); }}
+                >
+                  <Pencil className="h-4 w-4" /> Rename
+                </button>
+                <button
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm hover:bg-muted transition-colors"
+                  onClick={() => { setActiveConvId(contextMenuConv.id); loadPinnedMessages(); setContextMenuConv(null); }}
+                >
+                  <Pin className="h-4 w-4" /> View Pinned
+                </button>
+                <div className="h-px bg-border mx-2 my-1" />
+                <button
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-destructive hover:bg-destructive/10 transition-colors"
+                  onClick={() => { confirmDeleteConversation(contextMenuConv.id); setContextMenuConv(null); }}
+                >
+                  <Trash2 className="h-4 w-4" /> Delete
+                </button>
+              </div>
+            </div>
+          )}
         </ScrollArea>
       </div>
       )}
