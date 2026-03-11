@@ -736,11 +736,20 @@ export default function AiChat() {
   const saveEdit = async () => {
     if (editingMsgIdx === null) return;
     const msg = messages[editingMsgIdx];
+
+    // Upload new images
+    const newUploadedUrls = await Promise.all(editNewImages.map((blob, idx) => uploadImage(blob, idx)));
+    const validNewUrls = newUploadedUrls.filter((u): u is string => u !== null);
+
+    // Combine existing kept images + new uploads
+    const allImageUrls = [...editImages, ...editNewPreviews];
+    const primaryUrl = validNewUrls[0] || (editImages[0] ? msg.image_url : null);
+
     if (msg.id) {
-      await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true }).eq("id", msg.id);
+      await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true, image_url: primaryUrl }).eq("id", msg.id);
     }
     const truncated = messages.slice(0, editingMsgIdx);
-    truncated.push({ ...msg, content: editText, is_edited: true });
+    truncated.push({ ...msg, content: editText, is_edited: true, image_url: primaryUrl, image_urls: allImageUrls.length > 0 ? allImageUrls : undefined });
     if (activeConvId) {
       const idsToDelete = messages.slice(editingMsgIdx + 1).filter(m => m.id).map(m => m.id!);
       if (idsToDelete.length > 0) await supabase.from("ai_chat_messages").delete().in("id", idsToDelete);
