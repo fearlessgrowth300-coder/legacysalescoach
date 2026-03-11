@@ -1045,8 +1045,26 @@ export default function AiChat() {
                   ) : (
                     <>
                       {msg.role === "assistant" ? (
-                        <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:mb-3 [&>*:last-child]:mb-0 [&_p]:leading-relaxed [&_p]:whitespace-pre-wrap [&_strong]:text-foreground [&_h1]:text-base [&_h1]:font-bold [&_h1]:mt-4 [&_h1]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1 [&_ul]:pl-4 [&_ul]:space-y-1 [&_ol]:pl-4 [&_ol]:space-y-1 [&_li]:text-sm [&_li]:leading-relaxed [&_blockquote]:border-l-2 [&_blockquote]:border-primary/40 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-muted-foreground [&_code]:bg-background/50 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_pre]:bg-background/80 [&_pre]:p-3 [&_pre]:rounded-md [&_pre]:overflow-x-auto [&_pre]:text-xs [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_hr]:border-border/50 [&_hr]:my-3">
-                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        <div className="text-sm leading-relaxed [&_strong]:font-bold [&_strong]:text-foreground">
+                          <ReactMarkdown
+                            components={{
+                              p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                              h1: ({ children }) => <p className="font-bold text-base mt-3 mb-1">{children}</p>,
+                              h2: ({ children }) => <p className="font-bold text-sm mt-3 mb-1">{children}</p>,
+                              h3: ({ children }) => <p className="font-semibold text-sm mt-2 mb-1">{children}</p>,
+                              ul: ({ children }) => <ul className="list-disc pl-5 mb-2 space-y-0.5">{children}</ul>,
+                              ol: ({ children }) => <ol className="list-decimal pl-5 mb-2 space-y-0.5">{children}</ol>,
+                              li: ({ children }) => <li>{children}</li>,
+                              blockquote: ({ children }) => <blockquote className="border-l-2 border-primary/40 pl-3 italic text-muted-foreground my-2">{children}</blockquote>,
+                              code: ({ children, className }) => {
+                                const isBlock = className?.includes('language-');
+                                if (isBlock) return <pre className="bg-background/80 p-2 rounded-md text-xs my-2 overflow-x-auto"><code>{children}</code></pre>;
+                                return <code className="bg-background/50 px-1 py-0.5 rounded text-xs">{children}</code>;
+                              },
+                              pre: ({ children }) => <>{children}</>,
+                              hr: () => <hr className="border-border/50 my-3" />,
+                            }}
+                          >{msg.content}</ReactMarkdown>
                         </div>
                       ) : (
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
