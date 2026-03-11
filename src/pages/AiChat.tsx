@@ -237,6 +237,17 @@ export default function AiChat() {
     loadMessages(activeConvId);
   }, [activeConvId]);
 
+  const getSignedUrl = async (publicUrl: string): Promise<string> => {
+    try {
+      const match = publicUrl.match(/chat-screenshots\/(.+)$/);
+      if (!match) return publicUrl;
+      const path = match[1];
+      const { data, error } = await supabase.storage.from("chat-screenshots").createSignedUrl(path, 3600);
+      if (error || !data?.signedUrl) return publicUrl;
+      return data.signedUrl;
+    } catch { return publicUrl; }
+  };
+
   const loadMessages = async (convId: string) => {
     const { data } = await supabase
       .from("ai_chat_messages")
@@ -252,8 +263,18 @@ export default function AiChat() {
         is_edited: m.is_edited,
         is_pinned: m.is_pinned,
       }));
-      setMessages(mapped);
-      const lastAssistant = [...mapped].reverse().find(m => m.role === "assistant");
+      // Resolve signed URLs for images
+      const withSignedUrls = await Promise.all(
+        mapped.map(async (m) => {
+          if (m.image_url && m.role === "user") {
+            const signed = await getSignedUrl(m.image_url);
+            return { ...m, image_url: signed };
+          }
+          return m;
+        })
+      );
+      setMessages(withSignedUrls);
+      const lastAssistant = [...withSignedUrls].reverse().find(m => m.role === "assistant");
       if (lastAssistant) setFollowUps(generateFollowUps(lastAssistant.content));
       else setFollowUps([]);
     }
