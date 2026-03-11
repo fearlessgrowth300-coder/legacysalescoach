@@ -237,18 +237,6 @@ export default function AiChat() {
     loadMessages(activeConvId);
   }, [activeConvId]);
 
-  // Download a storage image and return a local object URL for display
-  const getDisplayUrl = async (storageUrl: string): Promise<string | null> => {
-    try {
-      const match = storageUrl.match(/chat-screenshots\/(.+)$/);
-      if (!match) return storageUrl; // not a storage URL, return as-is
-      const path = match[1];
-      const { data, error } = await supabase.storage.from("chat-screenshots").download(path);
-      if (error || !data) return null;
-      return URL.createObjectURL(data);
-    } catch { return null; }
-  };
-
   const loadMessages = async (convId: string) => {
     const { data } = await supabase
       .from("ai_chat_messages")
@@ -265,25 +253,6 @@ export default function AiChat() {
         is_pinned: m.is_pinned,
       }));
       setMessages(mapped);
-
-      // Resolve storage URLs to displayable object URLs in background
-      const msgsWithImages = mapped.filter(m => m.image_url && m.role === "user");
-      if (msgsWithImages.length > 0) {
-        const resolved = await Promise.all(
-          msgsWithImages.map(async (m) => {
-            const displayUrl = await getDisplayUrl(m.image_url!);
-            return { id: m.id, displayUrl };
-          })
-        );
-        setMessages(prev => prev.map(m => {
-          const match = resolved.find(r => r.id === m.id);
-          if (match && match.displayUrl) {
-            return { ...m, image_urls: [match.displayUrl] };
-          }
-          return m;
-        }));
-      }
-
       const lastAssistant = [...mapped].reverse().find(m => m.role === "assistant");
       if (lastAssistant) setFollowUps(generateFollowUps(lastAssistant.content));
       else setFollowUps([]);
@@ -623,19 +592,41 @@ export default function AiChat() {
     setMessages(prev => prev.map(m => m.id === savedMsg?.id ? { ...m, status: "delivered" as const } : m));
     setIsTyping(true);
 
+    // Helper: download image from private storage via authenticated supabase client
+    const downloadImageAsBase64 = async (storageUrl: string): Promise<string | null> => {
+      try {
+        const match = storageUrl.match(/chat-screenshots\/(.+)$/);
+        if (!match) return null;
+        const path = match[1];
+        const { data, error } = await supabase.storage.from("chat-screenshots").download(path);
+        if (error || !data) return null;
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(data);
+        });
+      } catch { return null; }
+    };
 
-
-    // Build AI messages — only include images for the CURRENT message (skip old images for speed)
+    // Build AI messages — use base64 data URIs directly (private bucket URLs won't work for edge fn)
     const allMsgs = [...messages, userMsg];
     const aiMessages: any[] = [];
     for (let idx = 0; idx < allMsgs.length; idx++) {
       const m = allMsgs[idx];
       const isCurrentMsg = idx === messages.length;
 
-      // Only attach images for the current message — old images slow everything down
-      if (isCurrentMsg && displayPreviews.length > 0 && m.role === "user") {
+      let base64Imgs: string[] = [];
+      if (isCurrentMsg && displayPreviews.length > 0) {
+        base64Imgs = displayPreviews;
+      } else if (m.image_url && m.role === "user") {
+        const b64 = await downloadImageAsBase64(m.image_url);
+        if (b64) base64Imgs = [b64];
+      }
+
+      if (base64Imgs.length > 0 && m.role === "user") {
         const parts: any[] = [{ type: "text", text: m.content }];
-        for (const img of displayPreviews) {
+        for (const img of base64Imgs) {
           parts.push({ type: "image_url", image_url: { url: img } });
         }
         aiMessages.push({ role: m.role, content: parts });
@@ -1045,26 +1036,8 @@ export default function AiChat() {
                   ) : (
                     <>
                       {msg.role === "assistant" ? (
-                        <div className="text-sm leading-relaxed [&_strong]:font-bold [&_strong]:text-foreground">
-                          <ReactMarkdown
-                            components={{
-                              p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                              h1: ({ children }) => <p className="font-bold text-base mt-3 mb-1">{children}</p>,
-                              h2: ({ children }) => <p className="font-bold text-sm mt-3 mb-1">{children}</p>,
-                              h3: ({ children }) => <p className="font-semibold text-sm mt-2 mb-1">{children}</p>,
-                              ul: ({ children }) => <ul className="list-disc pl-5 mb-2 space-y-0.5">{children}</ul>,
-                              ol: ({ children }) => <ol className="list-decimal pl-5 mb-2 space-y-0.5">{children}</ol>,
-                              li: ({ children }) => <li>{children}</li>,
-                              blockquote: ({ children }) => <blockquote className="border-l-2 border-primary/40 pl-3 italic text-muted-foreground my-2">{children}</blockquote>,
-                              code: ({ children, className }) => {
-                                const isBlock = className?.includes('language-');
-                                if (isBlock) return <pre className="bg-background/80 p-2 rounded-md text-xs my-2 overflow-x-auto"><code>{children}</code></pre>;
-                                return <code className="bg-background/50 px-1 py-0.5 rounded text-xs">{children}</code>;
-                              },
-                              pre: ({ children }) => <>{children}</>,
-                              hr: () => <hr className="border-border/50 my-3" />,
-                            }}
-                          >{msg.content}</ReactMarkdown>
+                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                          <ReactMarkdown>{msg.content}</ReactMarkdown>
                         </div>
                       ) : (
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
