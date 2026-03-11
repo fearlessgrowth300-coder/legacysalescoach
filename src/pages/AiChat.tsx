@@ -704,10 +704,33 @@ export default function AiChat() {
     }
   };
 
+  const [editImages, setEditImages] = useState<string[]>([]);
+  const [editNewImages, setEditNewImages] = useState<Blob[]>([]);
+  const [editNewPreviews, setEditNewPreviews] = useState<string[]>([]);
+  const editFileRef = useRef<HTMLInputElement>(null);
+
   const startEdit = (idx: number) => {
     if (messages[idx].role !== "user") return;
     setEditingMsgIdx(idx);
     setEditText(messages[idx].content);
+    // Load existing images for editing
+    const existing = messages[idx].image_urls || (messages[idx].image_url ? [messages[idx].image_url!] : []);
+    setEditImages(existing);
+    setEditNewImages([]);
+    setEditNewPreviews([]);
+  };
+
+  const handleEditImageAdd = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      if (file.size > 10 * 1024 * 1024) { toast.error(`${file.name} too large`); continue; }
+      const compressed = await compressImage(file);
+      setEditNewImages(prev => [...prev, compressed]);
+      const reader = new FileReader();
+      reader.onload = () => setEditNewPreviews(prev => [...prev, reader.result as string]);
+      reader.readAsDataURL(compressed);
+    }
+    e.target.value = "";
   };
 
   const saveEdit = async () => {
