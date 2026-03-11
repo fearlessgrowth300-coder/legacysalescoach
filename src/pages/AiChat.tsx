@@ -1045,7 +1045,7 @@ export default function AiChat() {
                   ) : (
                     <>
                       {msg.role === "assistant" ? (
-                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                        <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:mb-3 [&>*:last-child]:mb-0 [&_p]:leading-relaxed [&_p]:whitespace-pre-wrap [&_strong]:text-foreground [&_h1]:text-base [&_h1]:font-bold [&_h1]:mt-4 [&_h1]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1 [&_ul]:pl-4 [&_ul]:space-y-1 [&_ol]:pl-4 [&_ol]:space-y-1 [&_li]:text-sm [&_li]:leading-relaxed [&_blockquote]:border-l-2 [&_blockquote]:border-primary/40 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-muted-foreground [&_code]:bg-background/50 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_pre]:bg-background/80 [&_pre]:p-3 [&_pre]:rounded-md [&_pre]:overflow-x-auto [&_pre]:text-xs [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_hr]:border-border/50 [&_hr]:my-3">
                           <ReactMarkdown>{msg.content}</ReactMarkdown>
                         </div>
                       ) : (
