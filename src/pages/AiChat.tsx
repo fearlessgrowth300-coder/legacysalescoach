@@ -1080,11 +1080,39 @@ export default function AiChat() {
                   )}
                   {editingMsgIdx === i ? (
                     <div className="space-y-2">
+                      {/* Edit images */}
+                      {(editImages.length > 0 || editNewPreviews.length > 0) && (
+                        <div className="flex flex-wrap gap-2">
+                          {editImages.map((url, imgIdx) => (
+                            <div key={`existing-${imgIdx}`} className="relative">
+                              <img src={url} alt={`Image ${imgIdx + 1}`} className="h-16 rounded-md border" />
+                              <button onClick={() => setEditImages(prev => prev.filter((_, ii) => ii !== imgIdx))} className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center text-xs">
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ))}
+                          {editNewPreviews.map((url, imgIdx) => (
+                            <div key={`new-${imgIdx}`} className="relative">
+                              <img src={url} alt={`New ${imgIdx + 1}`} className="h-16 rounded-md border" />
+                              <button onClick={() => {
+                                setEditNewImages(prev => prev.filter((_, ii) => ii !== imgIdx));
+                                setEditNewPreviews(prev => prev.filter((_, ii) => ii !== imgIdx));
+                              }} className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center text-xs">
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <Textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="bg-background text-foreground min-h-[60px]" autoFocus />
-                      <div className="flex gap-1">
+                      <div className="flex gap-1 flex-wrap">
+                        <Button size="sm" variant="outline" onClick={() => editFileRef.current?.click()}>
+                          <Image className="h-3 w-3 mr-1" /> Add Image
+                        </Button>
                         <Button size="sm" variant="secondary" onClick={saveEdit}><Check className="h-3 w-3 mr-1" /> Save & Resend</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditingMsgIdx(null)}><X className="h-3 w-3" /></Button>
+                        <Button size="sm" variant="ghost" onClick={() => { setEditingMsgIdx(null); setEditImages([]); setEditNewImages([]); setEditNewPreviews([]); }}><X className="h-3 w-3" /></Button>
                       </div>
+                      <input ref={editFileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleEditImageAdd} />
                     </div>
                   ) : (
                     <>
