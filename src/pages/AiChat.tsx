@@ -169,6 +169,10 @@ export default function AiChat() {
   const [renamingConvId, setRenamingConvId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
 
+  // Long-press context menu
+  const [contextMenuConv, setContextMenuConv] = useState<{ id: string; x: number; y: number } | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Voice Assistant state
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceLoading, setVoiceLoading] = useState(false);
