@@ -983,6 +983,7 @@ export default function AiChat() {
                   onTouchStart={(e) => {
                     const touch = e.touches[0];
                     longPressTimer.current = setTimeout(() => {
+                      if (navigator.vibrate) navigator.vibrate(50);
                       setContextMenuConv({ id: conv.id, x: touch.clientX, y: touch.clientY });
                     }, 500);
                   }}
