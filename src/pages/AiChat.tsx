@@ -237,6 +237,17 @@ export default function AiChat() {
     loadMessages(activeConvId);
   }, [activeConvId]);
 
+  const getSignedUrl = async (publicUrl: string): Promise<string> => {
+    try {
+      const match = publicUrl.match(/chat-screenshots\/(.+)$/);
+      if (!match) return publicUrl;
+      const path = match[1];
+      const { data, error } = await supabase.storage.from("chat-screenshots").createSignedUrl(path, 3600);
+      if (error || !data?.signedUrl) return publicUrl;
+      return data.signedUrl;
+    } catch { return publicUrl; }
+  };
+
   const loadMessages = async (convId: string) => {
     const { data } = await supabase
       .from("ai_chat_messages")
@@ -252,8 +263,18 @@ export default function AiChat() {
         is_edited: m.is_edited,
         is_pinned: m.is_pinned,
       }));
-      setMessages(mapped);
-      const lastAssistant = [...mapped].reverse().find(m => m.role === "assistant");
+      // Resolve signed URLs for images
+      const withSignedUrls = await Promise.all(
+        mapped.map(async (m) => {
+          if (m.image_url && m.role === "user") {
+            const signed = await getSignedUrl(m.image_url);
+            return { ...m, image_url: signed };
+          }
+          return m;
+        })
+      );
+      setMessages(withSignedUrls);
+      const lastAssistant = [...withSignedUrls].reverse().find(m => m.role === "assistant");
       if (lastAssistant) setFollowUps(generateFollowUps(lastAssistant.content));
       else setFollowUps([]);
     }
@@ -683,20 +704,52 @@ export default function AiChat() {
     }
   };
 
+  const [editImages, setEditImages] = useState<string[]>([]);
+  const [editNewImages, setEditNewImages] = useState<Blob[]>([]);
+  const [editNewPreviews, setEditNewPreviews] = useState<string[]>([]);
+  const editFileRef = useRef<HTMLInputElement>(null);
+
   const startEdit = (idx: number) => {
     if (messages[idx].role !== "user") return;
     setEditingMsgIdx(idx);
     setEditText(messages[idx].content);
+    // Load existing images for editing
+    const existing = messages[idx].image_urls || (messages[idx].image_url ? [messages[idx].image_url!] : []);
+    setEditImages(existing);
+    setEditNewImages([]);
+    setEditNewPreviews([]);
+  };
+
+  const handleEditImageAdd = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      if (file.size > 10 * 1024 * 1024) { toast.error(`${file.name} too large`); continue; }
+      const compressed = await compressImage(file);
+      setEditNewImages(prev => [...prev, compressed]);
+      const reader = new FileReader();
+      reader.onload = () => setEditNewPreviews(prev => [...prev, reader.result as string]);
+      reader.readAsDataURL(compressed);
+    }
+    e.target.value = "";
   };
 
   const saveEdit = async () => {
     if (editingMsgIdx === null) return;
     const msg = messages[editingMsgIdx];
+
+    // Upload new images
+    const newUploadedUrls = await Promise.all(editNewImages.map((blob, idx) => uploadImage(blob, idx)));
+    const validNewUrls = newUploadedUrls.filter((u): u is string => u !== null);
+
+    // Combine existing kept images + new uploads
+    const allImageUrls = [...editImages, ...editNewPreviews];
+    const primaryUrl = validNewUrls[0] || (editImages[0] ? msg.image_url : null);
+
     if (msg.id) {
-      await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true }).eq("id", msg.id);
+      await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true, image_url: primaryUrl }).eq("id", msg.id);
     }
     const truncated = messages.slice(0, editingMsgIdx);
-    truncated.push({ ...msg, content: editText, is_edited: true });
+    truncated.push({ ...msg, content: editText, is_edited: true, image_url: primaryUrl, image_urls: allImageUrls.length > 0 ? allImageUrls : undefined });
     if (activeConvId) {
       const idsToDelete = messages.slice(editingMsgIdx + 1).filter(m => m.id).map(m => m.id!);
       if (idsToDelete.length > 0) await supabase.from("ai_chat_messages").delete().in("id", idsToDelete);
@@ -875,7 +928,7 @@ export default function AiChat() {
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-1">
             {conversations.map(conv => (
-              <SwipeToDelete key={conv.id} onDelete={() => confirmDeleteConversation(conv.id)}>
+              <SwipeToDelete key={conv.id} onDelete={() => confirmDeleteConversation(conv.id)} onSwipeRight={() => startRename(conv)}>
                 <div className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} onClick={() => { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); }}>
                   <MessageSquare className="h-4 w-4 shrink-0" />
                   {renamingConvId === conv.id ? (
@@ -1027,11 +1080,39 @@ export default function AiChat() {
                   )}
                   {editingMsgIdx === i ? (
                     <div className="space-y-2">
+                      {/* Edit images */}
+                      {(editImages.length > 0 || editNewPreviews.length > 0) && (
+                        <div className="flex flex-wrap gap-2">
+                          {editImages.map((url, imgIdx) => (
+                            <div key={`existing-${imgIdx}`} className="relative">
+                              <img src={url} alt={`Image ${imgIdx + 1}`} className="h-16 rounded-md border" />
+                              <button onClick={() => setEditImages(prev => prev.filter((_, ii) => ii !== imgIdx))} className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center text-xs">
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ))}
+                          {editNewPreviews.map((url, imgIdx) => (
+                            <div key={`new-${imgIdx}`} className="relative">
+                              <img src={url} alt={`New ${imgIdx + 1}`} className="h-16 rounded-md border" />
+                              <button onClick={() => {
+                                setEditNewImages(prev => prev.filter((_, ii) => ii !== imgIdx));
+                                setEditNewPreviews(prev => prev.filter((_, ii) => ii !== imgIdx));
+                              }} className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center text-xs">
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <Textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="bg-background text-foreground min-h-[60px]" autoFocus />
-                      <div className="flex gap-1">
+                      <div className="flex gap-1 flex-wrap">
+                        <Button size="sm" variant="outline" onClick={() => editFileRef.current?.click()}>
+                          <Image className="h-3 w-3 mr-1" /> Add Image
+                        </Button>
                         <Button size="sm" variant="secondary" onClick={saveEdit}><Check className="h-3 w-3 mr-1" /> Save & Resend</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditingMsgIdx(null)}><X className="h-3 w-3" /></Button>
+                        <Button size="sm" variant="ghost" onClick={() => { setEditingMsgIdx(null); setEditImages([]); setEditNewImages([]); setEditNewPreviews([]); }}><X className="h-3 w-3" /></Button>
                       </div>
+                      <input ref={editFileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleEditImageAdd} />
                     </div>
                   ) : (
                     <>
