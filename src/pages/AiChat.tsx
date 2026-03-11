@@ -928,7 +928,7 @@ export default function AiChat() {
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-1">
             {conversations.map(conv => (
-              <SwipeToDelete key={conv.id} onDelete={() => confirmDeleteConversation(conv.id)}>
+              <SwipeToDelete key={conv.id} onDelete={() => confirmDeleteConversation(conv.id)} onSwipeRight={() => startRename(conv)}>
                 <div className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm group transition-colors ${activeConvId === conv.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} onClick={() => { setActiveConvId(conv.id); setShowSearch(false); setShowPinned(false); }}>
                   <MessageSquare className="h-4 w-4 shrink-0" />
                   {renamingConvId === conv.id ? (
