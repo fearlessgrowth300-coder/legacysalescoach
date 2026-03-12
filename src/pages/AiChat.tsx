@@ -1163,7 +1163,7 @@ export default function AiChat() {
 
             {messages.map((msg, i) => (
               <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[85%] rounded-lg p-3 relative group ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                <div className={`max-w-[85%] rounded-lg p-3 relative group overflow-hidden break-words ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
                   {(msg.image_urls || (msg.image_url ? [msg.image_url] : [])).length > 0 && (
                     <div className="flex flex-wrap gap-1 mb-2">
                       {(msg.image_urls || [msg.image_url!]).map((url, imgIdx) => (
@@ -1210,7 +1210,7 @@ export default function AiChat() {
                   ) : (
                     <>
                       {msg.role === "assistant" ? (
-                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                        <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words">
                           <ReactMarkdown>{msg.content}</ReactMarkdown>
                         </div>
                       ) : (
