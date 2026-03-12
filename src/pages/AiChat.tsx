@@ -866,7 +866,7 @@ export default function AiChat() {
     const file = e.target.files?.[0];
     if (!file || !user) return;
     if (!file.name.endsWith(".pdf")) { toast.error("Only PDF files supported"); return; }
-    if (file.size > 25 * 1024 * 1024) { toast.error("File must be under 25MB"); return; }
+    
     toast.info("Uploading PDF to AI Brain...");
     const path = `${user.id}/${Date.now()}_${file.name}`;
     const { error: uploadError } = await supabase.storage.from("knowledge-files").upload(path, file);

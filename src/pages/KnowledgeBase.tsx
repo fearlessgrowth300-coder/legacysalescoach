@@ -547,11 +547,6 @@ export default function KnowledgeBase() {
                         e.target.value = "";
                         return;
                       }
-                      if (file.size > 20 * 1024 * 1024) {
-                        toast.error("PDF must be under 20MB to upload reliably");
-                        e.target.value = "";
-                        return;
-                      }
                       setPdfFile(file);
                       if (!pdfTitle) setPdfTitle(file.name.replace(".pdf", ""));
                     }} />
