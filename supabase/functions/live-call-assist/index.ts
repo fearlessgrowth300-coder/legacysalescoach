@@ -1,10 +1,36 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { generateEmbedding } from "../_shared/embeddings.ts";
+import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
+
+const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
+
+function diversityRerank(items: any[], sourceKey: string, maxPerSource: number) {
+  const bySource: Record<string, any[]> = {};
+  for (const item of items) {
+    const key = item[sourceKey] || "unknown";
+    if (!bySource[key]) bySource[key] = [];
+    bySource[key].push(item);
+  }
+  const result: any[] = [];
+  let round = 0;
+  let added = true;
+  while (added) {
+    added = false;
+    for (const key of Object.keys(bySource)) {
+      const startIdx = round * maxPerSource;
+      const batch = bySource[key].slice(startIdx, startIdx + maxPerSource);
+      if (batch.length > 0) { result.push(...batch); added = true; }
+    }
+    round++;
+  }
+  return result;
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -36,41 +62,95 @@ serve(async (req) => {
       });
     }
 
-    // Fetch user's sales brain for coaching context
-    const { data: brainEntries } = await supabase
-      .from("sales_brain")
-      .select("principle_name, what_i_learned, how_to_apply, category")
-      .eq("user_id", user.id)
-      .limit(15);
-
-    const brainContext = brainEntries?.length
-      ? `\n\nUser's sales knowledge:\n${brainEntries.map(b => `- [${b.category}] ${b.principle_name}: ${b.how_to_apply}`).join("\n").substring(0, 2000)}`
-      : "";
-
-    // Fetch objection handlers
-    const { data: knowledgeChunks } = await supabase
-      .from("knowledge_chunks")
-      .select("content, category, trigger_phrases")
-      .eq("user_id", user.id)
-      .limit(10);
-
-    const knowledgeContext = knowledgeChunks?.length
-      ? `\n\nKnowledge base:\n${knowledgeChunks.map(c => `- [${c.category}]: ${c.content}`).join("\n").substring(0, 1500)}`
-      : "";
-
-    const businessInfo = businessContext ? `\n\nUser's business: ${businessContext}` : "";
-
-    // Format recent transcript
+    // Format recent transcript for query
     const recentTranscript = transcript.slice(-10).map((t: any) => 
       `${t.speaker || t.role}: "${t.text}"`
     ).join("\n");
+
+    const queryText = transcript.slice(-3).map((t: any) => t.text).join(" ").substring(0, 500);
+
+    // Generate embedding + fetch data in parallel
+    const embeddingPromise = generateEmbedding(queryText);
+
+    const [
+      { data: kbItems },
+      { count: totalUploads },
+      { data: allPrinciples },
+      { data: allChunks },
+      queryEmbedding,
+    ] = await Promise.all([
+      supabase.from("knowledge_base_items").select("id, title, type").eq("user_id", user.id),
+      supabase.from("knowledge_base_items").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+      supabase.from("sales_brain")
+        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_id, relevance_score")
+        .eq("user_id", user.id).is("workspace_id", null)
+        .in("source_type", ALLOWED_SOURCE_TYPES)
+        .order("relevance_score", { ascending: false, nullsFirst: false }),
+      supabase.from("knowledge_chunks")
+        .select("id, content, category, source_id, relevance_score")
+        .eq("user_id", user.id).is("workspace_id", null)
+        .in("source_type", ALLOWED_SOURCE_TYPES)
+        .order("relevance_score", { ascending: false }),
+      embeddingPromise,
+    ]);
+
+    // Semantic RPC calls
+    let semanticPrinciples: any[] = [];
+    let semanticChunks: any[] = [];
+    if (queryEmbedding) {
+      const embeddingStr = JSON.stringify(queryEmbedding);
+      const [semP, semC] = await Promise.all([
+        supabase.rpc("match_sales_brain", {
+          query_embedding: embeddingStr, match_count: 30, match_threshold: 0.3, p_user_id: user.id,
+        }),
+        supabase.rpc("match_knowledge_chunks", {
+          query_embedding: embeddingStr, match_count: 30, match_threshold: 0.3, p_user_id: user.id,
+        }),
+      ]);
+      semanticPrinciples = (semP.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+      semanticChunks = (semC.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+    }
+
+    // Merge, deduplicate, diversity re-rank
+    const mergedPrinciples = mergeByIdPriority(semanticPrinciples, allPrinciples || []);
+    const mergedChunks = mergeByIdPriority(semanticChunks, allChunks || []);
+    const dedupedPrinciples = deduplicatePrinciples(mergedPrinciples, "relevance_score");
+    const dedupedChunks = deduplicateChunks(mergedChunks, "relevance_score");
+    const diversePrinciples = diversityRerank(dedupedPrinciples, "source_id", 5);
+    const diverseChunks = diversityRerank(dedupedChunks, "source_id", 4);
+
+    // Dynamic caps
+    const uploadCount = totalUploads || 0;
+    const principlesCap = Math.min(Math.max(40, uploadCount * 10), 200);
+    const chunksCap = Math.min(Math.max(30, uploadCount * 8), 150);
+    const principles = diversePrinciples.slice(0, principlesCap);
+    const chunks = diverseChunks.slice(0, chunksCap);
+
+    const kbMap: Record<string, string> = {};
+    (kbItems || []).forEach((k: any) => { kbMap[k.id] = k.title; });
+
+    const businessInfo = businessContext ? `\n\nUser's business: ${businessContext}` : "";
+
+    // Build brain context with real source names
+    const brainContext = (principles.length + chunks.length > 0) ? `
+
+User's sales knowledge:
+${principles.map((p: any) => {
+  const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : p.source_name;
+  return `- [${p.category}] ${p.principle_name} (${src}): ${p.how_to_apply}`;
+}).join("\n").substring(0, 3000)}
+
+Knowledge base:
+${chunks.map((c: any) => {
+  const src = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : "upload";
+  return `- [${src}]: ${c.content}`;
+}).join("\n").substring(0, 2500)}` : "";
 
     const systemPrompt = `You are a real-time sales coach providing LIVE coaching during an actual sales call. The user is on a call RIGHT NOW and needs instant, actionable advice.
 
 === INSTRUCTION BOUNDARY ===
 ${businessInfo}
 ${brainContext}
-${knowledgeContext}
 
 Analyze the latest transcript and provide coaching. Return valid JSON:
 {

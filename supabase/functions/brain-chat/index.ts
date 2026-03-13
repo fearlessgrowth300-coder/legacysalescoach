@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { generateEmbedding } from "../_shared/embeddings.ts";
+import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
@@ -165,30 +167,56 @@ serve(async (req) => {
 
     const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 
-    // ─── PARALLEL DATA FETCH: all queries at once ───
+    // ─── PARALLEL DATA FETCH + SEMANTIC SEARCH ───
+    // Generate embedding in parallel with DB queries
+    const embeddingPromise = generateEmbedding(queryText.substring(0, 1000));
+
     const [
       { count: totalUploads },
       { data: kbItems },
       { data: allPrinciplesRaw },
       { data: allChunksRaw },
+      queryEmbedding,
     ] = await Promise.all([
       supabase.from("knowledge_base_items").select("id", { count: "exact", head: true }).eq("user_id", user.id),
       supabase.from("knowledge_base_items").select("id, title, url, type").eq("user_id", user.id),
-      // Fetch ALL principles (no limit) — diversity reranking will handle distribution
       supabase.from("sales_brain")
         .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, relevance_score, source_id")
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false, nullsFirst: false }),
-      // Fetch ALL chunks (no limit) — diversity reranking will handle distribution
       supabase.from("knowledge_chunks")
         .select("id, content, category, source_type, source_id")
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false }),
+      embeddingPromise,
     ]);
+
+    // ─── SEMANTIC RPC CALLS (if embedding succeeded) ───
+    let semanticPrinciples: any[] = [];
+    let semanticChunks: any[] = [];
+    if (queryEmbedding) {
+      const embeddingStr = JSON.stringify(queryEmbedding);
+      const [semPrinciples, semChunks] = await Promise.all([
+        supabaseAdmin.rpc("match_sales_brain", {
+          query_embedding: embeddingStr,
+          match_count: 60,
+          match_threshold: 0.3,
+          p_user_id: user.id,
+        }),
+        supabaseAdmin.rpc("match_knowledge_chunks", {
+          query_embedding: embeddingStr,
+          match_count: 60,
+          match_threshold: 0.3,
+          p_user_id: user.id,
+        }),
+      ]);
+      semanticPrinciples = (semPrinciples.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+      semanticChunks = (semChunks.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+    }
 
     // KB title map for source name resolution
     const kbMap: Record<string, { title: string; url: string | null; type: string }> = {};
@@ -199,12 +227,19 @@ serve(async (req) => {
       `  ${i + 1}. "${k.title}" (${k.type}${k.url ? `, URL: ${k.url}` : ""})`
     ).join("\n");
 
-    // ─── DIVERSITY RE-RANKING ───
-    // Principles: max 5 per source, then interleave
-    const diversePrinciples = diversityRerank(allPrinciplesRaw || [], "source_id", 5);
+    // ─── MERGE SEMANTIC + STATIC, DEDUPLICATE, DIVERSITY RE-RANK ───
 
-    // Chunks: max 4 per source, then interleave
-    const diverseChunks = diversityRerank(allChunksRaw || [], "source_id", 4);
+    // Merge semantic results (priority) with static results (fallback)
+    const mergedPrinciplesRaw = mergeByIdPriority(semanticPrinciples, allPrinciplesRaw || []);
+    const mergedChunksRaw = mergeByIdPriority(semanticChunks, allChunksRaw || []);
+
+    // Deduplicate near-identical content
+    const dedupedPrinciples = deduplicatePrinciples(mergedPrinciplesRaw, "relevance_score");
+    const dedupedChunks = deduplicateChunks(mergedChunksRaw, "relevance_score");
+
+    // Diversity re-ranking
+    const diversePrinciples = diversityRerank(dedupedPrinciples, "source_id", 5);
+    const diverseChunks = diversityRerank(dedupedChunks, "source_id", 4);
 
     // Title-match boost: if query mentions a source title, pull those to front
     let titleBoostPrinciples: any[] = [];
@@ -219,7 +254,7 @@ serve(async (req) => {
       }
     }
 
-    // Merge: title-matched first, then diverse remainder (deduplicated)
+    // Merge: title-matched first, then diverse remainder (deduplicated by ID)
     const seenIds = new Set(titleBoostPrinciples.map((p: any) => p.id));
     const finalPrinciples = [...titleBoostPrinciples];
     for (const p of diversePrinciples) {

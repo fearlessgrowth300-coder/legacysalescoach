@@ -2,6 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { SALES_PLAYBOOK, FRAMEWORK_DETECTION_PROMPT } from "./sales-playbook.ts";
 import { OBJECTION_HANDLERS, OBJECTION_DETECTION_PROMPT } from "./objection-handlers.ts";
+import { generateEmbedding } from "../_shared/embeddings.ts";
+import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
@@ -508,7 +510,7 @@ serve(async (req) => {
       winningPatternsSection = `\nPROVEN WINNING PATTERNS (from past successful conversations):\nTop patterns: ${topPatterns.join(", ")}\n${insights.length > 0 ? `Key insights from wins:\n${insights.map((i: string) => `- ${i}`).join("\n")}` : ""}\nUse these proven approaches when appropriate for THIS prospect.`;
     }
 
-    // ===== BRAIN RETRIEVAL (RAG) — UNLIMITED + DIVERSITY RE-RANKING =====
+    // ===== BRAIN RETRIEVAL (RAG) — SEMANTIC + STATIC + DIVERSITY RE-RANKING =====
     const last3Messages = (recentMessages || []).slice(-3).map((m: any) => m.content).join(" ");
     const prospectProfile = [
       prospect.name,
@@ -518,69 +520,96 @@ serve(async (req) => {
     ].filter(Boolean).join(" ");
     const brainQuery = `${message} ${prospectProfile} ${last3Messages}`.substring(0, 500);
 
+    // Generate embedding for semantic search (runs in parallel with DB queries)
+    const embeddingPromise = generateEmbedding(brainQuery.substring(0, 1000));
+
     // 1. Pull WORKSPACE PERSONA from sales_brain (workspace-specific)
-    const { data: workspacePersonaRows } = await supabase
-      .from("sales_brain")
-      .select("principle_name, what_i_learned, how_to_apply, metadata")
-      .eq("user_id", user.id)
-      .eq("workspace_id", prospect.workspace_id)
-      .eq("source_type", "workspace_persona")
-      .limit(1);
+    const [
+      { data: workspacePersonaRows },
+      { data: brainKnowledge },
+      { data: salesPrinciples },
+      { data: brainInsights },
+      { data: wsConvoChunks },
+      { data: trainingExamples },
+      { data: kbItems },
+      queryEmbedding,
+    ] = await Promise.all([
+      supabase.from("sales_brain")
+        .select("principle_name, what_i_learned, how_to_apply, metadata")
+        .eq("user_id", user.id)
+        .eq("workspace_id", prospect.workspace_id)
+        .eq("source_type", "workspace_persona")
+        .limit(1),
+      supabase.from("knowledge_chunks")
+        .select("id, content, category, source_type, trigger_phrases, source_id")
+        .eq("user_id", user.id)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "content", "video", "pdf"])
+        .order("relevance_score", { ascending: false }),
+      supabase.from("sales_brain")
+        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score")
+        .eq("user_id", user.id)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle", "content", "video", "pdf"])
+        .order("relevance_score", { ascending: false, nullsFirst: false }),
+      supabase.from("learned_insights")
+        .select("insight, insight_type, source")
+        .eq("user_id", user.id)
+        .eq("workspace_id", prospect.workspace_id)
+        .order("created_at", { ascending: false })
+        .limit(15),
+      supabase.from("knowledge_chunks")
+        .select("id, content, category, source_type, trigger_phrases, source_id, created_at")
+        .eq("user_id", user.id)
+        .eq("workspace_id", prospect.workspace_id)
+        .in("source_type", ["conversation", "training_conversation"])
+        .order("created_at", { ascending: false })
+        .limit(60),
+      supabase.from("workspace_training_data")
+        .select("content, title, style_analysis")
+        .eq("workspace_id", prospect.workspace_id)
+        .eq("status", "ready")
+        .not("content", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(10),
+      supabase.from("knowledge_base_items")
+        .select("id, title, type")
+        .eq("user_id", user.id),
+      embeddingPromise,
+    ]);
 
     const personaData = workspacePersonaRows?.[0]?.metadata || null;
 
-    // 2. Pull ALL core knowledge chunks (no limit — diversity reranking handles distribution)
-    const { data: brainKnowledge } = await supabase
-      .from("knowledge_chunks")
-      .select("content, category, source_type, trigger_phrases, source_id")
-      .eq("user_id", user.id)
-      .is("workspace_id", null)
-      .in("source_type", ["core_knowledge", "content", "video", "pdf"])
-      .order("relevance_score", { ascending: false });
+    // ─── SEMANTIC RPC CALLS (if embedding succeeded) ───
+    let semanticPrinciples: any[] = [];
+    let semanticChunks: any[] = [];
+    if (queryEmbedding) {
+      const embeddingStr = JSON.stringify(queryEmbedding);
+      const [semPrinciples, semChunks] = await Promise.all([
+        supabase.rpc("match_sales_brain", {
+          query_embedding: embeddingStr,
+          match_count: 40,
+          match_threshold: 0.3,
+          p_user_id: user.id,
+        }),
+        supabase.rpc("match_knowledge_chunks", {
+          query_embedding: embeddingStr,
+          match_count: 40,
+          match_threshold: 0.3,
+          p_user_id: user.id,
+        }),
+      ]);
+      semanticPrinciples = (semPrinciples.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+      semanticChunks = (semChunks.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+    }
 
-    // 3. Pull ALL core sales principles (no limit)
-    const { data: salesPrinciples } = await supabase
-      .from("sales_brain")
-      .select("principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id")
-      .eq("user_id", user.id)
-      .is("workspace_id", null)
-      .in("source_type", ["core_knowledge", "sales_principle", "content", "video", "pdf"])
-      .order("relevance_score", { ascending: false, nullsFirst: false });
+    // ─── MERGE SEMANTIC + STATIC, DEDUPLICATE ───
+    const mergedCoreChunks = mergeByIdPriority(semanticChunks, brainKnowledge || []);
+    const mergedPrinciples = mergeByIdPriority(semanticPrinciples, salesPrinciples || []);
 
-    // 4. Pull workspace-specific conversation insights (private)
-    const { data: brainInsights } = await supabase
-      .from("learned_insights")
-      .select("insight, insight_type, source")
-      .eq("user_id", user.id)
-      .eq("workspace_id", prospect.workspace_id)
-      .order("created_at", { ascending: false })
-      .limit(15);
-
-    // 5. Pull workspace conversation chunks (private — includes training data)
-    const { data: wsConvoChunks } = await supabase
-      .from("knowledge_chunks")
-      .select("content, category, source_type, trigger_phrases, source_id, created_at")
-      .eq("user_id", user.id)
-      .eq("workspace_id", prospect.workspace_id)
-      .in("source_type", ["conversation", "training_conversation"])
-      .order("created_at", { ascending: false })
-      .limit(60);
-
-    // 6. Pull actual training conversation examples (CRITICAL for friend mode voice matching)
-    const { data: trainingExamples } = await supabase
-      .from("workspace_training_data")
-      .select("content, title, style_analysis")
-      .eq("workspace_id", prospect.workspace_id)
-      .eq("status", "ready")
-      .not("content", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(10);
-
-    // 7. Fetch all KB titles for Global Knowledge Map
-    const { data: kbItems } = await supabase
-      .from("knowledge_base_items")
-      .select("id, title, type")
-      .eq("user_id", user.id);
+    // Deduplicate
+    const dedupedCoreChunks = deduplicateChunks(mergedCoreChunks, "relevance_score");
+    const dedupedPrinciples = deduplicatePrinciples(mergedPrinciples, "relevance_score");
 
     const kbMap: Record<string, string> = {};
     (kbItems || []).forEach((k: any) => { kbMap[k.id] = k.title; });
@@ -603,7 +632,6 @@ serve(async (req) => {
     }
 
     // ─── DIVERSITY RE-RANKING ───
-    // Spread chunks across different source files
     function diversityRerank(items: any[], sourceKey: string, maxPerSource: number) {
       const bySource: Record<string, any[]> = {};
       for (const item of items) {
@@ -629,7 +657,7 @@ serve(async (req) => {
     const queryTerms = brainQuery.toLowerCase().split(/\s+/).filter((t) => t.length > 3);
 
     // Diverse core chunks (max 4 per source)
-    const diverseCoreChunks = diversityRerank(brainKnowledge || [], "source_id", 4);
+    const diverseCoreChunks = diversityRerank(dedupedCoreChunks, "source_id", 4);
 
     // Score workspace chunks with higher priority weight
     const scoredWorkspaceChunks = (wsConvoChunks || []).map((chunk: any, idx: number) => {
@@ -663,7 +691,7 @@ serve(async (req) => {
     const topChunks = [...workspaceFirst, ...scoredCoreChunks.slice(0, remainingSlots)].slice(0, chunksCap);
 
     // Diverse principles (max 5 per source), then score to current query
-    const diversePrinciples = diversityRerank(salesPrinciples || [], "source_id", 5);
+    const diversePrinciples = diversityRerank(dedupedPrinciples, "source_id", 5);
     const scoredPrinciples = diversePrinciples.map((sp: any) => {
       const text = `${sp.principle_name || ""} ${sp.what_i_learned || ""} ${sp.how_to_apply || ""}`.toLowerCase();
       let score = 0;
