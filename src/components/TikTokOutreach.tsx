@@ -446,52 +446,20 @@ The goal is to start a genuine conversation that leads to them wanting to know m
             Analyze profiles, comment to trigger follows, then DM
           </p>
         </div>
-        <Dialog open={addOpen} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button size="sm" className="shrink-0"><Plus className="h-4 w-4 mr-1" />+ New</Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg mx-auto">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Video className="h-5 w-5 shrink-0" />
-                {!chatType ? "New Chat" : chatType === "new" ? "Analyze TikTok Profile" : chatType === "existing" ? "Existing TikTok Chat" : "Re-engage TikTok"}
-              </DialogTitle>
-            </DialogHeader>
-
-            {/* Step 1: Choose chat type */}
-            {!chatType && (
-              <div className="space-y-3 py-4">
-                <p className="text-sm text-muted-foreground">What type of conversation is this?</p>
-                <div className="grid grid-cols-3 gap-3">
-                  <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("new")}>
-                    <div className="text-center space-y-2">
-                      <MessageSquare className="h-8 w-8 mx-auto text-primary" />
-                      <h4 className="font-medium text-sm">New Prospect</h4>
-                      <p className="text-xs text-muted-foreground">Cold outreach — start fresh</p>
-                    </div>
-                  </Card>
-                  <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("existing")}>
-                    <div className="text-center space-y-2">
-                      <Upload className="h-8 w-8 mx-auto text-primary" />
-                      <h4 className="font-medium text-sm">Existing Chat</h4>
-                      <p className="text-xs text-muted-foreground">Upload DMs to continue</p>
-                    </div>
-                  </Card>
-                  <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("reengage")}>
-                    <div className="text-center space-y-2">
-                      <Ghost className="h-8 w-8 mx-auto text-primary" />
-                      <h4 className="font-medium text-sm">Re-engage</h4>
-                      <p className="text-xs text-muted-foreground">They saw but didn't reply</p>
-                    </div>
-                  </Card>
-                </div>
-              </div>
-            )}
-
-            {/* New Prospect Flow (analyze profile) */}
-            {chatType === "new" && (
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Analyze Profile Button + Dialog */}
+          <Dialog open={analyzeOpen} onOpenChange={handleAnalyzeDialogChange}>
+            <DialogTrigger asChild>
+              <Button size="sm" variant="outline" className="shrink-0"><Eye className="h-4 w-4 mr-1" />Analyze</Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg mx-auto">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Video className="h-5 w-5 shrink-0" />
+                  Analyze TikTok Profile
+                </DialogTitle>
+              </DialogHeader>
               <div className="space-y-4 py-2">
-                <Button variant="ghost" size="sm" onClick={() => setChatType(null)} className="mb-2">← Back</Button>
                 <div>
                   <Label>TikTok Profile URL *</Label>
                   <Input
@@ -596,7 +564,7 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                     </div>
 
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => handleDialogChange(false)}>Done</Button>
+                      <Button variant="outline" onClick={() => handleAnalyzeDialogChange(false)}>Done</Button>
                     </DialogFooter>
                   </div>
                 )}
@@ -609,25 +577,63 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                   </DialogFooter>
                 )}
               </div>
-            )}
+            </DialogContent>
+          </Dialog>
 
-            {/* Existing Chat Flow */}
-            {chatType === "existing" && (
-              <div className="space-y-4 py-4">
-                <Button variant="ghost" size="sm" onClick={() => { setChatType(null); setUploadStep("info"); setScreenshotFiles([]); setScreenshotPreviews([]); }} className="mb-2">← Back</Button>
-                {renderScreenshotUpload("continue")}
-              </div>
-            )}
+          {/* New Chat Button + Dialog */}
+          <Dialog open={chatOpen} onOpenChange={handleChatDialogChange}>
+            <DialogTrigger asChild>
+              <Button size="sm" className="shrink-0"><Plus className="h-4 w-4 mr-1" />New Chat</Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg mx-auto">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <MessageSquare className="h-5 w-5 shrink-0" />
+                  {!chatType ? "New TikTok Chat" : chatType === "existing" ? "Existing TikTok Chat" : "Re-engage TikTok"}
+                </DialogTitle>
+              </DialogHeader>
 
-            {/* Re-engage Flow */}
-            {chatType === "reengage" && (
-              <div className="space-y-4 py-4">
-                <Button variant="ghost" size="sm" onClick={() => { setChatType(null); setUploadStep("info"); setScreenshotFiles([]); setScreenshotPreviews([]); }} className="mb-2">← Back</Button>
-                {renderScreenshotUpload("reengage")}
-              </div>
-            )}
-          </DialogContent>
-        </Dialog>
+              {/* Step 1: Choose chat type */}
+              {!chatType && (
+                <div className="space-y-3 py-4">
+                  <p className="text-sm text-muted-foreground">What type of conversation is this?</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("existing")}>
+                      <div className="text-center space-y-2">
+                        <Upload className="h-8 w-8 mx-auto text-primary" />
+                        <h4 className="font-medium text-sm">Existing Chat</h4>
+                        <p className="text-xs text-muted-foreground">Upload DMs to continue</p>
+                      </div>
+                    </Card>
+                    <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("reengage")}>
+                      <div className="text-center space-y-2">
+                        <Ghost className="h-8 w-8 mx-auto text-primary" />
+                        <h4 className="font-medium text-sm">Re-engage</h4>
+                        <p className="text-xs text-muted-foreground">They saw but didn't reply</p>
+                      </div>
+                    </Card>
+                  </div>
+                </div>
+              )}
+
+              {/* Existing Chat Flow */}
+              {chatType === "existing" && (
+                <div className="space-y-4 py-4">
+                  <Button variant="ghost" size="sm" onClick={() => { setChatType(null); setUploadStep("info"); setScreenshotFiles([]); setScreenshotPreviews([]); }} className="mb-2">← Back</Button>
+                  {renderScreenshotUpload("continue")}
+                </div>
+              )}
+
+              {/* Re-engage Flow */}
+              {chatType === "reengage" && (
+                <div className="space-y-4 py-4">
+                  <Button variant="ghost" size="sm" onClick={() => { setChatType(null); setUploadStep("info"); setScreenshotFiles([]); setScreenshotPreviews([]); }} className="mb-2">← Back</Button>
+                  {renderScreenshotUpload("reengage")}
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {/* Content */}
