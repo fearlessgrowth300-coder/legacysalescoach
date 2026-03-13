@@ -141,6 +141,8 @@ export default function AiChat() {
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [editingMsgIdx, setEditingMsgIdx] = useState<number | null>(null);
+  const [longPressedMsgIdx, setLongPressedMsgIdx] = useState<number | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [editText, setEditText] = useState("");
   const [attachedImages, setAttachedImages] = useState<Blob[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
