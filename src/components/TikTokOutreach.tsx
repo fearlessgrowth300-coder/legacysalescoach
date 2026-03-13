@@ -450,131 +450,174 @@ The goal is to start a genuine conversation that leads to them wanting to know m
               </DialogTitle>
             </DialogHeader>
 
-            <div className="space-y-4 py-2">
-              <div>
-                <Label>TikTok Profile URL *</Label>
-                <Input
-                  value={tiktokUrl}
-                  onChange={(e) => setTiktokUrl(e.target.value)}
-                  placeholder="https://tiktok.com/@username"
-                  disabled={isAnalyzing}
-                  className="text-sm"
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  We'll analyze their profile, bio, and recent posts to generate a strategic comment
-                </p>
-              </div>
-
-              {isAnalyzing && (
-                <div className="flex items-center gap-3 text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
-                  <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
-                  <div>
-                    <p className="font-medium">Analyzing TikTok profile...</p>
-                    <p className="text-xs">Scraping bio, posts, and generating a strategic comment</p>
-                  </div>
+            {/* Step 1: Choose chat type */}
+            {!chatType && (
+              <div className="space-y-3 py-4">
+                <p className="text-sm text-muted-foreground">What type of conversation is this?</p>
+                <div className="grid grid-cols-3 gap-3">
+                  <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("new")}>
+                    <div className="text-center space-y-2">
+                      <MessageSquare className="h-8 w-8 mx-auto text-primary" />
+                      <h4 className="font-medium text-sm">New Prospect</h4>
+                      <p className="text-xs text-muted-foreground">Cold outreach — start fresh</p>
+                    </div>
+                  </Card>
+                  <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("existing")}>
+                    <div className="text-center space-y-2">
+                      <Upload className="h-8 w-8 mx-auto text-primary" />
+                      <h4 className="font-medium text-sm">Existing Chat</h4>
+                      <p className="text-xs text-muted-foreground">Upload DMs to continue</p>
+                    </div>
+                  </Card>
+                  <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("reengage")}>
+                    <div className="text-center space-y-2">
+                      <Ghost className="h-8 w-8 mx-auto text-primary" />
+                      <h4 className="font-medium text-sm">Re-engage</h4>
+                      <p className="text-xs text-muted-foreground">They saw but didn't reply</p>
+                    </div>
+                  </Card>
                 </div>
-              )}
+              </div>
+            )}
 
-              {analysisResult && (
-                <div className="space-y-3">
-                  {/* Profile Info */}
-                  <div className="flex items-center gap-3 bg-muted/50 rounded-lg p-3">
-                    {analysisResult.profilePicUrl && (
-                      <Avatar className="h-10 w-10 shrink-0">
-                        <AvatarImage src={analysisResult.profilePicUrl} referrerPolicy="no-referrer" />
-                        <AvatarFallback>{getInitials(analysisResult.nickname || analysisResult.username)}</AvatarFallback>
-                      </Avatar>
+            {/* New Prospect Flow (analyze profile) */}
+            {chatType === "new" && (
+              <div className="space-y-4 py-2">
+                <Button variant="ghost" size="sm" onClick={() => setChatType(null)} className="mb-2">← Back</Button>
+                <div>
+                  <Label>TikTok Profile URL *</Label>
+                  <Input
+                    value={tiktokUrl}
+                    onChange={(e) => setTiktokUrl(e.target.value)}
+                    placeholder="https://tiktok.com/@username"
+                    disabled={isAnalyzing}
+                    className="text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    We'll analyze their profile, bio, and recent posts to generate a strategic comment
+                  </p>
+                </div>
+
+                {isAnalyzing && (
+                  <div className="flex items-center gap-3 text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
+                    <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
+                    <div>
+                      <p className="font-medium">Analyzing TikTok profile...</p>
+                      <p className="text-xs">Scraping bio, posts, and generating a strategic comment</p>
+                    </div>
+                  </div>
+                )}
+
+                {analysisResult && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 bg-muted/50 rounded-lg p-3">
+                      {analysisResult.profilePicUrl && (
+                        <Avatar className="h-10 w-10 shrink-0">
+                          <AvatarImage src={analysisResult.profilePicUrl} referrerPolicy="no-referrer" />
+                          <AvatarFallback>{getInitials(analysisResult.nickname || analysisResult.username)}</AvatarFallback>
+                        </Avatar>
+                      )}
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm truncate">@{analysisResult.username}</p>
+                        <p className="text-xs text-muted-foreground truncate">{analysisResult.nickname}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {analysisResult.followersCount?.toLocaleString()} followers · {analysisResult.videoCount} videos
+                        </p>
+                      </div>
+                    </div>
+
+                    {analysisResult.bio && (
+                      <div className="text-sm bg-muted/30 rounded p-2">
+                        <p className="text-xs font-medium text-muted-foreground mb-1">Bio</p>
+                        <p className="break-words whitespace-pre-wrap">{analysisResult.bio}</p>
+                      </div>
                     )}
-                    <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">@{analysisResult.username}</p>
-                      <p className="text-xs text-muted-foreground truncate">{analysisResult.nickname}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {analysisResult.followersCount?.toLocaleString()} followers · {analysisResult.videoCount} videos
-                      </p>
-                    </div>
-                  </div>
 
-                  {/* Bio */}
-                  {analysisResult.bio && (
-                    <div className="text-sm bg-muted/30 rounded p-2">
-                      <p className="text-xs font-medium text-muted-foreground mb-1">Bio</p>
-                      <p className="break-words whitespace-pre-wrap">{analysisResult.bio}</p>
-                    </div>
-                  )}
+                    {analysisResult.suggestedComment && (
+                      <Card className="border-primary/30 bg-primary/5 overflow-hidden">
+                        <CardContent className="p-3 space-y-2">
+                          {(analysisResult.targetVideoCaption || analysisResult.targetVideoUrl) && (
+                            <div className="bg-muted/40 rounded p-2">
+                              <p className="text-xs font-medium text-muted-foreground mb-1">🎯 Comment on this specific post:</p>
+                              {analysisResult.postNumber && (
+                                <div className="flex flex-wrap gap-2 mb-1">
+                                  <Badge variant="secondary" className="text-[10px]">Post #{analysisResult.postNumber} from top</Badge>
+                                  {analysisResult.videoLikes && <Badge variant="outline" className="text-[10px]">❤️ {Number(analysisResult.videoLikes).toLocaleString()} likes</Badge>}
+                                  {analysisResult.videoViews && <Badge variant="outline" className="text-[10px]">👁 {Number(analysisResult.videoViews).toLocaleString()} views</Badge>}
+                                </div>
+                              )}
+                              <p className="text-sm italic break-words">"{analysisResult.targetVideoCaption}"</p>
+                              {analysisResult.targetVideoUrl && (
+                                <a href={analysisResult.targetVideoUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1 hover:underline">
+                                  <ExternalLink className="h-3 w-3 shrink-0" />
+                                  <span>Open this video on TikTok</span>
+                                </a>
+                              )}
+                              {analysisResult.whyThisVideo && (
+                                <p className="text-xs text-muted-foreground mt-1 break-words">📌 {analysisResult.whyThisVideo}</p>
+                              )}
+                            </div>
+                          )}
 
-                  {/* Suggested Comment */}
-                  {analysisResult.suggestedComment && (
-                    <Card className="border-primary/30 bg-primary/5 overflow-hidden">
-                      <CardContent className="p-3 space-y-2">
-                        {/* Target Video */}
-                         {(analysisResult.targetVideoCaption || analysisResult.targetVideoUrl) && (
-                          <div className="bg-muted/40 rounded p-2">
-                            <p className="text-xs font-medium text-muted-foreground mb-1">🎯 Comment on this specific post:</p>
-                            {analysisResult.postNumber && (
-                              <div className="flex flex-wrap gap-2 mb-1">
-                                <Badge variant="secondary" className="text-[10px]">Post #{analysisResult.postNumber} from top</Badge>
-                                {analysisResult.videoLikes && <Badge variant="outline" className="text-[10px]">❤️ {Number(analysisResult.videoLikes).toLocaleString()} likes</Badge>}
-                                {analysisResult.videoViews && <Badge variant="outline" className="text-[10px]">👁 {Number(analysisResult.videoViews).toLocaleString()} views</Badge>}
-                              </div>
-                            )}
-                            <p className="text-sm italic break-words">"{analysisResult.targetVideoCaption}"</p>
-                            {analysisResult.targetVideoUrl && (
-                              <a href={analysisResult.targetVideoUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1 hover:underline">
-                                <ExternalLink className="h-3 w-3 shrink-0" />
-                                <span>Open this video on TikTok</span>
-                              </a>
-                            )}
-                            {analysisResult.whyThisVideo && (
-                              <p className="text-xs text-muted-foreground mt-1 break-words">📌 {analysisResult.whyThisVideo}</p>
-                            )}
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-medium flex items-center gap-1.5">
+                              <Sparkles className="h-4 w-4 text-primary shrink-0" />
+                              Suggested Comment
+                            </p>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 shrink-0 text-xs"
+                              onClick={() => handleCopy("dialog", analysisResult.suggestedComment)}
+                            >
+                              {copiedId === "dialog" ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
+                              Copy
+                            </Button>
                           </div>
-                        )}
+                          <p className="text-sm break-words whitespace-pre-wrap">{analysisResult.suggestedComment}</p>
+                          {analysisResult.commentStrategy && (
+                            <p className="text-xs text-muted-foreground break-words">💡 {analysisResult.commentStrategy}</p>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
 
-                        {/* Comment Header + Copy */}
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-medium flex items-center gap-1.5">
-                            <Sparkles className="h-4 w-4 text-primary shrink-0" />
-                            Suggested Comment
-                          </p>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 shrink-0 text-xs"
-                            onClick={() => handleCopy("dialog", analysisResult.suggestedComment)}
-                          >
-                            {copiedId === "dialog" ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
-                            Copy
-                          </Button>
-                        </div>
-                        <p className="text-sm break-words whitespace-pre-wrap">{analysisResult.suggestedComment}</p>
-                        {analysisResult.commentStrategy && (
-                          <p className="text-xs text-muted-foreground break-words">💡 {analysisResult.commentStrategy}</p>
-                        )}
-                      </CardContent>
-                    </Card>
-                  )}
+                    <div className="flex items-center gap-2 text-green-600 text-sm">
+                      <Check className="h-4 w-4 shrink-0" />
+                      <span>Added to your TikTok outreach list!</span>
+                    </div>
 
-                  <div className="flex items-center gap-2 text-green-600 text-sm">
-                    <Check className="h-4 w-4 shrink-0" />
-                    <span>Added to your TikTok outreach list!</span>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => handleDialogChange(false)}>Done</Button>
+                    </DialogFooter>
                   </div>
+                )}
 
+                {!analysisResult && (
                   <DialogFooter>
-                    <Button variant="outline" onClick={() => { setAddOpen(false); setTiktokUrl(""); setAnalysisResult(null); }}>
-                      Done
+                    <Button onClick={handleAnalyze} disabled={!tiktokUrl.trim() || isAnalyzing} className="w-full sm:w-auto">
+                      {isAnalyzing ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Analyzing...</> : "Analyze & Generate Comment"}
                     </Button>
                   </DialogFooter>
-                </div>
-              )}
+                )}
+              </div>
+            )}
 
-              {!analysisResult && (
-                <DialogFooter>
-                  <Button onClick={handleAnalyze} disabled={!tiktokUrl.trim() || isAnalyzing} className="w-full sm:w-auto">
-                    {isAnalyzing ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Analyzing...</> : "Analyze & Generate Comment"}
-                  </Button>
-                </DialogFooter>
-              )}
-            </div>
+            {/* Existing Chat Flow */}
+            {chatType === "existing" && (
+              <div className="space-y-4 py-4">
+                <Button variant="ghost" size="sm" onClick={() => { setChatType(null); setUploadStep("info"); setScreenshotFiles([]); setScreenshotPreviews([]); }} className="mb-2">← Back</Button>
+                {renderScreenshotUpload("continue")}
+              </div>
+            )}
+
+            {/* Re-engage Flow */}
+            {chatType === "reengage" && (
+              <div className="space-y-4 py-4">
+                <Button variant="ghost" size="sm" onClick={() => { setChatType(null); setUploadStep("info"); setScreenshotFiles([]); setScreenshotPreviews([]); }} className="mb-2">← Back</Button>
+                {renderScreenshotUpload("reengage")}
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       </div>
