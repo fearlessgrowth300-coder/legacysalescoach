@@ -38,8 +38,9 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [addOpen, setAddOpen] = useState(false);
-  const [chatType, setChatType] = useState<"new" | "existing" | "reengage" | null>(null);
+  const [analyzeOpen, setAnalyzeOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatType, setChatType] = useState<"existing" | "reengage" | null>(null);
   const [tiktokUrl, setTiktokUrl] = useState("");
   const [prospectName, setProspectName] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
