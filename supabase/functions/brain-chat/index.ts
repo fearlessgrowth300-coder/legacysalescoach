@@ -420,12 +420,25 @@ Q&A will be auto-saved as "ai_chat" but ai_chat is NEVER used in future retrieva
       });
     }
 
+    // ─── Compute retrieval stats ───
+    const semanticChunkCount = semanticChunks.length;
+    const semanticPrincipleCount = semanticPrinciples.length;
+    const staticChunkCount = (allChunksRaw || []).length;
+    const staticPrincipleCount = (allPrinciplesRaw || []).length;
+    const preDedupTotal = mergedPrinciplesRaw.length + mergedChunksRaw.length;
+    const postDedupTotal = dedupedPrinciples.length + dedupedChunks.length;
+    const dedupSavings = preDedupTotal - postDedupTotal;
+
     // Inject brain metadata as the first SSE event
     const brainMeta = {
       brainRetrieval: {
         chunksRetrieved: totalChunks,
         uniqueSources: uniqueSources.size,
         sources: [...sourceTypes],
+        semanticMatches: semanticChunkCount + semanticPrincipleCount,
+        staticMatches: staticChunkCount + staticPrincipleCount,
+        dedupSavings,
+        embeddingUsed: !!queryEmbedding,
       }
     };
 
