@@ -175,7 +175,7 @@ RULES:
 - The comment should make OTHER viewers curious about you too
 - Position the DM request as mutually beneficial
 
-Return JSON: { "comment": "the full comment with CTA", "strategy": "why this comment + CTA will work on this specific prospect", "targetVideoCaption": "exact caption of the chosen video", "targetVideoUrl": "URL of the chosen video", "whyThisVideo": "why you picked this specific video over others" }`;
+Return JSON: { "comment": "the full comment with CTA", "strategy": "why this comment + CTA will work on this specific prospect", "targetVideoCaption": "exact caption of the chosen video", "targetVideoUrl": "URL of the chosen video", "whyThisVideo": "why you picked this specific video over others", "postNumber": 1, "videoLikes": 1234, "videoViews": 56789 }`;
 
           try {
             const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
