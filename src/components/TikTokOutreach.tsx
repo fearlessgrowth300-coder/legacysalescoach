@@ -432,13 +432,14 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                           Follow Back
                         </Button>
                         <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-destructive hover:text-destructive ml-auto"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive ml-auto"
                           onClick={() => handleDelete(prospect.id)}
                           disabled={deletingId === prospect.id}
                         >
-                          {deletingId === prospect.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                          {deletingId === prospect.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Trash2 className="h-3 w-3 mr-1" />}
+                          Delete
                         </Button>
                       </div>
                     </Card>
@@ -479,13 +480,14 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                             <UserCheck className="h-3 w-3 mr-0.5" />Followed
                           </Badge>
                           <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7 text-destructive hover:text-destructive"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
                             onClick={(e) => { e.stopPropagation(); handleDelete(prospect.id); }}
                             disabled={deletingId === prospect.id}
                           >
-                            {deletingId === prospect.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                            {deletingId === prospect.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Trash2 className="h-3 w-3 mr-1" />}
+                            Delete
                           </Button>
                         </div>
                       </div>
