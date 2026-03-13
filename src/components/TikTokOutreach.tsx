@@ -269,9 +269,16 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                     <Card className="border-primary/30 bg-primary/5 overflow-hidden">
                       <CardContent className="p-3 space-y-2">
                         {/* Target Video */}
-                        {(analysisResult.targetVideoCaption || analysisResult.targetVideoUrl) && (
+                         {(analysisResult.targetVideoCaption || analysisResult.targetVideoUrl) && (
                           <div className="bg-muted/40 rounded p-2">
                             <p className="text-xs font-medium text-muted-foreground mb-1">🎯 Comment on this specific post:</p>
+                            {analysisResult.postNumber && (
+                              <div className="flex flex-wrap gap-2 mb-1">
+                                <Badge variant="secondary" className="text-[10px]">Post #{analysisResult.postNumber} from top</Badge>
+                                {analysisResult.videoLikes && <Badge variant="outline" className="text-[10px]">❤️ {Number(analysisResult.videoLikes).toLocaleString()} likes</Badge>}
+                                {analysisResult.videoViews && <Badge variant="outline" className="text-[10px]">👁 {Number(analysisResult.videoViews).toLocaleString()} views</Badge>}
+                              </div>
+                            )}
                             <p className="text-sm italic break-words">"{analysisResult.targetVideoCaption}"</p>
                             {analysisResult.targetVideoUrl && (
                               <a href={analysisResult.targetVideoUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1 hover:underline">
@@ -391,13 +398,29 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                       {/* Suggested comment section */}
                       {(prospect as any).suggested_comment && (
                         <div className="mt-2 bg-muted/30 rounded p-2 space-y-1.5">
-                          {(prospect as any).target_video_url && (
+                          {(prospect as any).target_video_caption && (
                             <div>
                               <p className="text-xs text-muted-foreground">🎯 Comment on:</p>
-                              <a href={(prospect as any).target_video_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1 break-words">
-                                <span className="line-clamp-2">{(prospect as any).target_video_caption ? `"${(prospect as any).target_video_caption}"` : "Open video"}</span>
-                                <ExternalLink className="h-3 w-3 shrink-0" />
-                              </a>
+                              {/* Show stats line if present (Post #X · likes · views) */}
+                              {(prospect as any).target_video_caption.startsWith("Post #") && (
+                                <p className="text-xs font-medium text-foreground mt-0.5">
+                                  {(prospect as any).target_video_caption.split("\n")[0]}
+                                </p>
+                              )}
+                              {(prospect as any).target_video_url && (
+                                <a href={(prospect as any).target_video_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1 break-words mt-0.5">
+                                  <span className="line-clamp-2">
+                                    {(() => {
+                                      const cap = (prospect as any).target_video_caption || "";
+                                      // Get caption without stats prefix
+                                      const lines = cap.split("\n");
+                                      const captionText = lines.length > 1 && lines[0].startsWith("Post #") ? lines.slice(1).join("\n") : cap;
+                                      return captionText ? `"${captionText}"` : "Open video";
+                                    })()}
+                                  </span>
+                                  <ExternalLink className="h-3 w-3 shrink-0" />
+                                </a>
+                              )}
                             </div>
                           )}
                           <p className="text-xs text-muted-foreground">💬 Suggested comment:</p>

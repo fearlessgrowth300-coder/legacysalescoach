@@ -153,6 +153,8 @@ Analyze ALL their videos above. Pick the ONE video that:
 - Has content that gives you the best opening to write a compelling, niche-specific comment
 - Allows you to naturally position yourself as someone they'd want to connect with
 
+IMPORTANT: Note the video's position number from the list above (1 = most recent, 2 = second most recent, etc.) and include its exact likes and views count so the user can find it on TikTok.
+
 STEP 2 — WRITE A KILLER COMMENT WITH CTA:
 The comment MUST include:
 1. **Specific Reference**: Mention something SPECIFIC from that video's caption or content
@@ -173,7 +175,7 @@ RULES:
 - The comment should make OTHER viewers curious about you too
 - Position the DM request as mutually beneficial
 
-Return JSON: { "comment": "the full comment with CTA", "strategy": "why this comment + CTA will work on this specific prospect", "targetVideoCaption": "exact caption of the chosen video", "targetVideoUrl": "URL of the chosen video", "whyThisVideo": "why you picked this specific video over others" }`;
+Return JSON: { "comment": "the full comment with CTA", "strategy": "why this comment + CTA will work on this specific prospect", "targetVideoCaption": "exact caption of the chosen video", "targetVideoUrl": "URL of the chosen video", "whyThisVideo": "why you picked this specific video over others", "postNumber": 1, "videoLikes": 1234, "videoViews": 56789 }`;
 
           try {
             const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -204,6 +206,9 @@ Return JSON: { "comment": "the full comment with CTA", "strategy": "why this com
                   profileData.targetVideoCaption = parsed.targetVideoCaption || "";
                   profileData.targetVideoUrl = parsed.targetVideoUrl || "";
                   profileData.whyThisVideo = parsed.whyThisVideo || "";
+                  profileData.postNumber = parsed.postNumber || null;
+                  profileData.videoLikes = parsed.videoLikes || null;
+                  profileData.videoViews = parsed.videoViews || null;
                 }
               } catch { suggestedComment = aiContent.substring(0, 300); }
             }
@@ -214,6 +219,16 @@ Return JSON: { "comment": "the full comment with CTA", "strategy": "why this com
 
     // Update prospect if prospectId provided
     if (prospectId) {
+      // Build enriched caption with stats for easy identification
+      const statsPrefix = [
+        profileData.postNumber ? `Post #${profileData.postNumber} from top` : null,
+        profileData.videoLikes ? `❤️ ${profileData.videoLikes.toLocaleString()} likes` : null,
+        profileData.videoViews ? `👁 ${profileData.videoViews.toLocaleString()} views` : null,
+      ].filter(Boolean).join(" · ");
+      const enrichedCaption = statsPrefix 
+        ? `${statsPrefix}\n${profileData.targetVideoCaption || ""}`
+        : profileData.targetVideoCaption || null;
+
       await supabase.from("prospects").update({
         detected_interests: profileData.bio?.substring(0, 300) || null,
         profile_pic_url: profileData.profilePicUrl || null,
@@ -221,7 +236,7 @@ Return JSON: { "comment": "the full comment with CTA", "strategy": "why this com
         name: profileData.nickname || profileData.username,
         suggested_comment: suggestedComment || null,
         target_video_url: profileData.targetVideoUrl || null,
-        target_video_caption: profileData.targetVideoCaption || null,
+        target_video_caption: enrichedCaption,
       }).eq("id", prospectId);
     }
 
