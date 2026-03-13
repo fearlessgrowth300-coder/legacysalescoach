@@ -473,6 +473,18 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                         </Avatar>
                         <div className="flex-1 min-w-0">
                           <p className="font-medium text-sm break-words">{prospect.name}</p>
+                          {prospect.tiktok_url && (
+                            <a
+                              href={prospect.tiktok_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-primary hover:underline flex items-center gap-1 mt-0.5"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ExternalLink className="h-3 w-3 shrink-0" />
+                              <span className="truncate">View TikTok Profile</span>
+                            </a>
+                          )}
                           <p className="text-xs text-muted-foreground break-words line-clamp-2 mt-0.5">
                             {prospect.detected_interests || "Active conversation"}
                           </p>
