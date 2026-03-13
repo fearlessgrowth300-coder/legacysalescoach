@@ -38,6 +38,7 @@ export default function Chats() {
   const selectedProspectId = prospectId || null;
 
   const [platformTab, setPlatformTab] = useState<"instagram" | "tiktok">("instagram");
+  const [autoSwitchedForProspect, setAutoSwitchedForProspect] = useState<string | null>(null);
   const [newProspectOpen, setNewProspectOpen] = useState(false);
   const [chatType, setChatType] = useState<"new" | "existing" | "reengage" | null>(null);
   const [newProspectName, setNewProspectName] = useState("");
@@ -140,6 +141,17 @@ export default function Chats() {
     enabled: !!selectedProspectId,
   });
   const selectedProspect = selectedProspectData || prospects?.find((p) => p.id === selectedProspectId);
+
+  // Auto-switch to instagram tab when viewing a TikTok prospect chat (so chat UI shows, not TikTok outreach)
+  useEffect(() => {
+    if (selectedProspectId && selectedProspect && (selectedProspect as any).platform === "tiktok" && platformTab === "tiktok") {
+      // Only auto-switch once per prospect to avoid loops
+      if (autoSwitchedForProspect !== selectedProspectId) {
+        setPlatformTab("instagram");
+        setAutoSwitchedForProspect(selectedProspectId);
+      }
+    }
+  }, [selectedProspectId, selectedProspect, platformTab, autoSwitchedForProspect]);
 
   useEffect(() => {
     scrollToBottom();
@@ -1136,8 +1148,12 @@ export default function Chats() {
                 <h3 className="font-medium text-sm md:text-base truncate">{selectedProspect?.name}</h3>
                 <p className="text-xs text-muted-foreground truncate">
                   {isMobile
-                    ? ((selectedProspect as any)?.instagram_username ? `@${(selectedProspect as any).instagram_username}` : "Paste a message")
-                    : (selectedProspect?.detected_interests || "Paste a message to get AI suggestions")
+                    ? ((selectedProspect as any)?.platform === "tiktok"
+                      ? ((selectedProspect as any)?.tiktok_url ? `TikTok · ${(selectedProspect as any).tiktok_url.replace("https://tiktok.com/", "")}` : "TikTok prospect")
+                      : ((selectedProspect as any)?.instagram_username ? `@${(selectedProspect as any).instagram_username}` : "Paste a message"))
+                    : ((selectedProspect as any)?.platform === "tiktok"
+                      ? `TikTok prospect · ${selectedProspect?.detected_interests || "Paste a message to get AI suggestions"}`
+                      : (selectedProspect?.detected_interests || "Paste a message to get AI suggestions"))
                   }
                 </p>
               </div>

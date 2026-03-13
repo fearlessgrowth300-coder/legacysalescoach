@@ -42,7 +42,6 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
 
-  // Converting follow-back state
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -55,7 +54,6 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
     },
   });
 
-  // Fetch TikTok prospects - use .filter() approach to avoid deep type instantiation
   const { data: tiktokProspects, isLoading } = useQuery({
     queryKey: ["tiktok-prospects", workspaceId],
     queryFn: async () => {
@@ -65,7 +63,6 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
         .eq("workspace_id", workspaceId)
         .order("created_at", { ascending: false });
       if (error) throw error;
-      // Filter for tiktok platform client-side to avoid deep type issues
       return (data as any[]).filter((p: any) => p.platform === "tiktok") as unknown as TikTokProspect[];
     },
   });
@@ -79,7 +76,6 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
     setAnalysisResult(null);
 
     try {
-      // 1. Create prospect first
       const { data: prospect, error: pErr } = await supabase
         .from("prospects")
         .insert({
@@ -95,7 +91,6 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
         .single();
       if (pErr) throw pErr;
 
-      // 2. Fetch TikTok profile & generate comment
       const { data, error } = await supabase.functions.invoke("fetch-tiktok", {
         body: {
           url: tiktokUrl.trim(),
@@ -130,13 +125,11 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
     setConvertingId(prospect.id);
 
     try {
-      // Mark as followed back
       await supabase.from("prospects").update({
         has_followed_back: true,
         conversation_stage: "first_contact",
       } as any).eq("id", prospect.id);
 
-      // Generate first DM suggestion
       const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
         body: {
           prospectId: prospect.id,
@@ -158,8 +151,6 @@ The goal is to start a genuine conversation that leads to them wanting to know m
 
       queryClient.invalidateQueries({ queryKey: ["tiktok-prospects"] });
       toast.success("Opening chat with first message suggestions!");
-
-      // Navigate to chat
       navigate(`/chats/${prospect.id}`);
     } catch (e: any) {
       console.error("Follow back error:", e);
@@ -189,29 +180,29 @@ The goal is to start a genuine conversation that leads to them wanting to know m
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="p-4 border-b flex items-center justify-between">
-        <div>
-          <h2 className="font-semibold flex items-center gap-2">
-            <Video className="h-5 w-5" />
+      <div className="p-3 border-b flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="font-semibold flex items-center gap-2 text-sm">
+            <Video className="h-4 w-4 shrink-0" />
             TikTok Outreach
           </h2>
-          <p className="text-xs text-muted-foreground mt-1">
+          <p className="text-xs text-muted-foreground mt-0.5">
             Analyze profiles, comment to trigger follows, then DM
           </p>
         </div>
         <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setAnalysisResult(null); setTiktokUrl(""); } }}>
           <DialogTrigger asChild>
-            <Button size="sm"><Plus className="h-4 w-4 mr-1" />Add TikTok</Button>
+            <Button size="sm" className="shrink-0"><Plus className="h-4 w-4 mr-1" />Add TikTok</Button>
           </DialogTrigger>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg mx-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                <Video className="h-5 w-5" />
+                <Video className="h-5 w-5 shrink-0" />
                 Analyze TikTok Profile
               </DialogTitle>
             </DialogHeader>
 
-            <div className="space-y-4 py-4">
+            <div className="space-y-4 py-2">
               <div>
                 <Label>TikTok Profile URL *</Label>
                 <Input
@@ -219,6 +210,7 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                   onChange={(e) => setTiktokUrl(e.target.value)}
                   placeholder="https://tiktok.com/@username"
                   disabled={isAnalyzing}
+                  className="text-sm"
                 />
                 <p className="text-xs text-muted-foreground mt-1">
                   We'll analyze their profile, bio, and recent posts to generate a strategic comment
@@ -226,8 +218,8 @@ The goal is to start a genuine conversation that leads to them wanting to know m
               </div>
 
               {isAnalyzing && (
-                <div className="flex items-center gap-3 text-sm text-muted-foreground bg-muted/50 rounded-lg p-4">
-                  <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                <div className="flex items-center gap-3 text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
+                  <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
                   <div>
                     <p className="font-medium">Analyzing TikTok profile...</p>
                     <p className="text-xs">Scraping bio, posts, and generating a strategic comment</p>
@@ -237,72 +229,78 @@ The goal is to start a genuine conversation that leads to them wanting to know m
 
               {analysisResult && (
                 <div className="space-y-3">
+                  {/* Profile Info */}
                   <div className="flex items-center gap-3 bg-muted/50 rounded-lg p-3">
                     {analysisResult.profilePicUrl && (
-                      <Avatar className="h-12 w-12">
+                      <Avatar className="h-10 w-10 shrink-0">
                         <AvatarImage src={analysisResult.profilePicUrl} referrerPolicy="no-referrer" />
                         <AvatarFallback>{getInitials(analysisResult.nickname || analysisResult.username)}</AvatarFallback>
                       </Avatar>
                     )}
-                    <div>
-                      <p className="font-medium">@{analysisResult.username}</p>
-                      <p className="text-xs text-muted-foreground">{analysisResult.nickname}</p>
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">@{analysisResult.username}</p>
+                      <p className="text-xs text-muted-foreground truncate">{analysisResult.nickname}</p>
                       <p className="text-xs text-muted-foreground">
                         {analysisResult.followersCount?.toLocaleString()} followers · {analysisResult.videoCount} videos
                       </p>
                     </div>
                   </div>
 
+                  {/* Bio */}
                   {analysisResult.bio && (
                     <div className="text-sm bg-muted/30 rounded p-2">
                       <p className="text-xs font-medium text-muted-foreground mb-1">Bio</p>
-                      <p>{analysisResult.bio}</p>
+                      <p className="break-words whitespace-pre-wrap">{analysisResult.bio}</p>
                     </div>
                   )}
 
+                  {/* Suggested Comment */}
                   {analysisResult.suggestedComment && (
-                    <Card className="border-primary/30 bg-primary/5">
+                    <Card className="border-primary/30 bg-primary/5 overflow-hidden">
                       <CardContent className="p-3 space-y-2">
                         {/* Target Video */}
                         {(analysisResult.targetVideoCaption || analysisResult.targetVideoUrl) && (
-                          <div className="bg-muted/40 rounded p-2 mb-2">
+                          <div className="bg-muted/40 rounded p-2">
                             <p className="text-xs font-medium text-muted-foreground mb-1">🎯 Comment on this specific post:</p>
-                            <p className="text-sm italic truncate">"{analysisResult.targetVideoCaption}"</p>
+                            <p className="text-sm italic break-words">"{analysisResult.targetVideoCaption}"</p>
                             {analysisResult.targetVideoUrl && (
                               <a href={analysisResult.targetVideoUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1 hover:underline">
-                                <ExternalLink className="h-3 w-3" />Open this video on TikTok
+                                <ExternalLink className="h-3 w-3 shrink-0" />
+                                <span>Open this video on TikTok</span>
                               </a>
                             )}
                             {analysisResult.whyThisVideo && (
-                              <p className="text-xs text-muted-foreground mt-1">📌 {analysisResult.whyThisVideo}</p>
+                              <p className="text-xs text-muted-foreground mt-1 break-words">📌 {analysisResult.whyThisVideo}</p>
                             )}
                           </div>
                         )}
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium flex items-center gap-2">
-                            <Sparkles className="h-4 w-4 text-primary" />
+
+                        {/* Comment Header + Copy */}
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-medium flex items-center gap-1.5">
+                            <Sparkles className="h-4 w-4 text-primary shrink-0" />
                             Suggested Comment
                           </p>
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-7"
+                            className="h-7 shrink-0 text-xs"
                             onClick={() => handleCopy("dialog", analysisResult.suggestedComment)}
                           >
                             {copiedId === "dialog" ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
                             Copy
                           </Button>
                         </div>
-                        <p className="text-sm">{analysisResult.suggestedComment}</p>
+                        <p className="text-sm break-words whitespace-pre-wrap">{analysisResult.suggestedComment}</p>
                         {analysisResult.commentStrategy && (
-                          <p className="text-xs text-muted-foreground">💡 {analysisResult.commentStrategy}</p>
+                          <p className="text-xs text-muted-foreground break-words">💡 {analysisResult.commentStrategy}</p>
                         )}
                       </CardContent>
                     </Card>
                   )}
 
                   <div className="flex items-center gap-2 text-green-600 text-sm">
-                    <Check className="h-4 w-4" />
+                    <Check className="h-4 w-4 shrink-0" />
                     <span>Added to your TikTok outreach list!</span>
                   </div>
 
@@ -316,7 +314,7 @@ The goal is to start a genuine conversation that leads to them wanting to know m
 
               {!analysisResult && (
                 <DialogFooter>
-                  <Button onClick={handleAnalyze} disabled={!tiktokUrl.trim() || isAnalyzing}>
+                  <Button onClick={handleAnalyze} disabled={!tiktokUrl.trim() || isAnalyzing} className="w-full sm:w-auto">
                     {isAnalyzing ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Analyzing...</> : "Analyze & Generate Comment"}
                   </Button>
                 </DialogFooter>
@@ -344,90 +342,95 @@ The goal is to start a genuine conversation that leads to them wanting to know m
             </Button>
           </div>
         ) : (
-          <div className="p-4 space-y-6">
+          <div className="p-3 space-y-5">
             {/* Pending - waiting for follow back */}
             {pendingProspects.length > 0 && (
               <div>
-                <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
+                <h3 className="text-sm font-medium text-muted-foreground mb-2 flex items-center gap-2">
                   <Eye className="h-4 w-4" />
                   Waiting for Follow Back ({pendingProspects.length})
                 </h3>
                 <div className="space-y-2">
                   {pendingProspects.map((prospect) => (
-                    <Card key={prospect.id} className="p-3">
-                      <div className="flex items-center gap-3">
-                        <Avatar className="h-10 w-10 shrink-0">
+                    <Card key={prospect.id} className="p-3 overflow-hidden">
+                      {/* Top row: avatar + name + link */}
+                      <div className="flex items-center gap-2.5">
+                        <Avatar className="h-9 w-9 shrink-0">
                           {prospect.profile_pic_url ? (
                             <AvatarImage src={prospect.profile_pic_url} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = "none"; }} />
                           ) : null}
-                          <AvatarFallback className="bg-primary/10 text-primary text-sm">
+                          <AvatarFallback className="bg-primary/10 text-primary text-xs">
                             {getInitials(prospect.name)}
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex-1 min-w-0">
                           <p className="font-medium text-sm truncate">{prospect.name}</p>
                           {prospect.detected_interests && (
-                            <p className="text-xs text-muted-foreground truncate">{prospect.detected_interests}</p>
+                            <p className="text-xs text-muted-foreground line-clamp-2 break-words">{prospect.detected_interests}</p>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          {prospect.tiktok_url && (
-                            <Button size="icon" variant="ghost" className="h-8 w-8" asChild>
-                              <a href={prospect.tiktok_url} target="_blank" rel="noopener noreferrer">
-                                <ExternalLink className="h-4 w-4" />
-                              </a>
-                            </Button>
-                          )}
-                          {(prospect as any).suggested_comment && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8 text-xs"
-                              onClick={() => handleCopy(prospect.id, (prospect as any).suggested_comment)}
-                            >
-                              {copiedId === prospect.id ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
-                              Copy Comment
-                            </Button>
-                          )}
-                          <Button
-                            size="sm"
-                            className="h-8 text-xs"
-                            onClick={() => handleFollowBack(prospect)}
-                            disabled={convertingId === prospect.id}
-                          >
-                            {convertingId === prospect.id ? (
-                              <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                            ) : (
-                              <UserCheck className="h-3 w-3 mr-1" />
-                            )}
-                            Follow Back
+                        {prospect.tiktok_url && (
+                          <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" asChild>
+                            <a href={prospect.tiktok_url} target="_blank" rel="noopener noreferrer">
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
                           </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-8 w-8 text-destructive hover:text-destructive"
-                            onClick={() => handleDelete(prospect.id)}
-                            disabled={deletingId === prospect.id}
-                          >
-                            {deletingId === prospect.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                          </Button>
-                        </div>
+                        )}
                       </div>
+
+                      {/* Suggested comment section */}
                       {(prospect as any).suggested_comment && (
-                        <div className="mt-2 pl-13 bg-muted/30 rounded p-2 space-y-1">
+                        <div className="mt-2 bg-muted/30 rounded p-2 space-y-1.5">
                           {(prospect as any).target_video_url && (
-                            <div className="flex items-center gap-1">
+                            <div>
                               <p className="text-xs text-muted-foreground">🎯 Comment on:</p>
-                              <a href={(prospect as any).target_video_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1">
-                                {(prospect as any).target_video_caption ? `"${(prospect as any).target_video_caption.substring(0, 60)}..."` : "Open video"}
-                                <ExternalLink className="h-3 w-3" />
+                              <a href={(prospect as any).target_video_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1 break-words">
+                                <span className="line-clamp-2">{(prospect as any).target_video_caption ? `"${(prospect as any).target_video_caption}"` : "Open video"}</span>
+                                <ExternalLink className="h-3 w-3 shrink-0" />
                               </a>
                             </div>
                           )}
                           <p className="text-xs text-muted-foreground">💬 Suggested comment:</p>
-                          <p className="text-sm">{(prospect as any).suggested_comment}</p>
+                          <p className="text-sm break-words whitespace-pre-wrap">{(prospect as any).suggested_comment}</p>
                         </div>
                       )}
+
+                      {/* Action buttons - stacked on mobile */}
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        {(prospect as any).suggested_comment && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() => handleCopy(prospect.id, (prospect as any).suggested_comment)}
+                          >
+                            {copiedId === prospect.id ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
+                            Copy Comment
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={() => handleFollowBack(prospect)}
+                          disabled={convertingId === prospect.id}
+                        >
+                          {convertingId === prospect.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                          ) : (
+                            <UserCheck className="h-3 w-3 mr-1" />
+                          )}
+                          Follow Back
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-destructive hover:text-destructive ml-auto"
+                          onClick={() => handleDelete(prospect.id)}
+                          disabled={deletingId === prospect.id}
+                        >
+                          {deletingId === prospect.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                        </Button>
+                      </div>
                     </Card>
                   ))}
                 </div>
@@ -437,7 +440,7 @@ The goal is to start a genuine conversation that leads to them wanting to know m
             {/* Converted - followed back, chat opened */}
             {convertedProspects.length > 0 && (
               <div>
-                <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
+                <h3 className="text-sm font-medium text-muted-foreground mb-2 flex items-center gap-2">
                   <MessageSquare className="h-4 w-4" />
                   Followed Back — Active Chats ({convertedProspects.length})
                 </h3>
@@ -448,12 +451,12 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                       className="p-3 cursor-pointer hover:bg-muted/50 transition-colors"
                       onClick={() => navigate(`/chats/${prospect.id}`)}
                     >
-                      <div className="flex items-center gap-3">
-                        <Avatar className="h-10 w-10 shrink-0">
+                      <div className="flex items-center gap-2.5">
+                        <Avatar className="h-9 w-9 shrink-0">
                           {prospect.profile_pic_url ? (
                             <AvatarImage src={prospect.profile_pic_url} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = "none"; }} />
                           ) : null}
-                          <AvatarFallback className="bg-primary/10 text-primary text-sm">
+                          <AvatarFallback className="bg-primary/10 text-primary text-xs">
                             {getInitials(prospect.name)}
                           </AvatarFallback>
                         </Avatar>
@@ -461,18 +464,18 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                           <p className="font-medium text-sm truncate">{prospect.name}</p>
                           <p className="text-xs text-muted-foreground truncate">{prospect.detected_interests || "Active conversation"}</p>
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <Badge variant="outline" className="text-xs">
-                            <UserCheck className="h-3 w-3 mr-1" />Followed Back
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Badge variant="outline" className="text-[10px] px-1.5 hidden sm:flex">
+                            <UserCheck className="h-3 w-3 mr-0.5" />Followed
                           </Badge>
                           <Button
                             size="icon"
                             variant="ghost"
-                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            className="h-7 w-7 text-destructive hover:text-destructive"
                             onClick={(e) => { e.stopPropagation(); handleDelete(prospect.id); }}
                             disabled={deletingId === prospect.id}
                           >
-                            {deletingId === prospect.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            {deletingId === prospect.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                           </Button>
                         </div>
                       </div>
