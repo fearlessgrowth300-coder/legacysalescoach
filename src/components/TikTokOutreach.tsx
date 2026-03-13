@@ -459,11 +459,11 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                   {convertedProspects.map((prospect) => (
                     <Card
                       key={prospect.id}
-                      className="p-3 cursor-pointer hover:bg-muted/50 transition-colors"
+                      className="p-3 cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden"
                       onClick={() => navigate(`/chats/${prospect.id}`)}
                     >
-                      <div className="flex items-center gap-2.5">
-                        <Avatar className="h-9 w-9 shrink-0">
+                      <div className="flex items-start gap-2.5">
+                        <Avatar className="h-9 w-9 shrink-0 mt-0.5">
                           {prospect.profile_pic_url ? (
                             <AvatarImage src={prospect.profile_pic_url} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = "none"; }} />
                           ) : null}
@@ -472,24 +472,26 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm truncate">{prospect.name}</p>
-                          <p className="text-xs text-muted-foreground truncate">{prospect.detected_interests || "Active conversation"}</p>
+                          <p className="font-medium text-sm break-words">{prospect.name}</p>
+                          <p className="text-xs text-muted-foreground break-words line-clamp-2 mt-0.5">
+                            {prospect.detected_interests || "Active conversation"}
+                          </p>
                         </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <Badge variant="outline" className="text-[10px] px-1.5 hidden sm:flex">
-                            <UserCheck className="h-3 w-3 mr-0.5" />Followed
-                          </Badge>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
-                            onClick={(e) => { e.stopPropagation(); handleDelete(prospect.id); }}
-                            disabled={deletingId === prospect.id}
-                          >
-                            {deletingId === prospect.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Trash2 className="h-3 w-3 mr-1" />}
-                            Delete
-                          </Button>
-                        </div>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <Badge variant="outline" className="text-[10px] px-1.5 shrink-0">
+                          <UserCheck className="h-3 w-3 mr-0.5" />Followed
+                        </Badge>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive shrink-0"
+                          onClick={(e) => { e.stopPropagation(); handleDelete(prospect.id); }}
+                          disabled={deletingId === prospect.id}
+                        >
+                          {deletingId === prospect.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Trash2 className="h-3 w-3 mr-1" />}
+                          Delete
+                        </Button>
                       </div>
                     </Card>
                   ))}
