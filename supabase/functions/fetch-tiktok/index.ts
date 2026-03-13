@@ -153,6 +153,8 @@ Analyze ALL their videos above. Pick the ONE video that:
 - Has content that gives you the best opening to write a compelling, niche-specific comment
 - Allows you to naturally position yourself as someone they'd want to connect with
 
+IMPORTANT: Note the video's position number from the list above (1 = most recent, 2 = second most recent, etc.) and include its exact likes and views count so the user can find it on TikTok.
+
 STEP 2 — WRITE A KILLER COMMENT WITH CTA:
 The comment MUST include:
 1. **Specific Reference**: Mention something SPECIFIC from that video's caption or content
