@@ -314,7 +314,7 @@ The goal is to start a genuine conversation that leads to them wanting to know m
       queryClient.invalidateQueries({ queryKey: ["prospects"] });
 
       setTimeout(() => {
-        handleDialogChange(false);
+        handleChatDialogChange(false);
         navigate(`/chats/${prospect.id}`);
       }, 1500);
     } catch (e: any) {
