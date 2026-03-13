@@ -38,6 +38,7 @@ export default function Chats() {
   const selectedProspectId = prospectId || null;
 
   const [platformTab, setPlatformTab] = useState<"instagram" | "tiktok">("instagram");
+  const [autoSwitchedForProspect, setAutoSwitchedForProspect] = useState<string | null>(null);
   const [newProspectOpen, setNewProspectOpen] = useState(false);
   const [chatType, setChatType] = useState<"new" | "existing" | "reengage" | null>(null);
   const [newProspectName, setNewProspectName] = useState("");
