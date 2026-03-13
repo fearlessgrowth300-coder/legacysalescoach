@@ -1225,13 +1225,27 @@ export default function AiChat() {
                           {(msg.status === "read" || (!msg.status && msg.id)) && <CheckCheck className="h-3 w-3 text-blue-400" />}
                         </span>
                       )}
-                      <div className={`absolute ${msg.role === "user" ? "-left-16" : "-right-16"} top-1/2 -translate-y-1/2 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity`}>
+                      {/* Desktop: hover icons outside bubble */}
+                      <div className={`absolute ${msg.role === "user" ? "-left-16" : "-right-16"} top-1/2 -translate-y-1/2 hidden md:flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity`}>
                         {msg.role === "user" && !isLoading && (
                           <button onClick={() => startEdit(i)} title="Edit"><Pencil className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" /></button>
                         )}
                         {msg.role === "assistant" && msg.id && (
                           <button onClick={() => togglePin(i)} title={msg.is_pinned ? "Unpin" : "Pin"}>
                             {msg.is_pinned ? <PinOff className="h-3.5 w-3.5 text-primary" /> : <Pin className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />}
+                          </button>
+                        )}
+                      </div>
+                      {/* Mobile: inline icons below message */}
+                      <div className="flex md:hidden gap-2 mt-1">
+                        {msg.role === "user" && !isLoading && (
+                          <button onClick={() => startEdit(i)} title="Edit" className="flex items-center gap-1 text-[10px] text-muted-foreground active:text-foreground">
+                            <Pencil className="h-3 w-3" /> Edit
+                          </button>
+                        )}
+                        {msg.role === "assistant" && msg.id && (
+                          <button onClick={() => togglePin(i)} title={msg.is_pinned ? "Unpin" : "Pin"} className="flex items-center gap-1 text-[10px] text-muted-foreground active:text-foreground">
+                            {msg.is_pinned ? <><PinOff className="h-3 w-3 text-primary" /> Unpin</> : <><Pin className="h-3 w-3" /> Pin</>}
                           </button>
                         )}
                       </div>
