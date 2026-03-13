@@ -142,6 +142,17 @@ export default function Chats() {
   });
   const selectedProspect = selectedProspectData || prospects?.find((p) => p.id === selectedProspectId);
 
+  // Auto-switch to instagram tab when viewing a TikTok prospect chat (so chat UI shows, not TikTok outreach)
+  useEffect(() => {
+    if (selectedProspectId && selectedProspect && (selectedProspect as any).platform === "tiktok" && platformTab === "tiktok") {
+      // Only auto-switch once per prospect to avoid loops
+      if (autoSwitchedForProspect !== selectedProspectId) {
+        setPlatformTab("instagram");
+        setAutoSwitchedForProspect(selectedProspectId);
+      }
+    }
+  }, [selectedProspectId, selectedProspect, platformTab, autoSwitchedForProspect]);
+
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
