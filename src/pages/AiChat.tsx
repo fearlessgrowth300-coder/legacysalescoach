@@ -141,6 +141,8 @@ export default function AiChat() {
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [editingMsgIdx, setEditingMsgIdx] = useState<number | null>(null);
+  const [longPressedMsgIdx, setLongPressedMsgIdx] = useState<number | null>(null);
+  const msgLongPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [editText, setEditText] = useState("");
   const [attachedImages, setAttachedImages] = useState<Blob[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
@@ -1163,7 +1165,17 @@ export default function AiChat() {
 
             {messages.map((msg, i) => (
               <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[85%] rounded-lg p-3 relative group overflow-hidden break-words ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                <div
+                  className={`max-w-[85%] rounded-lg p-3 relative group overflow-hidden break-words ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                  onTouchStart={() => {
+                    msgLongPressTimer.current = setTimeout(() => {
+                      if (navigator.vibrate) navigator.vibrate(50);
+                      setLongPressedMsgIdx(prev => prev === i ? null : i);
+                    }, 500);
+                  }}
+                  onTouchEnd={() => { if (msgLongPressTimer.current) clearTimeout(msgLongPressTimer.current); }}
+                  onTouchMove={() => { if (msgLongPressTimer.current) clearTimeout(msgLongPressTimer.current); }}
+                >
                   {(msg.image_urls || (msg.image_url ? [msg.image_url] : [])).length > 0 && (
                     <div className="flex flex-wrap gap-1 mb-2">
                       {(msg.image_urls || [msg.image_url!]).map((url, imgIdx) => (
@@ -1236,19 +1248,21 @@ export default function AiChat() {
                           </button>
                         )}
                       </div>
-                      {/* Mobile: inline icons below message */}
-                      <div className="flex md:hidden gap-2 mt-1">
-                        {msg.role === "user" && !isLoading && (
-                          <button onClick={() => startEdit(i)} title="Edit" className="flex items-center gap-1 text-[10px] text-muted-foreground active:text-foreground">
-                            <Pencil className="h-3 w-3" /> Edit
-                          </button>
-                        )}
-                        {msg.role === "assistant" && msg.id && (
-                          <button onClick={() => togglePin(i)} title={msg.is_pinned ? "Unpin" : "Pin"} className="flex items-center gap-1 text-[10px] text-muted-foreground active:text-foreground">
-                            {msg.is_pinned ? <><PinOff className="h-3 w-3 text-primary" /> Unpin</> : <><Pin className="h-3 w-3" /> Pin</>}
-                          </button>
-                        )}
-                      </div>
+                      {/* Mobile: long-press icons */}
+                      {longPressedMsgIdx === i && (
+                        <div className="flex md:hidden gap-2 mt-1 animate-in fade-in duration-150">
+                          {msg.role === "user" && !isLoading && (
+                            <button onClick={() => { startEdit(i); setLongPressedMsgIdx(null); }} className="flex items-center gap-1 text-[10px] text-muted-foreground active:text-foreground">
+                              <Pencil className="h-3 w-3" /> Edit
+                            </button>
+                          )}
+                          {msg.role === "assistant" && msg.id && (
+                            <button onClick={() => { togglePin(i); setLongPressedMsgIdx(null); }} className="flex items-center gap-1 text-[10px] text-muted-foreground active:text-foreground">
+                              {msg.is_pinned ? <><PinOff className="h-3 w-3 text-primary" /> Unpin</> : <><Pin className="h-3 w-3" /> Pin</>}
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {msg.is_pinned && <span className="text-[10px] text-primary flex items-center gap-0.5 mt-1"><Pin className="h-2.5 w-2.5" /> Pinned</span>}
                     </>
                   )}
