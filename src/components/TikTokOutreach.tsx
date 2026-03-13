@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,11 +11,13 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import {
   Plus, Copy, Check, Loader2, ExternalLink, UserCheck, MessageSquare, Sparkles,
-  Eye, Heart, MessageCircle, Share2, Video, Trash2
+  Eye, Heart, MessageCircle, Share2, Video, Trash2, Upload, Image, X, Ghost
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+
+type Suggestion = { id: number; type: string; text: string; whyThisWorks?: string };
 
 type TikTokProspect = {
   id: string;
