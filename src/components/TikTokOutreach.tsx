@@ -57,18 +57,25 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
   const [firstMessageSuggestions, setFirstMessageSuggestions] = useState<Suggestion[]>([]);
   const bulkScreenshotInputRef = useRef<HTMLInputElement>(null);
 
-  const handleDialogChange = (open: boolean) => {
-    setAddOpen(open);
-    if (!open) {
-      setChatType(null);
-      setTiktokUrl("");
-      setProspectName("");
-      setAnalysisResult(null);
-      setScreenshotFiles([]);
-      setScreenshotPreviews([]);
-      setUploadStep("info");
-      setFirstMessageSuggestions([]);
-    }
+  const resetState = () => {
+    setChatType(null);
+    setTiktokUrl("");
+    setProspectName("");
+    setAnalysisResult(null);
+    setScreenshotFiles([]);
+    setScreenshotPreviews([]);
+    setUploadStep("info");
+    setFirstMessageSuggestions([]);
+  };
+
+  const handleAnalyzeDialogChange = (open: boolean) => {
+    setAnalyzeOpen(open);
+    if (!open) resetState();
+  };
+
+  const handleChatDialogChange = (open: boolean) => {
+    setChatOpen(open);
+    if (!open) resetState();
   };
 
   const handleBulkScreenshotSelect = (files: FileList | null) => {
