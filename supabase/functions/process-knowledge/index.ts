@@ -31,7 +31,7 @@ async function extractStructuredLearnings(content: string, sourceName: string, a
         messages: [
           {
             role: "system",
-            content: `You are an expert knowledge analyst. Extract 8-12 clear, actionable learnings from this training material.
+            content: `You are an expert knowledge analyst. Extract ALL meaningful, actionable learnings from this training material.
 
 IMPORTANT: This content may NOT be about sales. It could be about leadership, life experiences, motivation, team building, networking, mindset, family, health, or ANY topic. Detect what the content is actually about.
 
@@ -54,7 +54,9 @@ CATEGORY DETECTION RULES:
 - A life experiences video should NOT get "Objection Handling" — it should get "Life Experiences" or "Personal Growth"
 
 RULES:
-- Extract EXACTLY 8-12 learnings, no more, no less
+- Extract ALL meaningful learnings — as many as the content supports
+- Scale proportionally: short video clip = 5-10, full lecture = 15-25, long book/PDF = 30-50+
+- Do NOT cap or limit the number — if there are 40 distinct learnings, extract all 40
 - Each principle must be ACTIONABLE and SPECIFIC
 - "how_to_apply" must give a concrete example of what to say/do
 - Focus on techniques, specific phrases, frameworks, and word-for-word scripts when available
