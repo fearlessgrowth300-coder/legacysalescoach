@@ -185,6 +185,11 @@ export default function AiChat() {
 
   // Brain status
   const [brainStats, setBrainStats] = useState<{ videos: number; pdfs: number; conversations: number }>({ videos: 0, pdfs: 0, conversations: 0 });
+  const [retrievalStats, setRetrievalStats] = useState<{
+    chunksRetrieved: number; uniqueSources: number; sources: string[];
+    semanticMatches: number; staticMatches: number; dedupSavings: number; embeddingUsed: boolean;
+  } | null>(null);
+  const [showRetrievalStats, setShowRetrievalStats] = useState(false);
 
   const scrollToBottom = () => {
     setTimeout(() => {
