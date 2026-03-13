@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
+import { generateEmbedding } from "../_shared/embeddings.ts";
+import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,6 +11,28 @@ const corsHeaders = {
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 
+function diversityRerank(items: any[], sourceKey: string, maxPerSource: number) {
+  const bySource: Record<string, any[]> = {};
+  for (const item of items) {
+    const key = item[sourceKey] || "unknown";
+    if (!bySource[key]) bySource[key] = [];
+    bySource[key].push(item);
+  }
+  const result: any[] = [];
+  let round = 0;
+  let added = true;
+  while (added) {
+    added = false;
+    for (const key of Object.keys(bySource)) {
+      const startIdx = round * maxPerSource;
+      const batch = bySource[key].slice(startIdx, startIdx + maxPerSource);
+      if (batch.length > 0) { result.push(...batch); added = true; }
+    }
+    round++;
+  }
+  return result;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -16,7 +40,6 @@ serve(async (req) => {
 
   try {
     const { question, mode, voiceId: customVoiceId, frame } = await req.json();
-    // mode: "full" (default) or "blast" (15-second tactical)
     
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -42,39 +65,91 @@ serve(async (req) => {
       });
     }
 
-    // Fetch brain data in parallel
+    // Generate embedding + fetch data in parallel
+    const embeddingPromise = generateEmbedding(question.substring(0, 1000));
+
     const [
       { data: kbItems },
-      { data: principles },
-      { data: chunks },
+      { count: totalUploads },
+      { data: allPrinciples },
+      { data: allChunks },
+      queryEmbedding,
     ] = await Promise.all([
       supabase.from("knowledge_base_items").select("id, title, type").eq("user_id", user.id),
+      supabase.from("knowledge_base_items").select("id", { count: "exact", head: true }).eq("user_id", user.id),
       supabase.from("sales_brain")
-        .select("principle_name, what_i_learned, how_to_apply, source_name, category, source_id")
+        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_id, relevance_score")
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false, nullsFirst: false })
-        .limit(60),
+        .order("relevance_score", { ascending: false, nullsFirst: false }),
       supabase.from("knowledge_chunks")
-        .select("content, category, source_id")
+        .select("id, content, category, source_id, relevance_score")
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false })
-        .limit(40),
+        .order("relevance_score", { ascending: false }),
+      embeddingPromise,
     ]);
+
+    // Semantic RPC calls if embedding succeeded
+    let semanticPrinciples: any[] = [];
+    let semanticChunks: any[] = [];
+    if (queryEmbedding) {
+      const embeddingStr = JSON.stringify(queryEmbedding);
+      const [semP, semC] = await Promise.all([
+        supabase.rpc("match_sales_brain", {
+          query_embedding: embeddingStr, match_count: 40, match_threshold: 0.3, p_user_id: user.id,
+        }),
+        supabase.rpc("match_knowledge_chunks", {
+          query_embedding: embeddingStr, match_count: 40, match_threshold: 0.3, p_user_id: user.id,
+        }),
+      ]);
+      semanticPrinciples = (semP.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+      semanticChunks = (semC.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+    }
+
+    // Merge, deduplicate, diversity re-rank
+    const mergedPrinciples = mergeByIdPriority(semanticPrinciples, allPrinciples || []);
+    const mergedChunks = mergeByIdPriority(semanticChunks, allChunks || []);
+    const dedupedPrinciples = deduplicatePrinciples(mergedPrinciples, "relevance_score");
+    const dedupedChunks = deduplicateChunks(mergedChunks, "relevance_score");
+    const diversePrinciples = diversityRerank(dedupedPrinciples, "source_id", 5);
+    const diverseChunks = diversityRerank(dedupedChunks, "source_id", 4);
+
+    // Title-match boost
+    let titleBoostPrinciples: any[] = [];
+    if (question.length > 3) {
+      const matchedSourceIds = new Set(
+        (kbItems || []).filter((k: any) => question.toLowerCase().includes(k.title.toLowerCase())).map((k: any) => k.id)
+      );
+      if (matchedSourceIds.size > 0) {
+        titleBoostPrinciples = diversePrinciples.filter((p: any) => matchedSourceIds.has(p.source_id));
+      }
+    }
+    const seenIds = new Set(titleBoostPrinciples.map((p: any) => p.id));
+    const finalPrinciples = [...titleBoostPrinciples];
+    for (const p of diversePrinciples) {
+      if (!seenIds.has(p.id)) { finalPrinciples.push(p); seenIds.add(p.id); }
+    }
+
+    // Dynamic caps scaling with library size
+    const uploadCount = totalUploads || 0;
+    const principlesCap = Math.min(Math.max(60, uploadCount * 15), 300);
+    const chunksCap = Math.min(Math.max(40, uploadCount * 10), 250);
+    const principles = finalPrinciples.slice(0, principlesCap);
+    const chunks = diverseChunks.slice(0, chunksCap);
 
     const kbMap: Record<string, string> = {};
     (kbItems || []).forEach((k: any) => { kbMap[k.id] = k.title; });
 
-    const hasKnowledge = (principles?.length || 0) + (chunks?.length || 0) > 0;
+    const hasKnowledge = principles.length + chunks.length > 0;
 
     // Build context
     const brainContext = hasKnowledge ? [
-      "PRINCIPLES:\n" + (principles || []).slice(0, 30).map((p: any) => {
+      "PRINCIPLES:\n" + principles.slice(0, principlesCap).map((p: any) => {
         const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : p.source_name;
         return `• ${p.principle_name} (${src}): ${p.what_i_learned}`;
       }).join("\n"),
-      "CHUNKS:\n" + (chunks || []).slice(0, 20).map((c: any) => {
+      "CHUNKS:\n" + chunks.slice(0, chunksCap).map((c: any) => {
         const src = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : "upload";
         return `[${src}] ${c.content.substring(0, 300)}`;
       }).join("\n"),
@@ -86,8 +161,8 @@ serve(async (req) => {
 
     const isBlast = mode === "blast";
     const systemPrompt = isBlast
-      ? `You are \"The Brain\" voice assistant in BLAST mode. Give a punchy, 2-3 sentence tactical answer ONLY from uploaded knowledge.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`
-      : `You are \"The Brain\" voice assistant. Give concise, strategic advice ONLY from uploaded knowledge. Keep answers under 4 sentences for voice clarity. Reference source titles naturally.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`;
+      ? `You are "The Brain" voice assistant in BLAST mode. Give a punchy, 2-3 sentence tactical answer ONLY from uploaded knowledge.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`
+      : `You are "The Brain" voice assistant. Give concise, strategic advice ONLY from uploaded knowledge. Keep answers under 4 sentences for voice clarity. Reference source titles naturally.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`;
 
     // Build user message — support vision frame
     const userContent: any = frame
@@ -116,7 +191,7 @@ serve(async (req) => {
     const textReply = aiData.choices?.[0]?.message?.content || "0 - Nothing in my knowledge base yet.";
 
     // Generate TTS via ElevenLabs
-    const voiceId = customVoiceId || "JBFqnCBsd6RMkjVDRZzb"; // User-selected or George default
+    const voiceId = customVoiceId || "JBFqnCBsd6RMkjVDRZzb";
     const ttsResponse = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
       {
@@ -141,7 +216,6 @@ serve(async (req) => {
 
     if (!ttsResponse.ok) {
       console.error("ElevenLabs TTS error:", ttsResponse.status);
-      // Return text-only if TTS fails
       return new Response(JSON.stringify({ text: textReply, audio: null }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
