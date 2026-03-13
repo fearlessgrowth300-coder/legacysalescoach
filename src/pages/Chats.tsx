@@ -690,9 +690,26 @@ export default function Chats() {
   }
 
   if (platformTab === "tiktok") {
+    if (isMobile) {
+      return (
+        <div className="flex flex-col h-[calc(100dvh-4rem)]">
+          <div className="p-4 border-b">
+            <Tabs value={platformTab} onValueChange={(v) => setPlatformTab(v as any)}>
+              <TabsList className="w-full">
+                <TabsTrigger value="instagram" className="flex-1 text-xs gap-1"><MessageSquare className="h-3 w-3" />Instagram</TabsTrigger>
+                <TabsTrigger value="tiktok" className="flex-1 text-xs gap-1"><Video className="h-3 w-3" />TikTok</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <TikTokOutreach workspaceId={activeWorkspace!.id} />
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex h-[calc(100dvh-4rem)]">
-        <div className={`${isMobile ? "w-full" : "w-80"} border-r flex flex-col bg-muted/30`}>
+        <div className="w-80 border-r flex flex-col bg-muted/30">
           <div className="p-4 border-b">
             <Tabs value={platformTab} onValueChange={(v) => setPlatformTab(v as any)}>
               <TabsList className="w-full">
@@ -702,7 +719,7 @@ export default function Chats() {
             </Tabs>
           </div>
         </div>
-        <div className={`flex-1 ${isMobile ? "hidden" : ""}`}>
+        <div className="flex-1">
           <TikTokOutreach workspaceId={activeWorkspace!.id} />
         </div>
       </div>
