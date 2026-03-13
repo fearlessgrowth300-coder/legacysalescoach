@@ -219,6 +219,16 @@ Return JSON: { "comment": "the full comment with CTA", "strategy": "why this com
 
     // Update prospect if prospectId provided
     if (prospectId) {
+      // Build enriched caption with stats for easy identification
+      const statsPrefix = [
+        profileData.postNumber ? `Post #${profileData.postNumber} from top` : null,
+        profileData.videoLikes ? `❤️ ${profileData.videoLikes.toLocaleString()} likes` : null,
+        profileData.videoViews ? `👁 ${profileData.videoViews.toLocaleString()} views` : null,
+      ].filter(Boolean).join(" · ");
+      const enrichedCaption = statsPrefix 
+        ? `${statsPrefix}\n${profileData.targetVideoCaption || ""}`
+        : profileData.targetVideoCaption || null;
+
       await supabase.from("prospects").update({
         detected_interests: profileData.bio?.substring(0, 300) || null,
         profile_pic_url: profileData.profilePicUrl || null,
@@ -226,7 +236,7 @@ Return JSON: { "comment": "the full comment with CTA", "strategy": "why this com
         name: profileData.nickname || profileData.username,
         suggested_comment: suggestedComment || null,
         target_video_url: profileData.targetVideoUrl || null,
-        target_video_caption: profileData.targetVideoCaption || null,
+        target_video_caption: enrichedCaption,
       }).eq("id", prospectId);
     }
 

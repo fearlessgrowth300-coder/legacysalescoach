@@ -269,9 +269,16 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                     <Card className="border-primary/30 bg-primary/5 overflow-hidden">
                       <CardContent className="p-3 space-y-2">
                         {/* Target Video */}
-                        {(analysisResult.targetVideoCaption || analysisResult.targetVideoUrl) && (
+                         {(analysisResult.targetVideoCaption || analysisResult.targetVideoUrl) && (
                           <div className="bg-muted/40 rounded p-2">
                             <p className="text-xs font-medium text-muted-foreground mb-1">🎯 Comment on this specific post:</p>
+                            {analysisResult.postNumber && (
+                              <div className="flex flex-wrap gap-2 mb-1">
+                                <Badge variant="secondary" className="text-[10px]">Post #{analysisResult.postNumber} from top</Badge>
+                                {analysisResult.videoLikes && <Badge variant="outline" className="text-[10px]">❤️ {Number(analysisResult.videoLikes).toLocaleString()} likes</Badge>}
+                                {analysisResult.videoViews && <Badge variant="outline" className="text-[10px]">👁 {Number(analysisResult.videoViews).toLocaleString()} views</Badge>}
+                              </div>
+                            )}
                             <p className="text-sm italic break-words">"{analysisResult.targetVideoCaption}"</p>
                             {analysisResult.targetVideoUrl && (
                               <a href={analysisResult.targetVideoUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1 hover:underline">
