@@ -843,9 +843,12 @@ export default function AiChat() {
         messages: aiMessages,
         onDelta: upsert,
         onBrainMeta: (meta) => {
-          if (meta.brainRetrieval?.chunksRetrieved > 0) {
-            const sources = (meta.brainRetrieval.sources || []).join(", ") || "brain";
-            toast.info(`🧠 Pulled from brain: ${meta.brainRetrieval.chunksRetrieved} chunks | Sources: ${sources}`, { duration: 4000 });
+          if (meta.brainRetrieval) {
+            setRetrievalStats(meta.brainRetrieval);
+            if (meta.brainRetrieval.chunksRetrieved > 0) {
+              const sources = (meta.brainRetrieval.sources || []).join(", ") || "brain";
+              toast.info(`🧠 Pulled from brain: ${meta.brainRetrieval.chunksRetrieved} chunks | Sources: ${sources}`, { duration: 4000 });
+            }
           }
         },
         onDone: async () => {
