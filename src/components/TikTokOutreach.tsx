@@ -223,8 +223,207 @@ The goal is to start a genuine conversation that leads to them wanting to know m
     }
   };
 
+  // Process existing TikTok conversation (screenshot upload + OCR)
+  const processExistingTikTok = async (mode: "continue" | "reengage") => {
+    if (!user || !workspaceId || screenshotFiles.length === 0) return;
+    setUploadStep("processing");
+
+    try {
+      const stage = mode === "reengage" ? "ghosted" : "continuing";
+      const { data: prospect, error: pErr } = await supabase
+        .from("prospects")
+        .insert({
+          user_id: user.id,
+          workspace_id: workspaceId,
+          name: prospectName,
+          tiktok_url: tiktokUrl || null,
+          platform: "tiktok" as any,
+          reply_mode: workspace?.default_reply_mode || "friend",
+          conversation_stage: stage,
+          has_followed_back: true,
+        } as any)
+        .select()
+        .single();
+      if (pErr) throw pErr;
+
+      // If TikTok URL provided, fetch profile
+      if (tiktokUrl) {
+        try {
+          const { data: ttData } = await supabase.functions.invoke("fetch-tiktok", {
+            body: { url: tiktokUrl, workspaceId, prospectId: prospect.id },
+          });
+          if (ttData && !ttData.error) {
+            // Profile data is saved by the edge function
+          }
+        } catch (e) { console.error("TikTok fetch error:", e); }
+      }
+
+      // Upload and OCR all screenshots
+      const allTexts: string[] = [];
+      for (let i = 0; i < screenshotFiles.length; i++) {
+        const file = screenshotFiles[i];
+        const filePath = `${user.id}/${Date.now()}-${i}-${file.name}`;
+        const { error: uploadError } = await supabase.storage.from("chat-screenshots").upload(filePath, file);
+        if (uploadError) { console.error("Upload error:", uploadError); continue; }
+        const { data, error } = await supabase.functions.invoke("ocr-screenshot", { body: { filePath } });
+        if (!error && data?.text) {
+          allTexts.push(`[Screenshot ${i + 1}]:\n${data.text}`);
+        }
+      }
+
+      const fullConversation = allTexts.join("\n\n");
+
+      if (fullConversation) {
+        await supabase.from("chat_messages").insert({
+          user_id: user.id,
+          prospect_id: prospect.id,
+          content: fullConversation,
+          direction: "inbound",
+          thread_type: "friend",
+        });
+      }
+
+      const suggestMode = mode === "reengage" ? "reengage" : "continue";
+      const suggestMessage = mode === "reengage" && !fullConversation
+        ? "The prospect has ghosted me on TikTok DMs. They saw my last message but didn't reply."
+        : fullConversation;
+
+      const { data: suggestData, error: suggestError } = await supabase.functions.invoke("chat-suggest", {
+        body: {
+          prospectId: prospect.id,
+          message: suggestMessage,
+          threadType: "friend",
+          mode: suggestMode,
+        },
+      });
+
+      if (!suggestError && suggestData?.suggestions) {
+        setFirstMessageSuggestions(suggestData.suggestions);
+      }
+
+      setUploadStep("done");
+      queryClient.invalidateQueries({ queryKey: ["tiktok-prospects"] });
+      queryClient.invalidateQueries({ queryKey: ["prospects"] });
+
+      setTimeout(() => {
+        handleDialogChange(false);
+        navigate(`/chats/${prospect.id}`);
+      }, 1500);
+    } catch (e: any) {
+      console.error("Process error:", e);
+      toast.error(e.message || "Failed to process screenshots");
+      setUploadStep("upload");
+    }
+  };
+
   const pendingProspects = tiktokProspects?.filter(p => !(p as any).has_followed_back) || [];
   const convertedProspects = tiktokProspects?.filter(p => (p as any).has_followed_back) || [];
+
+  // Shared screenshot upload UI
+  const renderScreenshotUpload = (mode: "continue" | "reengage") => (
+    <>
+      {uploadStep === "info" && (
+        <>
+          {mode === "reengage" && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3">
+              <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200 text-sm">
+                <Ghost className="h-4 w-4" />
+                <span className="font-medium">Re-engagement Mode</span>
+              </div>
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">Upload your TikTok DM screenshots. The AI will analyze why they stopped replying and craft a message to bring them back.</p>
+            </div>
+          )}
+          <div>
+            <Label>Prospect Name *</Label>
+            <Input value={prospectName} onChange={(e) => setProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
+          </div>
+          <div>
+            <Label>TikTok URL</Label>
+            <Input value={tiktokUrl} onChange={(e) => setTiktokUrl(e.target.value)} placeholder="https://tiktok.com/@username" />
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setUploadStep("upload")} disabled={!prospectName.trim()}>Next: Upload Screenshots</Button>
+          </DialogFooter>
+        </>
+      )}
+
+      {uploadStep === "upload" && (
+        <>
+          <div className="text-center p-6 border-2 border-dashed rounded-lg">
+            <input
+              ref={bulkScreenshotInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => { handleBulkScreenshotSelect(e.target.files); e.target.value = ""; }}
+            />
+            {mode === "reengage" ? (
+              <Ghost className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+            ) : (
+              <Upload className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+            )}
+            <p className="text-sm font-medium mb-1">
+              {mode === "reengage" ? "Upload the full conversation" : "Upload TikTok DM screenshots"}
+            </p>
+            <p className="text-xs text-muted-foreground mb-3">
+              {mode === "reengage"
+                ? "Include your last sent message that was seen but not replied to."
+                : "Upload all your DM screenshots in order. The AI will read and learn from them."}
+            </p>
+            <Button variant="outline" onClick={() => bulkScreenshotInputRef.current?.click()}>
+              <Image className="h-4 w-4 mr-2" />Add Screenshots
+            </Button>
+          </div>
+
+          {screenshotPreviews.length > 0 && (
+            <div>
+              <p className="text-sm font-medium mb-2">{screenshotFiles.length} screenshot(s) selected</p>
+              <div className="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto">
+                {screenshotPreviews.map((preview, i) => (
+                  <div key={i} className="relative group">
+                    <img src={preview} alt={`Screenshot ${i + 1}`} className="rounded border h-20 w-full object-cover" />
+                    <button
+                      onClick={() => removeScreenshot(i)}
+                      className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button onClick={() => processExistingTikTok(mode)} disabled={screenshotFiles.length === 0}>
+              <Sparkles className="h-4 w-4 mr-2" />Process & Get AI Suggestions
+            </Button>
+          </DialogFooter>
+        </>
+      )}
+
+      {uploadStep === "processing" && (
+        <div className="text-center py-8 space-y-4">
+          <Loader2 className="h-10 w-10 animate-spin mx-auto text-primary" />
+          <div>
+            <p className="font-medium">Processing screenshots...</p>
+            <p className="text-sm text-muted-foreground">Reading your conversation and analyzing context</p>
+          </div>
+        </div>
+      )}
+
+      {uploadStep === "done" && (
+        <div className="text-center py-8 space-y-4">
+          <Check className="h-10 w-10 mx-auto text-green-500" />
+          <div>
+            <p className="font-medium">Conversation analyzed!</p>
+            <p className="text-sm text-muted-foreground">Redirecting to your chat with AI suggestions...</p>
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -239,15 +438,15 @@ The goal is to start a genuine conversation that leads to them wanting to know m
             Analyze profiles, comment to trigger follows, then DM
           </p>
         </div>
-        <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setAnalysisResult(null); setTiktokUrl(""); } }}>
+        <Dialog open={addOpen} onOpenChange={handleDialogChange}>
           <DialogTrigger asChild>
-            <Button size="sm" className="shrink-0"><Plus className="h-4 w-4 mr-1" />Add TikTok</Button>
+            <Button size="sm" className="shrink-0"><Plus className="h-4 w-4 mr-1" />+ New</Button>
           </DialogTrigger>
           <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg mx-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Video className="h-5 w-5 shrink-0" />
-                Analyze TikTok Profile
+                {!chatType ? "New Chat" : chatType === "new" ? "Analyze TikTok Profile" : chatType === "existing" ? "Existing TikTok Chat" : "Re-engage TikTok"}
               </DialogTitle>
             </DialogHeader>
 
