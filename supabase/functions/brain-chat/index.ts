@@ -167,30 +167,56 @@ serve(async (req) => {
 
     const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 
-    // ─── PARALLEL DATA FETCH: all queries at once ───
+    // ─── PARALLEL DATA FETCH + SEMANTIC SEARCH ───
+    // Generate embedding in parallel with DB queries
+    const embeddingPromise = generateEmbedding(queryText.substring(0, 1000));
+
     const [
       { count: totalUploads },
       { data: kbItems },
       { data: allPrinciplesRaw },
       { data: allChunksRaw },
+      queryEmbedding,
     ] = await Promise.all([
       supabase.from("knowledge_base_items").select("id", { count: "exact", head: true }).eq("user_id", user.id),
       supabase.from("knowledge_base_items").select("id, title, url, type").eq("user_id", user.id),
-      // Fetch ALL principles (no limit) — diversity reranking will handle distribution
       supabase.from("sales_brain")
         .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, relevance_score, source_id")
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false, nullsFirst: false }),
-      // Fetch ALL chunks (no limit) — diversity reranking will handle distribution
       supabase.from("knowledge_chunks")
         .select("id, content, category, source_type, source_id")
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false }),
+      embeddingPromise,
     ]);
+
+    // ─── SEMANTIC RPC CALLS (if embedding succeeded) ───
+    let semanticPrinciples: any[] = [];
+    let semanticChunks: any[] = [];
+    if (queryEmbedding) {
+      const embeddingStr = JSON.stringify(queryEmbedding);
+      const [semPrinciples, semChunks] = await Promise.all([
+        supabaseAdmin.rpc("match_sales_brain", {
+          query_embedding: embeddingStr,
+          match_count: 60,
+          match_threshold: 0.3,
+          p_user_id: user.id,
+        }),
+        supabaseAdmin.rpc("match_knowledge_chunks", {
+          query_embedding: embeddingStr,
+          match_count: 60,
+          match_threshold: 0.3,
+          p_user_id: user.id,
+        }),
+      ]);
+      semanticPrinciples = (semPrinciples.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+      semanticChunks = (semChunks.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+    }
 
     // KB title map for source name resolution
     const kbMap: Record<string, { title: string; url: string | null; type: string }> = {};
