@@ -1148,8 +1148,12 @@ export default function Chats() {
                 <h3 className="font-medium text-sm md:text-base truncate">{selectedProspect?.name}</h3>
                 <p className="text-xs text-muted-foreground truncate">
                   {isMobile
-                    ? ((selectedProspect as any)?.instagram_username ? `@${(selectedProspect as any).instagram_username}` : "Paste a message")
-                    : (selectedProspect?.detected_interests || "Paste a message to get AI suggestions")
+                    ? ((selectedProspect as any)?.platform === "tiktok"
+                      ? ((selectedProspect as any)?.tiktok_url ? `TikTok · ${(selectedProspect as any).tiktok_url.replace("https://tiktok.com/", "")}` : "TikTok prospect")
+                      : ((selectedProspect as any)?.instagram_username ? `@${(selectedProspect as any).instagram_username}` : "Paste a message"))
+                    : ((selectedProspect as any)?.platform === "tiktok"
+                      ? `TikTok prospect · ${selectedProspect?.detected_interests || "Paste a message to get AI suggestions"}`
+                      : (selectedProspect?.detected_interests || "Paste a message to get AI suggestions"))
                   }
                 </p>
               </div>
