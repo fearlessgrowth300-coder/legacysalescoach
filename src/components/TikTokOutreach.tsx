@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,11 +11,13 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import {
   Plus, Copy, Check, Loader2, ExternalLink, UserCheck, MessageSquare, Sparkles,
-  Eye, Heart, MessageCircle, Share2, Video, Trash2
+  Eye, Heart, MessageCircle, Share2, Video, Trash2, Upload, Image, X, Ghost
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+
+type Suggestion = { id: number; type: string; text: string; whyThisWorks?: string };
 
 type TikTokProspect = {
   id: string;
@@ -37,13 +39,50 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
   const queryClient = useQueryClient();
 
   const [addOpen, setAddOpen] = useState(false);
+  const [chatType, setChatType] = useState<"new" | "existing" | "reengage" | null>(null);
   const [tiktokUrl, setTiktokUrl] = useState("");
+  const [prospectName, setProspectName] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
 
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Screenshot upload state for existing/reengage flows
+  const [screenshotFiles, setScreenshotFiles] = useState<File[]>([]);
+  const [screenshotPreviews, setScreenshotPreviews] = useState<string[]>([]);
+  const [uploadStep, setUploadStep] = useState<"info" | "upload" | "processing" | "done">("info");
+  const [firstMessageSuggestions, setFirstMessageSuggestions] = useState<Suggestion[]>([]);
+  const bulkScreenshotInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDialogChange = (open: boolean) => {
+    setAddOpen(open);
+    if (!open) {
+      setChatType(null);
+      setTiktokUrl("");
+      setProspectName("");
+      setAnalysisResult(null);
+      setScreenshotFiles([]);
+      setScreenshotPreviews([]);
+      setUploadStep("info");
+      setFirstMessageSuggestions([]);
+    }
+  };
+
+  const handleBulkScreenshotSelect = (files: FileList | null) => {
+    if (!files) return;
+    const newFiles = Array.from(files);
+    const newPreviews = newFiles.map((f) => URL.createObjectURL(f));
+    setScreenshotFiles((prev) => [...prev, ...newFiles]);
+    setScreenshotPreviews((prev) => [...prev, ...newPreviews]);
+  };
+
+  const removeScreenshot = (index: number) => {
+    URL.revokeObjectURL(screenshotPreviews[index]);
+    setScreenshotFiles((prev) => prev.filter((_, i) => i !== index));
+    setScreenshotPreviews((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const { data: workspace } = useQuery({
     queryKey: ["workspace", workspaceId],
@@ -184,8 +223,207 @@ The goal is to start a genuine conversation that leads to them wanting to know m
     }
   };
 
+  // Process existing TikTok conversation (screenshot upload + OCR)
+  const processExistingTikTok = async (mode: "continue" | "reengage") => {
+    if (!user || !workspaceId || screenshotFiles.length === 0) return;
+    setUploadStep("processing");
+
+    try {
+      const stage = mode === "reengage" ? "ghosted" : "continuing";
+      const { data: prospect, error: pErr } = await supabase
+        .from("prospects")
+        .insert({
+          user_id: user.id,
+          workspace_id: workspaceId,
+          name: prospectName,
+          tiktok_url: tiktokUrl || null,
+          platform: "tiktok" as any,
+          reply_mode: workspace?.default_reply_mode || "friend",
+          conversation_stage: stage,
+          has_followed_back: true,
+        } as any)
+        .select()
+        .single();
+      if (pErr) throw pErr;
+
+      // If TikTok URL provided, fetch profile
+      if (tiktokUrl) {
+        try {
+          const { data: ttData } = await supabase.functions.invoke("fetch-tiktok", {
+            body: { url: tiktokUrl, workspaceId, prospectId: prospect.id },
+          });
+          if (ttData && !ttData.error) {
+            // Profile data is saved by the edge function
+          }
+        } catch (e) { console.error("TikTok fetch error:", e); }
+      }
+
+      // Upload and OCR all screenshots
+      const allTexts: string[] = [];
+      for (let i = 0; i < screenshotFiles.length; i++) {
+        const file = screenshotFiles[i];
+        const filePath = `${user.id}/${Date.now()}-${i}-${file.name}`;
+        const { error: uploadError } = await supabase.storage.from("chat-screenshots").upload(filePath, file);
+        if (uploadError) { console.error("Upload error:", uploadError); continue; }
+        const { data, error } = await supabase.functions.invoke("ocr-screenshot", { body: { filePath } });
+        if (!error && data?.text) {
+          allTexts.push(`[Screenshot ${i + 1}]:\n${data.text}`);
+        }
+      }
+
+      const fullConversation = allTexts.join("\n\n");
+
+      if (fullConversation) {
+        await supabase.from("chat_messages").insert({
+          user_id: user.id,
+          prospect_id: prospect.id,
+          content: fullConversation,
+          direction: "inbound",
+          thread_type: "friend",
+        });
+      }
+
+      const suggestMode = mode === "reengage" ? "reengage" : "continue";
+      const suggestMessage = mode === "reengage" && !fullConversation
+        ? "The prospect has ghosted me on TikTok DMs. They saw my last message but didn't reply."
+        : fullConversation;
+
+      const { data: suggestData, error: suggestError } = await supabase.functions.invoke("chat-suggest", {
+        body: {
+          prospectId: prospect.id,
+          message: suggestMessage,
+          threadType: "friend",
+          mode: suggestMode,
+        },
+      });
+
+      if (!suggestError && suggestData?.suggestions) {
+        setFirstMessageSuggestions(suggestData.suggestions);
+      }
+
+      setUploadStep("done");
+      queryClient.invalidateQueries({ queryKey: ["tiktok-prospects"] });
+      queryClient.invalidateQueries({ queryKey: ["prospects"] });
+
+      setTimeout(() => {
+        handleDialogChange(false);
+        navigate(`/chats/${prospect.id}`);
+      }, 1500);
+    } catch (e: any) {
+      console.error("Process error:", e);
+      toast.error(e.message || "Failed to process screenshots");
+      setUploadStep("upload");
+    }
+  };
+
   const pendingProspects = tiktokProspects?.filter(p => !(p as any).has_followed_back) || [];
   const convertedProspects = tiktokProspects?.filter(p => (p as any).has_followed_back) || [];
+
+  // Shared screenshot upload UI
+  const renderScreenshotUpload = (mode: "continue" | "reengage") => (
+    <>
+      {uploadStep === "info" && (
+        <>
+          {mode === "reengage" && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3">
+              <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200 text-sm">
+                <Ghost className="h-4 w-4" />
+                <span className="font-medium">Re-engagement Mode</span>
+              </div>
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">Upload your TikTok DM screenshots. The AI will analyze why they stopped replying and craft a message to bring them back.</p>
+            </div>
+          )}
+          <div>
+            <Label>Prospect Name *</Label>
+            <Input value={prospectName} onChange={(e) => setProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
+          </div>
+          <div>
+            <Label>TikTok URL</Label>
+            <Input value={tiktokUrl} onChange={(e) => setTiktokUrl(e.target.value)} placeholder="https://tiktok.com/@username" />
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setUploadStep("upload")} disabled={!prospectName.trim()}>Next: Upload Screenshots</Button>
+          </DialogFooter>
+        </>
+      )}
+
+      {uploadStep === "upload" && (
+        <>
+          <div className="text-center p-6 border-2 border-dashed rounded-lg">
+            <input
+              ref={bulkScreenshotInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => { handleBulkScreenshotSelect(e.target.files); e.target.value = ""; }}
+            />
+            {mode === "reengage" ? (
+              <Ghost className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+            ) : (
+              <Upload className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+            )}
+            <p className="text-sm font-medium mb-1">
+              {mode === "reengage" ? "Upload the full conversation" : "Upload TikTok DM screenshots"}
+            </p>
+            <p className="text-xs text-muted-foreground mb-3">
+              {mode === "reengage"
+                ? "Include your last sent message that was seen but not replied to."
+                : "Upload all your DM screenshots in order. The AI will read and learn from them."}
+            </p>
+            <Button variant="outline" onClick={() => bulkScreenshotInputRef.current?.click()}>
+              <Image className="h-4 w-4 mr-2" />Add Screenshots
+            </Button>
+          </div>
+
+          {screenshotPreviews.length > 0 && (
+            <div>
+              <p className="text-sm font-medium mb-2">{screenshotFiles.length} screenshot(s) selected</p>
+              <div className="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto">
+                {screenshotPreviews.map((preview, i) => (
+                  <div key={i} className="relative group">
+                    <img src={preview} alt={`Screenshot ${i + 1}`} className="rounded border h-20 w-full object-cover" />
+                    <button
+                      onClick={() => removeScreenshot(i)}
+                      className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button onClick={() => processExistingTikTok(mode)} disabled={screenshotFiles.length === 0}>
+              <Sparkles className="h-4 w-4 mr-2" />Process & Get AI Suggestions
+            </Button>
+          </DialogFooter>
+        </>
+      )}
+
+      {uploadStep === "processing" && (
+        <div className="text-center py-8 space-y-4">
+          <Loader2 className="h-10 w-10 animate-spin mx-auto text-primary" />
+          <div>
+            <p className="font-medium">Processing screenshots...</p>
+            <p className="text-sm text-muted-foreground">Reading your conversation and analyzing context</p>
+          </div>
+        </div>
+      )}
+
+      {uploadStep === "done" && (
+        <div className="text-center py-8 space-y-4">
+          <Check className="h-10 w-10 mx-auto text-green-500" />
+          <div>
+            <p className="font-medium">Conversation analyzed!</p>
+            <p className="text-sm text-muted-foreground">Redirecting to your chat with AI suggestions...</p>
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -200,143 +438,186 @@ The goal is to start a genuine conversation that leads to them wanting to know m
             Analyze profiles, comment to trigger follows, then DM
           </p>
         </div>
-        <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setAnalysisResult(null); setTiktokUrl(""); } }}>
+        <Dialog open={addOpen} onOpenChange={handleDialogChange}>
           <DialogTrigger asChild>
-            <Button size="sm" className="shrink-0"><Plus className="h-4 w-4 mr-1" />Add TikTok</Button>
+            <Button size="sm" className="shrink-0"><Plus className="h-4 w-4 mr-1" />+ New</Button>
           </DialogTrigger>
           <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg mx-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Video className="h-5 w-5 shrink-0" />
-                Analyze TikTok Profile
+                {!chatType ? "New Chat" : chatType === "new" ? "Analyze TikTok Profile" : chatType === "existing" ? "Existing TikTok Chat" : "Re-engage TikTok"}
               </DialogTitle>
             </DialogHeader>
 
-            <div className="space-y-4 py-2">
-              <div>
-                <Label>TikTok Profile URL *</Label>
-                <Input
-                  value={tiktokUrl}
-                  onChange={(e) => setTiktokUrl(e.target.value)}
-                  placeholder="https://tiktok.com/@username"
-                  disabled={isAnalyzing}
-                  className="text-sm"
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  We'll analyze their profile, bio, and recent posts to generate a strategic comment
-                </p>
-              </div>
-
-              {isAnalyzing && (
-                <div className="flex items-center gap-3 text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
-                  <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
-                  <div>
-                    <p className="font-medium">Analyzing TikTok profile...</p>
-                    <p className="text-xs">Scraping bio, posts, and generating a strategic comment</p>
-                  </div>
+            {/* Step 1: Choose chat type */}
+            {!chatType && (
+              <div className="space-y-3 py-4">
+                <p className="text-sm text-muted-foreground">What type of conversation is this?</p>
+                <div className="grid grid-cols-3 gap-3">
+                  <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("new")}>
+                    <div className="text-center space-y-2">
+                      <MessageSquare className="h-8 w-8 mx-auto text-primary" />
+                      <h4 className="font-medium text-sm">New Prospect</h4>
+                      <p className="text-xs text-muted-foreground">Cold outreach — start fresh</p>
+                    </div>
+                  </Card>
+                  <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("existing")}>
+                    <div className="text-center space-y-2">
+                      <Upload className="h-8 w-8 mx-auto text-primary" />
+                      <h4 className="font-medium text-sm">Existing Chat</h4>
+                      <p className="text-xs text-muted-foreground">Upload DMs to continue</p>
+                    </div>
+                  </Card>
+                  <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("reengage")}>
+                    <div className="text-center space-y-2">
+                      <Ghost className="h-8 w-8 mx-auto text-primary" />
+                      <h4 className="font-medium text-sm">Re-engage</h4>
+                      <p className="text-xs text-muted-foreground">They saw but didn't reply</p>
+                    </div>
+                  </Card>
                 </div>
-              )}
+              </div>
+            )}
 
-              {analysisResult && (
-                <div className="space-y-3">
-                  {/* Profile Info */}
-                  <div className="flex items-center gap-3 bg-muted/50 rounded-lg p-3">
-                    {analysisResult.profilePicUrl && (
-                      <Avatar className="h-10 w-10 shrink-0">
-                        <AvatarImage src={analysisResult.profilePicUrl} referrerPolicy="no-referrer" />
-                        <AvatarFallback>{getInitials(analysisResult.nickname || analysisResult.username)}</AvatarFallback>
-                      </Avatar>
+            {/* New Prospect Flow (analyze profile) */}
+            {chatType === "new" && (
+              <div className="space-y-4 py-2">
+                <Button variant="ghost" size="sm" onClick={() => setChatType(null)} className="mb-2">← Back</Button>
+                <div>
+                  <Label>TikTok Profile URL *</Label>
+                  <Input
+                    value={tiktokUrl}
+                    onChange={(e) => setTiktokUrl(e.target.value)}
+                    placeholder="https://tiktok.com/@username"
+                    disabled={isAnalyzing}
+                    className="text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    We'll analyze their profile, bio, and recent posts to generate a strategic comment
+                  </p>
+                </div>
+
+                {isAnalyzing && (
+                  <div className="flex items-center gap-3 text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
+                    <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
+                    <div>
+                      <p className="font-medium">Analyzing TikTok profile...</p>
+                      <p className="text-xs">Scraping bio, posts, and generating a strategic comment</p>
+                    </div>
+                  </div>
+                )}
+
+                {analysisResult && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 bg-muted/50 rounded-lg p-3">
+                      {analysisResult.profilePicUrl && (
+                        <Avatar className="h-10 w-10 shrink-0">
+                          <AvatarImage src={analysisResult.profilePicUrl} referrerPolicy="no-referrer" />
+                          <AvatarFallback>{getInitials(analysisResult.nickname || analysisResult.username)}</AvatarFallback>
+                        </Avatar>
+                      )}
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm truncate">@{analysisResult.username}</p>
+                        <p className="text-xs text-muted-foreground truncate">{analysisResult.nickname}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {analysisResult.followersCount?.toLocaleString()} followers · {analysisResult.videoCount} videos
+                        </p>
+                      </div>
+                    </div>
+
+                    {analysisResult.bio && (
+                      <div className="text-sm bg-muted/30 rounded p-2">
+                        <p className="text-xs font-medium text-muted-foreground mb-1">Bio</p>
+                        <p className="break-words whitespace-pre-wrap">{analysisResult.bio}</p>
+                      </div>
                     )}
-                    <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">@{analysisResult.username}</p>
-                      <p className="text-xs text-muted-foreground truncate">{analysisResult.nickname}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {analysisResult.followersCount?.toLocaleString()} followers · {analysisResult.videoCount} videos
-                      </p>
-                    </div>
-                  </div>
 
-                  {/* Bio */}
-                  {analysisResult.bio && (
-                    <div className="text-sm bg-muted/30 rounded p-2">
-                      <p className="text-xs font-medium text-muted-foreground mb-1">Bio</p>
-                      <p className="break-words whitespace-pre-wrap">{analysisResult.bio}</p>
-                    </div>
-                  )}
+                    {analysisResult.suggestedComment && (
+                      <Card className="border-primary/30 bg-primary/5 overflow-hidden">
+                        <CardContent className="p-3 space-y-2">
+                          {(analysisResult.targetVideoCaption || analysisResult.targetVideoUrl) && (
+                            <div className="bg-muted/40 rounded p-2">
+                              <p className="text-xs font-medium text-muted-foreground mb-1">🎯 Comment on this specific post:</p>
+                              {analysisResult.postNumber && (
+                                <div className="flex flex-wrap gap-2 mb-1">
+                                  <Badge variant="secondary" className="text-[10px]">Post #{analysisResult.postNumber} from top</Badge>
+                                  {analysisResult.videoLikes && <Badge variant="outline" className="text-[10px]">❤️ {Number(analysisResult.videoLikes).toLocaleString()} likes</Badge>}
+                                  {analysisResult.videoViews && <Badge variant="outline" className="text-[10px]">👁 {Number(analysisResult.videoViews).toLocaleString()} views</Badge>}
+                                </div>
+                              )}
+                              <p className="text-sm italic break-words">"{analysisResult.targetVideoCaption}"</p>
+                              {analysisResult.targetVideoUrl && (
+                                <a href={analysisResult.targetVideoUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1 hover:underline">
+                                  <ExternalLink className="h-3 w-3 shrink-0" />
+                                  <span>Open this video on TikTok</span>
+                                </a>
+                              )}
+                              {analysisResult.whyThisVideo && (
+                                <p className="text-xs text-muted-foreground mt-1 break-words">📌 {analysisResult.whyThisVideo}</p>
+                              )}
+                            </div>
+                          )}
 
-                  {/* Suggested Comment */}
-                  {analysisResult.suggestedComment && (
-                    <Card className="border-primary/30 bg-primary/5 overflow-hidden">
-                      <CardContent className="p-3 space-y-2">
-                        {/* Target Video */}
-                         {(analysisResult.targetVideoCaption || analysisResult.targetVideoUrl) && (
-                          <div className="bg-muted/40 rounded p-2">
-                            <p className="text-xs font-medium text-muted-foreground mb-1">🎯 Comment on this specific post:</p>
-                            {analysisResult.postNumber && (
-                              <div className="flex flex-wrap gap-2 mb-1">
-                                <Badge variant="secondary" className="text-[10px]">Post #{analysisResult.postNumber} from top</Badge>
-                                {analysisResult.videoLikes && <Badge variant="outline" className="text-[10px]">❤️ {Number(analysisResult.videoLikes).toLocaleString()} likes</Badge>}
-                                {analysisResult.videoViews && <Badge variant="outline" className="text-[10px]">👁 {Number(analysisResult.videoViews).toLocaleString()} views</Badge>}
-                              </div>
-                            )}
-                            <p className="text-sm italic break-words">"{analysisResult.targetVideoCaption}"</p>
-                            {analysisResult.targetVideoUrl && (
-                              <a href={analysisResult.targetVideoUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1 hover:underline">
-                                <ExternalLink className="h-3 w-3 shrink-0" />
-                                <span>Open this video on TikTok</span>
-                              </a>
-                            )}
-                            {analysisResult.whyThisVideo && (
-                              <p className="text-xs text-muted-foreground mt-1 break-words">📌 {analysisResult.whyThisVideo}</p>
-                            )}
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-medium flex items-center gap-1.5">
+                              <Sparkles className="h-4 w-4 text-primary shrink-0" />
+                              Suggested Comment
+                            </p>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 shrink-0 text-xs"
+                              onClick={() => handleCopy("dialog", analysisResult.suggestedComment)}
+                            >
+                              {copiedId === "dialog" ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
+                              Copy
+                            </Button>
                           </div>
-                        )}
+                          <p className="text-sm break-words whitespace-pre-wrap">{analysisResult.suggestedComment}</p>
+                          {analysisResult.commentStrategy && (
+                            <p className="text-xs text-muted-foreground break-words">💡 {analysisResult.commentStrategy}</p>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
 
-                        {/* Comment Header + Copy */}
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-medium flex items-center gap-1.5">
-                            <Sparkles className="h-4 w-4 text-primary shrink-0" />
-                            Suggested Comment
-                          </p>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 shrink-0 text-xs"
-                            onClick={() => handleCopy("dialog", analysisResult.suggestedComment)}
-                          >
-                            {copiedId === "dialog" ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
-                            Copy
-                          </Button>
-                        </div>
-                        <p className="text-sm break-words whitespace-pre-wrap">{analysisResult.suggestedComment}</p>
-                        {analysisResult.commentStrategy && (
-                          <p className="text-xs text-muted-foreground break-words">💡 {analysisResult.commentStrategy}</p>
-                        )}
-                      </CardContent>
-                    </Card>
-                  )}
+                    <div className="flex items-center gap-2 text-green-600 text-sm">
+                      <Check className="h-4 w-4 shrink-0" />
+                      <span>Added to your TikTok outreach list!</span>
+                    </div>
 
-                  <div className="flex items-center gap-2 text-green-600 text-sm">
-                    <Check className="h-4 w-4 shrink-0" />
-                    <span>Added to your TikTok outreach list!</span>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => handleDialogChange(false)}>Done</Button>
+                    </DialogFooter>
                   </div>
+                )}
 
+                {!analysisResult && (
                   <DialogFooter>
-                    <Button variant="outline" onClick={() => { setAddOpen(false); setTiktokUrl(""); setAnalysisResult(null); }}>
-                      Done
+                    <Button onClick={handleAnalyze} disabled={!tiktokUrl.trim() || isAnalyzing} className="w-full sm:w-auto">
+                      {isAnalyzing ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Analyzing...</> : "Analyze & Generate Comment"}
                     </Button>
                   </DialogFooter>
-                </div>
-              )}
+                )}
+              </div>
+            )}
 
-              {!analysisResult && (
-                <DialogFooter>
-                  <Button onClick={handleAnalyze} disabled={!tiktokUrl.trim() || isAnalyzing} className="w-full sm:w-auto">
-                    {isAnalyzing ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Analyzing...</> : "Analyze & Generate Comment"}
-                  </Button>
-                </DialogFooter>
-              )}
-            </div>
+            {/* Existing Chat Flow */}
+            {chatType === "existing" && (
+              <div className="space-y-4 py-4">
+                <Button variant="ghost" size="sm" onClick={() => { setChatType(null); setUploadStep("info"); setScreenshotFiles([]); setScreenshotPreviews([]); }} className="mb-2">← Back</Button>
+                {renderScreenshotUpload("continue")}
+              </div>
+            )}
+
+            {/* Re-engage Flow */}
+            {chatType === "reengage" && (
+              <div className="space-y-4 py-4">
+                <Button variant="ghost" size="sm" onClick={() => { setChatType(null); setUploadStep("info"); setScreenshotFiles([]); setScreenshotPreviews([]); }} className="mb-2">← Back</Button>
+                {renderScreenshotUpload("reengage")}
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       </div>
