@@ -39,13 +39,50 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
   const queryClient = useQueryClient();
 
   const [addOpen, setAddOpen] = useState(false);
+  const [chatType, setChatType] = useState<"new" | "existing" | "reengage" | null>(null);
   const [tiktokUrl, setTiktokUrl] = useState("");
+  const [prospectName, setProspectName] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
 
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Screenshot upload state for existing/reengage flows
+  const [screenshotFiles, setScreenshotFiles] = useState<File[]>([]);
+  const [screenshotPreviews, setScreenshotPreviews] = useState<string[]>([]);
+  const [uploadStep, setUploadStep] = useState<"info" | "upload" | "processing" | "done">("info");
+  const [firstMessageSuggestions, setFirstMessageSuggestions] = useState<Suggestion[]>([]);
+  const bulkScreenshotInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDialogChange = (open: boolean) => {
+    setAddOpen(open);
+    if (!open) {
+      setChatType(null);
+      setTiktokUrl("");
+      setProspectName("");
+      setAnalysisResult(null);
+      setScreenshotFiles([]);
+      setScreenshotPreviews([]);
+      setUploadStep("info");
+      setFirstMessageSuggestions([]);
+    }
+  };
+
+  const handleBulkScreenshotSelect = (files: FileList | null) => {
+    if (!files) return;
+    const newFiles = Array.from(files);
+    const newPreviews = newFiles.map((f) => URL.createObjectURL(f));
+    setScreenshotFiles((prev) => [...prev, ...newFiles]);
+    setScreenshotPreviews((prev) => [...prev, ...newPreviews]);
+  };
+
+  const removeScreenshot = (index: number) => {
+    URL.revokeObjectURL(screenshotPreviews[index]);
+    setScreenshotFiles((prev) => prev.filter((_, i) => i !== index));
+    setScreenshotPreviews((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const { data: workspace } = useQuery({
     queryKey: ["workspace", workspaceId],
