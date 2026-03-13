@@ -1300,6 +1300,52 @@ export default function AiChat() {
                 ))}
               </div>
             )}
+
+            {/* Retrieval Stats Panel */}
+            {retrievalStats && !isLoading && messages.length > 0 && (
+              <div className="pt-3">
+                <button
+                  onClick={() => setShowRetrievalStats(!showRetrievalStats)}
+                  className="flex items-center gap-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Zap className="h-3 w-3" />
+                  <span>Brain Stats: {retrievalStats.chunksRetrieved} chunks from {retrievalStats.uniqueSources} sources</span>
+                  <span className="text-[9px]">{showRetrievalStats ? "▲" : "▼"}</span>
+                </button>
+                {showRetrievalStats && (
+                  <div className="mt-2 rounded-lg border bg-muted/50 p-3 text-xs space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-0.5">
+                        <p className="text-muted-foreground text-[10px] uppercase tracking-wider">Semantic Matches</p>
+                        <p className="font-semibold text-foreground">{retrievalStats.semanticMatches || 0}</p>
+                      </div>
+                      <div className="space-y-0.5">
+                        <p className="text-muted-foreground text-[10px] uppercase tracking-wider">Static Matches</p>
+                        <p className="font-semibold text-foreground">{retrievalStats.staticMatches || 0}</p>
+                      </div>
+                      <div className="space-y-0.5">
+                        <p className="text-muted-foreground text-[10px] uppercase tracking-wider">Unique Sources</p>
+                        <p className="font-semibold text-foreground">{retrievalStats.uniqueSources}</p>
+                      </div>
+                      <div className="space-y-0.5">
+                        <p className="text-muted-foreground text-[10px] uppercase tracking-wider">Dedup Savings</p>
+                        <p className="font-semibold text-foreground">{retrievalStats.dedupSavings || 0} removed</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 pt-1 border-t border-border/50">
+                      <Badge variant={retrievalStats.embeddingUsed ? "default" : "secondary"} className="text-[10px] h-5">
+                        {retrievalStats.embeddingUsed ? "✓ Vector Search" : "✗ Static Only"}
+                      </Badge>
+                      {retrievalStats.sources.length > 0 && (
+                        <span className="text-[10px] text-muted-foreground truncate">
+                          {retrievalStats.sources.join(", ")}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </ScrollArea>
 
