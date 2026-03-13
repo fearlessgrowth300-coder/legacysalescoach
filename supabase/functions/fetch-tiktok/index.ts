@@ -206,6 +206,9 @@ Return JSON: { "comment": "the full comment with CTA", "strategy": "why this com
                   profileData.targetVideoCaption = parsed.targetVideoCaption || "";
                   profileData.targetVideoUrl = parsed.targetVideoUrl || "";
                   profileData.whyThisVideo = parsed.whyThisVideo || "";
+                  profileData.postNumber = parsed.postNumber || null;
+                  profileData.videoLikes = parsed.videoLikes || null;
+                  profileData.videoViews = parsed.videoViews || null;
                 }
               } catch { suggestedComment = aiContent.substring(0, 300); }
             }
