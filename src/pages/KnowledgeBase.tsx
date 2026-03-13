@@ -866,19 +866,34 @@ export default function KnowledgeBase() {
                     </div>
                   )}
                   {item.status === "ready" && itemChunks.length > 0 && (
-                    <div className="mt-3 pt-3 border-t">
+                    <div
+                      className="mt-3 pt-3 border-t cursor-pointer hover:bg-accent/50 rounded-b-lg transition-colors -mx-3 -mb-3 sm:-mx-6 sm:-mb-4 px-3 pb-3 sm:px-6 sm:pb-4"
+                      onClick={() => {
+                        const itemLearnings = allBrainLearnings?.filter(l => l.source_id === item.id) || [];
+                        if (itemLearnings.length > 0) {
+                          setSelectedItemId(item.id);
+                          showLearnings(itemLearnings, item.title);
+                        } else {
+                          // Fallback to chunks if no brain learnings
+                          toast.info("No structured learnings found for this item — showing raw chunks.");
+                        }
+                      }}
+                    >
                       <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                        <Sparkles className="h-3 w-3" /> Learned {itemChunks.length} insights:
+                        <Sparkles className="h-3 w-3" /> Learned {(() => {
+                          const brainCount = allBrainLearnings?.filter(l => l.source_id === item.id).length || 0;
+                          return brainCount > 0 ? brainCount : itemChunks.length;
+                        })()} insights · <span className="text-primary underline underline-offset-2">View all</span>
                       </p>
                       <div className="space-y-1">
-                        {itemChunks.slice(0, 5).map((chunk) => (
+                        {itemChunks.slice(0, 3).map((chunk) => (
                           <div key={chunk.id} className="flex items-start gap-2">
                             <Badge variant="secondary" className="text-[10px] shrink-0 mt-0.5">{chunk.category.replace(/_/g, " ")}</Badge>
                             <p className="text-xs text-muted-foreground line-clamp-1">{chunk.content}</p>
                           </div>
                         ))}
-                        {itemChunks.length > 5 && (
-                          <p className="text-xs text-muted-foreground">+ {itemChunks.length - 5} more insights</p>
+                        {itemChunks.length > 3 && (
+                          <p className="text-xs text-primary font-medium">+ {itemChunks.length - 3} more insights →</p>
                         )}
                       </div>
                     </div>

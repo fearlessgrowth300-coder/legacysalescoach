@@ -363,10 +363,7 @@ async function extractPdfContent(filePath: string, supabase: any, itemId: string
     const fileSizeMB = arrayBuffer.byteLength / 1024 / 1024;
     console.log(`PDF file size: ${fileSizeMB.toFixed(2)} MB`);
 
-    if (arrayBuffer.byteLength > 25 * 1024 * 1024) {
-      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-      return "";
-    }
+    // No file size limit — let Gemini handle what it can
 
     // Convert PDF to base64 for Gemini
     const bytes = new Uint8Array(arrayBuffer);
