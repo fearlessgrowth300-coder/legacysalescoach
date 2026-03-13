@@ -149,8 +149,18 @@ The goal is to start a genuine conversation that leads to them wanting to know m
         },
       });
 
+      // Save the first suggestion to the prospect so the chat page can pick it up
+      if (suggestData?.suggestions?.length) {
+        const firstSuggestions = suggestData.suggestions;
+        // Store all suggestions as JSON in suggested_first_message for the chat to display
+        await supabase.from("prospects").update({
+          suggested_first_message: JSON.stringify(firstSuggestions),
+        }).eq("id", prospect.id);
+      }
+
       queryClient.invalidateQueries({ queryKey: ["tiktok-prospects"] });
-      toast.success("Opening chat with first message suggestions!");
+      queryClient.invalidateQueries({ queryKey: ["selected-prospect", prospect.id] });
+      toast.success("Opening chat with first message ready to copy!");
       navigate(`/chats/${prospect.id}`);
     } catch (e: any) {
       console.error("Follow back error:", e);
