@@ -1248,19 +1248,21 @@ export default function AiChat() {
                           </button>
                         )}
                       </div>
-                      {/* Mobile: inline icons below message */}
-                      <div className="flex md:hidden gap-2 mt-1">
-                        {msg.role === "user" && !isLoading && (
-                          <button onClick={() => startEdit(i)} title="Edit" className="flex items-center gap-1 text-[10px] text-muted-foreground active:text-foreground">
-                            <Pencil className="h-3 w-3" /> Edit
-                          </button>
-                        )}
-                        {msg.role === "assistant" && msg.id && (
-                          <button onClick={() => togglePin(i)} title={msg.is_pinned ? "Unpin" : "Pin"} className="flex items-center gap-1 text-[10px] text-muted-foreground active:text-foreground">
-                            {msg.is_pinned ? <><PinOff className="h-3 w-3 text-primary" /> Unpin</> : <><Pin className="h-3 w-3" /> Pin</>}
-                          </button>
-                        )}
-                      </div>
+                      {/* Mobile: long-press icons */}
+                      {longPressedMsgIdx === i && (
+                        <div className="flex md:hidden gap-2 mt-1 animate-in fade-in duration-150">
+                          {msg.role === "user" && !isLoading && (
+                            <button onClick={() => { startEdit(i); setLongPressedMsgIdx(null); }} className="flex items-center gap-1 text-[10px] text-muted-foreground active:text-foreground">
+                              <Pencil className="h-3 w-3" /> Edit
+                            </button>
+                          )}
+                          {msg.role === "assistant" && msg.id && (
+                            <button onClick={() => { togglePin(i); setLongPressedMsgIdx(null); }} className="flex items-center gap-1 text-[10px] text-muted-foreground active:text-foreground">
+                              {msg.is_pinned ? <><PinOff className="h-3 w-3 text-primary" /> Unpin</> : <><Pin className="h-3 w-3" /> Pin</>}
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {msg.is_pinned && <span className="text-[10px] text-primary flex items-center gap-0.5 mt-1"><Pin className="h-2.5 w-2.5" /> Pinned</span>}
                     </>
                   )}
