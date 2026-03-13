@@ -647,11 +647,16 @@ The goal is to start a genuine conversation that leads to them wanting to know m
             <Video className="h-12 w-12 text-muted-foreground/40 mb-4" />
             <h3 className="font-medium mb-1">No TikTok prospects yet</h3>
             <p className="text-sm text-muted-foreground mb-4">
-              Add a TikTok profile to analyze and get a strategic comment suggestion
+              Analyze a profile to get a comment suggestion, or start a new chat
             </p>
-            <Button size="sm" onClick={() => setAddOpen(true)}>
-              <Plus className="h-4 w-4 mr-1" />Add First Profile
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => setAnalyzeOpen(true)}>
+                <Eye className="h-4 w-4 mr-1" />Analyze Profile
+              </Button>
+              <Button size="sm" onClick={() => setChatOpen(true)}>
+                <Plus className="h-4 w-4 mr-1" />New Chat
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="p-3 space-y-5">
