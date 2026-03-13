@@ -128,6 +128,7 @@ export default function KnowledgeBase() {
   });
 
   const [viewAllLearningsOpen, setViewAllLearningsOpen] = useState(false);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
 
   const showLearnings = (learnings: any[], sourceName: string) => {
     setProcessedLearnings(learnings);
