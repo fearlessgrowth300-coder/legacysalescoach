@@ -227,12 +227,19 @@ serve(async (req) => {
       `  ${i + 1}. "${k.title}" (${k.type}${k.url ? `, URL: ${k.url}` : ""})`
     ).join("\n");
 
-    // ─── DIVERSITY RE-RANKING ───
-    // Principles: max 5 per source, then interleave
-    const diversePrinciples = diversityRerank(allPrinciplesRaw || [], "source_id", 5);
+    // ─── MERGE SEMANTIC + STATIC, DEDUPLICATE, DIVERSITY RE-RANK ───
 
-    // Chunks: max 4 per source, then interleave
-    const diverseChunks = diversityRerank(allChunksRaw || [], "source_id", 4);
+    // Merge semantic results (priority) with static results (fallback)
+    const mergedPrinciplesRaw = mergeByIdPriority(semanticPrinciples, allPrinciplesRaw || []);
+    const mergedChunksRaw = mergeByIdPriority(semanticChunks, allChunksRaw || []);
+
+    // Deduplicate near-identical content
+    const dedupedPrinciples = deduplicatePrinciples(mergedPrinciplesRaw, "relevance_score");
+    const dedupedChunks = deduplicateChunks(mergedChunksRaw, "relevance_score");
+
+    // Diversity re-ranking
+    const diversePrinciples = diversityRerank(dedupedPrinciples, "source_id", 5);
+    const diverseChunks = diversityRerank(dedupedChunks, "source_id", 4);
 
     // Title-match boost: if query mentions a source title, pull those to front
     let titleBoostPrinciples: any[] = [];
@@ -247,7 +254,7 @@ serve(async (req) => {
       }
     }
 
-    // Merge: title-matched first, then diverse remainder (deduplicated)
+    // Merge: title-matched first, then diverse remainder (deduplicated by ID)
     const seenIds = new Set(titleBoostPrinciples.map((p: any) => p.id));
     const finalPrinciples = [...titleBoostPrinciples];
     for (const p of diversePrinciples) {
