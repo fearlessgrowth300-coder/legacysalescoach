@@ -18,8 +18,9 @@ async function generateEmbedding(_text: string, _apiKey: string): Promise<null> 
 }
 
 // ===== STRUCTURED LEARNINGS EXTRACTION =====
-async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
+async function extractStructuredLearningsChunk(content: string, sourceName: string, apiKey: string, chunkIndex: number, totalChunks: number): Promise<any[]> {
   try {
+    const chunkLabel = totalChunks > 1 ? ` (Part ${chunkIndex + 1}/${totalChunks})` : "";
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -31,7 +32,7 @@ async function extractStructuredLearnings(content: string, sourceName: string, a
         messages: [
           {
             role: "system",
-            content: `You are an expert knowledge analyst. Extract ALL meaningful, actionable learnings from this training material.
+            content: `You are an expert knowledge analyst. Extract EVERY SINGLE meaningful, actionable learning from this training material. Leave NOTHING out.
 
 IMPORTANT: This content may NOT be about sales. It could be about leadership, life experiences, motivation, team building, networking, mindset, family, health, or ANY topic. Detect what the content is actually about.
 
@@ -51,25 +52,26 @@ CATEGORY DETECTION RULES:
 - If NONE of these fit, CREATE a new descriptive category name (e.g., "Parenting Wisdom", "Spiritual Growth", "Career Transitions")
 - Use Title Case for category names (e.g., "Team Leading" not "team_leading")
 - NEVER force sales categories onto non-sales content
-- A life experiences video should NOT get "Objection Handling" — it should get "Life Experiences" or "Personal Growth"
 
-RULES:
-- Extract ALL meaningful learnings — as many as the content supports
-- Scale proportionally: short video clip = 5-10, full lecture = 15-25, long book/PDF = 30-50+
-- Do NOT cap or limit the number — if there are 40 distinct learnings, extract all 40
+CRITICAL RULES:
+- There is NO LIMIT on how many learnings you can extract. Extract 5, 20, 50, 100+ — whatever the content warrants
+- Extract EVERY distinct idea, technique, phrase, framework, story lesson, mindset shift, and actionable tip
+- If a paragraph contains 3 separate ideas, that's 3 separate learnings
+- Specific word-for-word phrases and scripts = each one is a learning
+- Stories with a moral = extract the moral as a learning
+- Do NOT summarize or combine multiple ideas into one learning
 - Each principle must be ACTIONABLE and SPECIFIC
 - "how_to_apply" must give a concrete example of what to say/do
-- Focus on techniques, specific phrases, frameworks, and word-for-word scripts when available
 - Return ONLY the JSON array, no other text`,
           },
           {
             role: "user",
-            content: `Extract learnings from this material titled "${sourceName}":\n\n${content.substring(0, 40000)}`,
+            content: `Extract ALL learnings from this material titled "${sourceName}"${chunkLabel}:\n\n${content}`,
           },
         ],
         temperature: 0.3,
       }),
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(90000),
     });
 
     if (!response.ok) {
@@ -88,6 +90,40 @@ RULES:
     console.error("Structured learnings extraction failed:", e);
     return [];
   }
+}
+
+async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
+  // For long content, split into chunks and extract from each
+  const CHUNK_SIZE = 35000;
+  if (content.length <= CHUNK_SIZE) {
+    return extractStructuredLearningsChunk(content, sourceName, apiKey, 0, 1);
+  }
+
+  // Split at sentence boundaries
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < content.length) {
+    let end = start + CHUNK_SIZE;
+    if (end >= content.length) {
+      chunks.push(content.substring(start));
+      break;
+    }
+    const lastPeriod = content.lastIndexOf(". ", end);
+    const lastNewline = content.lastIndexOf("\n", end);
+    const breakPoint = Math.max(lastPeriod, lastNewline);
+    if (breakPoint > start + CHUNK_SIZE * 0.5) end = breakPoint + 1;
+    chunks.push(content.substring(start, end));
+    start = end;
+  }
+
+  console.log(`Splitting content into ${chunks.length} chunks for learning extraction`);
+  const allLearnings: any[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkLearnings = await extractStructuredLearningsChunk(chunks[i], sourceName, apiKey, i, chunks.length);
+    allLearnings.push(...chunkLearnings);
+    console.log(`Chunk ${i + 1}/${chunks.length}: extracted ${chunkLearnings.length} learnings`);
+  }
+  return allLearnings;
 }
 
 serve(async (req) => {
