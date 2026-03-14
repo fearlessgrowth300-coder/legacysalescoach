@@ -473,6 +473,10 @@ export default function Chats() {
             if (suggestData?.suggestions) {
               generatedSuggestions = suggestData.suggestions;
               setFirstMessageSuggestions(suggestData.suggestions);
+              // Persist to prospect so auto-load effect can recover after navigation
+              await supabase.from("prospects").update({
+                suggested_first_message: JSON.stringify(suggestData.suggestions),
+              }).eq("id", data.id);
             }
           }
         } catch (e) {
