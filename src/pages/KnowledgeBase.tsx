@@ -273,6 +273,37 @@ export default function KnowledgeBase() {
     },
   });
 
+  // Live learnings counter for processing items
+  const [processingCounts, setProcessingCounts] = useState<Record<string, { learnings: number; chunks: number }>>({});
+
+  useEffect(() => {
+    const processingItems = items?.filter(i => i.status === "processing") || [];
+    if (processingItems.length === 0) {
+      if (Object.keys(processingCounts).length > 0) setProcessingCounts({});
+      return;
+    }
+
+    const poll = async () => {
+      const ids = processingItems.map(i => i.id);
+      const [brainRes, chunkRes] = await Promise.all([
+        supabase.from("sales_brain").select("source_id").in("source_id", ids),
+        supabase.from("knowledge_chunks").select("source_id").in("source_id", ids),
+      ]);
+      const counts: Record<string, { learnings: number; chunks: number }> = {};
+      for (const id of ids) {
+        counts[id] = {
+          learnings: brainRes.data?.filter(r => r.source_id === id).length || 0,
+          chunks: chunkRes.data?.filter(r => r.source_id === id).length || 0,
+        };
+      }
+      setProcessingCounts(counts);
+    };
+
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => clearInterval(interval);
+  }, [items]);
+
   const startPolling = () => {
     const interval = setInterval(() => {
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
