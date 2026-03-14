@@ -153,9 +153,9 @@ export default function Chats() {
     }
   }, [selectedProspectId, selectedProspect, platformTab, autoSwitchedForProspect]);
 
-  // Auto-load first message suggestions for TikTok prospects that just followed back
+  // Auto-load first message suggestions for prospects with saved suggestions
   useEffect(() => {
-    if (selectedProspect && (selectedProspect as any).platform === "tiktok" && !messages?.length) {
+    if (selectedProspect && !messages?.length) {
       const savedFirst = (selectedProspect as any).suggested_first_message;
       if (savedFirst) {
         try {
@@ -165,7 +165,6 @@ export default function Chats() {
             return;
           }
         } catch {
-          // Not JSON, treat as plain text
           if (savedFirst.trim()) {
             setSuggestions([{ id: 1, type: "first_dm", text: savedFirst }]);
             return;
@@ -473,6 +472,10 @@ export default function Chats() {
             if (suggestData?.suggestions) {
               generatedSuggestions = suggestData.suggestions;
               setFirstMessageSuggestions(suggestData.suggestions);
+              // Persist to prospect so auto-load effect can recover after navigation
+              await supabase.from("prospects").update({
+                suggested_first_message: JSON.stringify(suggestData.suggestions),
+              }).eq("id", data.id);
             }
           }
         } catch (e) {
