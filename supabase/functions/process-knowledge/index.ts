@@ -212,7 +212,7 @@ CATEGORY DETECTION:
 - NEVER force sales categories onto non-sales content
 
 Return JSON array of objects with: { "category": "...", "content": "...", "triggerPhrases": "..." }
-Extract as many chunks as the content warrants — do NOT cap at a fixed number. Short content = 5-10, long content = 25-50+.
+There is NO LIMIT — extract every distinct insight the content contains. Short content = 5-10, medium = 15-30, long/dense content = 30-100+.
 Each chunk should be a standalone, actionable insight. 
 For books, extract specific techniques, frameworks, scripts, and word-for-word phrases when available.
 Make each chunk detailed enough to be useful on its own.`
