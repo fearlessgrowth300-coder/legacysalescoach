@@ -153,9 +153,9 @@ export default function Chats() {
     }
   }, [selectedProspectId, selectedProspect, platformTab, autoSwitchedForProspect]);
 
-  // Auto-load first message suggestions for TikTok prospects that just followed back
+  // Auto-load first message suggestions for prospects with saved suggestions
   useEffect(() => {
-    if (selectedProspect && (selectedProspect as any).platform === "tiktok" && !messages?.length) {
+    if (selectedProspect && !messages?.length) {
       const savedFirst = (selectedProspect as any).suggested_first_message;
       if (savedFirst) {
         try {
@@ -165,7 +165,6 @@ export default function Chats() {
             return;
           }
         } catch {
-          // Not JSON, treat as plain text
           if (savedFirst.trim()) {
             setSuggestions([{ id: 1, type: "first_dm", text: savedFirst }]);
             return;
