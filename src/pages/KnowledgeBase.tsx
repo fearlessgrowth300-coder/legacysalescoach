@@ -891,8 +891,25 @@ export default function KnowledgeBase() {
                     <div className="mt-3 pt-3 border-t">
                       <div className="flex items-center gap-2 mb-2">
                         <Loader2 className="h-3 w-3 animate-spin text-primary" />
-                        <p className="text-xs font-medium text-muted-foreground">Processing content — extracting knowledge...</p>
+                        <p className="text-xs font-medium text-muted-foreground">
+                          Processing content — extracting knowledge...
+                        </p>
                       </div>
+                      {processingCounts[item.id] && (processingCounts[item.id].learnings > 0 || processingCounts[item.id].chunks > 0) && (
+                        <div className="flex items-center gap-3 mb-2">
+                          {processingCounts[item.id].learnings > 0 && (
+                            <Badge variant="secondary" className="text-xs animate-pulse">
+                              <Lightbulb className="h-3 w-3 mr-1" />
+                              {processingCounts[item.id].learnings} learnings extracted
+                            </Badge>
+                          )}
+                          {processingCounts[item.id].chunks > 0 && (
+                            <Badge variant="outline" className="text-xs">
+                              {processingCounts[item.id].chunks} chunks
+                            </Badge>
+                          )}
+                        </div>
+                      )}
                       <Progress value={undefined} className="h-1.5 animate-pulse" />
                     </div>
                   )}
