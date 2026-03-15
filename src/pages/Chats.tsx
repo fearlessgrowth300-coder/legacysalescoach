@@ -25,6 +25,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import TikTokOutreach from "@/components/TikTokOutreach";
+import ConversationIntelligencePanel from "@/components/ConversationIntelligencePanel";
 
 type Suggestion = { id: number; type: string; text: string; whyThisWorks?: string; frameworkUsed?: string };
 type FeedbackMap = Record<number, "positive" | "negative">;
