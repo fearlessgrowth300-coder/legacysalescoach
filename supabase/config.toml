@@ -68,3 +68,6 @@ verify_jwt = false
 
 [functions.live-call-assist]
 verify_jwt = false
+
+[functions.analyze-conversation]
+verify_jwt = false
