@@ -1296,6 +1296,12 @@ export default function Chats() {
               })()}
             </div>
 
+            {/* Conversation Intelligence Panel */}
+            <ConversationIntelligencePanel
+              prospectId={selectedProspectId}
+              messageCount={messages?.length || 0}
+            />
+
             {/* Messages */}
             <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollAreaRef}>
               <div className="space-y-4">
