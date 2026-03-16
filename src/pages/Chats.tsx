@@ -27,7 +27,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import TikTokOutreach from "@/components/TikTokOutreach";
 import ConversationIntelligencePanel, { type ConversationAnalysis } from "@/components/ConversationIntelligencePanel";
 
-type Suggestion = { id: number; type: string; text: string; whyThisWorks?: string; frameworkUsed?: string };
+import SuggestionCard, { ReferralWarningBanner, type Suggestion } from "@/components/SuggestionCard";
 type FeedbackMap = Record<number, "positive" | "negative">;
 
 export default function Chats() {
