@@ -64,6 +64,8 @@ export default function Chats() {
   const [feedbackMap, setFeedbackMap] = useState<FeedbackMap>({});
   const [conversationStage, setConversationStage] = useState<string | null>(null);
   const [prospectType, setProspectType] = useState<string | null>(null);
+  const [conversationAnalysis, setConversationAnalysis] = useState<ConversationAnalysis | null>(null);
+  const [isAnalyzingIntel, setIsAnalyzingIntel] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
