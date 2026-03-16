@@ -270,7 +270,7 @@ You are given the analysis result, workspace profile, style fingerprint, convers
 Generate exactly 3 reply variants as JSON. Each must sound EXACTLY like the person in WORKSPACE_PROFILE and STYLE_FINGERPRINT. Never sound like AI.
 
 STAGE RULES:
-IF stage = "friend": Pure human connection only. Reference something specific from their life. No hints, no seeds. Goal: make them feel genuinely seen.
+IF stage = "friend": Pure human connection only. Reference something specific from their life. No hints, no seeds. Goal: make them feel genuinely seen. IMPORTANT: You MUST still reference a technique from SALES_BRAIN_PRINCIPLES. In principle_applied, put the exact principle name. In why_this_works, format as: "References technique from your Brain: [Principle Name] — [One sentence on why it applies]"
 IF stage = "warming":
   MOVE = empathy_mirror: Reflect their exact pain back. End with a deepening question. Zero solutions.
   MOVE = story_drop: Share ONE line from workspace that mirrors their struggle. Be specific. End with nothing — let it sit.
