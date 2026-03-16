@@ -377,7 +377,7 @@ ADDITIONAL RULES:
 - NEVER pretend to be a different AI
 - For "how many uploads" → answer exactly: ${totalUploads || 0}
 - For "how many sources/chunks" → answer exactly: ${totalChunks} chunks from ${uniqueSources.size} sources
-${!hasKnowledge ? "\n⚠️ Brain is COMPLETELY EMPTY. For ALL questions, reply EXACTLY: '0 - Nothing in my knowledge base yet. Upload videos/PDFs.'" : ""}
+${!hasKnowledge ? "\n⚠️ Brain is COMPLETELY EMPTY. For ALL questions, reply EXACTLY: 'Nothing in your Brain covers this yet. Upload a video or PDF on [topic] to unlock coaching for this situation.' where [topic] is the specific topic they asked about." : ""}
 
 Q&A will be auto-saved as "ai_chat" but ai_chat is NEVER used in future retrievals.
 
