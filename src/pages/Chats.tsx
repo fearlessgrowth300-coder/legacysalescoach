@@ -27,7 +27,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import TikTokOutreach from "@/components/TikTokOutreach";
 import ConversationIntelligencePanel, { type ConversationAnalysis } from "@/components/ConversationIntelligencePanel";
 
-type Suggestion = { id: number; type: string; text: string; whyThisWorks?: string; frameworkUsed?: string };
+import SuggestionCard, { ReferralWarningBanner, type Suggestion } from "@/components/SuggestionCard";
 type FeedbackMap = Record<number, "positive" | "negative">;
 
 export default function Chats() {
@@ -1331,6 +1331,12 @@ export default function Chats() {
                     <AlertTriangle className="h-4 w-4" /><span>{pushyWarning}</span>
                   </div>
                 )}
+
+                {/* Referral warning banner */}
+                {conversationAnalysis?.stage === "referral" && conversationAnalysis?.pain_expressed && (
+                  <ReferralWarningBanner warmthScore={conversationAnalysis.warmth_score} />
+                )}
+
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                   <p className="text-sm font-medium flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-primary" />Suggested Replies
@@ -1347,47 +1353,18 @@ export default function Chats() {
                     </Button>
                   </div>
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {suggestions.map((s) => (
-                    <Card key={s.id} className="p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1">
-                          <Badge variant="outline" className="mb-2 text-xs">
-                            {s.type === "primary" ? "Best Reply" : s.type === "alternative" ? "Alternative" : "Softer"}
-                          </Badge>
-                          <p className="text-sm">{s.text}</p>
-                          {s.whyThisWorks && <p className="text-xs text-muted-foreground mt-2">💡 {s.whyThisWorks}</p>}
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <div className="flex gap-1">
-                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleCopy(s.id, s.text)}>
-                              {copiedId === s.id ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                            </Button>
-                            <Button size="sm" onClick={() => handleUseSuggestion(s)}>Use</Button>
-                          </div>
-                          <div className="flex gap-1 justify-end">
-                            <Button
-                              size="icon"
-                              variant={feedbackMap[s.id] === "positive" ? "default" : "ghost"}
-                              className="h-7 w-7"
-                              onClick={() => handleFeedback(s, "positive")}
-                              disabled={!!feedbackMap[s.id]}
-                            >
-                              <ThumbsUp className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant={feedbackMap[s.id] === "negative" ? "destructive" : "ghost"}
-                              className="h-7 w-7"
-                              onClick={() => handleFeedback(s, "negative")}
-                              disabled={!!feedbackMap[s.id]}
-                            >
-                              <ThumbsDown className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    </Card>
+                    <SuggestionCard
+                      key={s.id}
+                      suggestion={s}
+                      analysis={conversationAnalysis}
+                      copiedId={copiedId}
+                      feedbackState={feedbackMap[s.id]}
+                      onCopy={handleCopy}
+                      onUse={handleUseSuggestion}
+                      onFeedback={handleFeedback}
+                    />
                   ))}
                 </div>
               </div>
