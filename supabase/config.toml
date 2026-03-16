@@ -71,3 +71,6 @@ verify_jwt = false
 
 [functions.analyze-conversation]
 verify_jwt = false
+
+[functions.generate-reply]
+verify_jwt = false

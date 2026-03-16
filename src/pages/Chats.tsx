@@ -25,7 +25,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import TikTokOutreach from "@/components/TikTokOutreach";
-import ConversationIntelligencePanel from "@/components/ConversationIntelligencePanel";
+import ConversationIntelligencePanel, { type ConversationAnalysis } from "@/components/ConversationIntelligencePanel";
 
 type Suggestion = { id: number; type: string; text: string; whyThisWorks?: string; frameworkUsed?: string };
 type FeedbackMap = Record<number, "positive" | "negative">;
@@ -64,6 +64,8 @@ export default function Chats() {
   const [feedbackMap, setFeedbackMap] = useState<FeedbackMap>({});
   const [conversationStage, setConversationStage] = useState<string | null>(null);
   const [prospectType, setProspectType] = useState<string | null>(null);
+  const [conversationAnalysis, setConversationAnalysis] = useState<ConversationAnalysis | null>(null);
+  const [isAnalyzingIntel, setIsAnalyzingIntel] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -535,6 +537,7 @@ export default function Chats() {
   const handleSendInbound = async () => {
     if (!messageInput.trim() || !selectedProspectId) return;
     setIsAnalyzing(true);
+    setIsAnalyzingIntel(true);
 
     const tiktokUrl = detectTikTokUrl(messageInput);
     let enrichedMessage = messageInput;
@@ -551,14 +554,12 @@ export default function Chats() {
           },
         });
         if (!tiktokError && tiktokData && !tiktokData.error) {
-          // Append full profile summary so chat-suggest has rich context
           enrichedMessage = `${messageInput}\n\n--- TIKTOK PROFILE AUTO-SCRAPED ---\n${tiktokData.summary || ""}`;
           if (tiktokData.suggestedComment) {
             enrichedMessage += `\nSuggested Comment: ${tiktokData.suggestedComment}`;
           }
           toast.success(`✅ Scraped @${tiktokData.username} — ${tiktokData.followersCount} followers`, { duration: 4000 });
 
-          // Update prospect with TikTok data
           await supabase.from("prospects").update({
             tiktok_url: `https://tiktok.com/@${tiktokData.username}`,
             profile_pic_url: tiktokData.profilePicUrl || undefined,
@@ -581,7 +582,7 @@ export default function Chats() {
     });
 
     try {
-      const { data, error } = await supabase.functions.invoke("chat-suggest", {
+      const { data, error } = await supabase.functions.invoke("generate-reply", {
         body: {
           prospectId: selectedProspectId,
           message: enrichedMessage,
@@ -590,10 +591,11 @@ export default function Chats() {
       });
       if (error) throw error;
       setSuggestions(data.suggestions || []);
-      setPushyWarning(data.pushyWarning || null);
+      setPushyWarning(null);
       setFeedbackMap({});
       if (data.conversationStage) setConversationStage(data.conversationStage);
       if (data.prospectType) setProspectType(data.prospectType);
+      if (data.analysis) setConversationAnalysis(data.analysis);
       if (data.brainRetrieval && data.brainRetrieval.chunksRetrieved > 0) {
         const br = data.brainRetrieval;
         const sourceList = (br.sources || []).filter((s: string) => s !== "unknown").join(", ") || "brain";
@@ -601,7 +603,7 @@ export default function Chats() {
       }
       if (data.learningResult) {
         const lr = data.learningResult;
-        toast.success(`🧠 Your AI friend just learned ${lr.chunksAdded || 1} new way${(lr.chunksAdded || 1) > 1 ? 's' : ''} to handle "${(data.prospectType || "prospects").replace(/_/g, " ")}" and added it to the brain`, { duration: 5000 });
+        toast.success(`🧠 Learned ${lr.chunksAdded || 1} new pattern${(lr.chunksAdded || 1) > 1 ? 's' : ''} from "${(data.prospectType || "prospect").replace(/_/g, " ")}"`, { duration: 5000 });
       }
     } catch (e: any) {
       console.error("AI suggestion error:", e);
@@ -612,6 +614,7 @@ export default function Chats() {
     queryClient.invalidateQueries({ queryKey: ["messages"] });
     queryClient.invalidateQueries({ queryKey: ["prospects"] });
     setIsAnalyzing(false);
+    setIsAnalyzingIntel(false);
   };
 
   const handleUseSuggestion = async (suggestion: Suggestion) => {
@@ -655,35 +658,34 @@ export default function Chats() {
   const handleEmotionalReply = async (style: string) => {
     if (!selectedProspectId) return;
     setIsAnalyzing(true);
+    setIsAnalyzingIntel(true);
     try {
       const lastInbound = messages?.filter(m => m.direction === "inbound").pop();
-      const { data, error } = await supabase.functions.invoke("chat-suggest", {
+      const { data, error } = await supabase.functions.invoke("generate-reply", {
         body: {
           prospectId: selectedProspectId,
-          message: `STYLE REQUEST: Make reply more ${style}. Last prospect message: ${lastInbound?.content || "N/A"}`,
+          message: lastInbound?.content || "",
           threadType: currentThreadType,
-          mode: "refine",
+          styleModifier: style,
         },
       });
       if (error) throw error;
       setSuggestions(data.suggestions || []);
-      setPushyWarning(data.pushyWarning || null);
+      setPushyWarning(null);
       setFeedbackMap({});
       if (data.conversationStage) setConversationStage(data.conversationStage);
       if (data.prospectType) setProspectType(data.prospectType);
+      if (data.analysis) setConversationAnalysis(data.analysis);
       if (data.brainRetrieval && data.brainRetrieval.chunksRetrieved > 0) {
         const br = data.brainRetrieval;
         const sourceList = (br.sources || []).filter((s: string) => s !== "unknown").join(", ") || "brain";
         toast.info(`🔍 Pulled from brain: ${br.chunksRetrieved} chunks | Sources: ${sourceList}`, { duration: 4000 });
       }
-      if (data.learningResult) {
-        const lr = data.learningResult;
-        toast.success(`🧠 Your AI friend just learned ${lr.chunksAdded || 1} new way${(lr.chunksAdded || 1) > 1 ? 's' : ''} to handle "${(data.prospectType || "prospects").replace(/_/g, " ")}" and added it to the brain`, { duration: 5000 });
-      }
     } catch (e: any) {
       toast.error("Failed to generate reply");
     }
     setIsAnalyzing(false);
+    setIsAnalyzingIntel(false);
   };
 
   const handleCopy = (id: number, text: string) => {
@@ -1300,6 +1302,8 @@ export default function Chats() {
             <ConversationIntelligencePanel
               prospectId={selectedProspectId}
               messageCount={messages?.length || 0}
+              analysis={conversationAnalysis}
+              isLoading={isAnalyzingIntel}
             />
 
             {/* Messages */}

@@ -10,7 +10,7 @@ import {
   Loader2, ChevronDown, ChevronUp, Lightbulb, Shield
 } from "lucide-react";
 
-interface ConversationAnalysis {
+export interface ConversationAnalysis {
   warmth_score: number;
   stage: "friend" | "warming" | "referral";
   prospect_psychology: string;
@@ -27,6 +27,8 @@ interface ConversationAnalysis {
 interface ConversationIntelligencePanelProps {
   prospectId: string | null;
   messageCount: number;
+  analysis?: ConversationAnalysis | null;
+  isLoading?: boolean;
 }
 
 const moveLabels: Record<string, string> = {
@@ -55,27 +57,27 @@ const warmthBg = (score: number) => {
   return "[&>div]:bg-blue-500";
 };
 
-export default function ConversationIntelligencePanel({ prospectId, messageCount }: ConversationIntelligencePanelProps) {
-  const [analysis, setAnalysis] = useState<ConversationAnalysis | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+export default function ConversationIntelligencePanel({ prospectId, messageCount, analysis: externalAnalysis, isLoading: externalLoading }: ConversationIntelligencePanelProps) {
+  const [manualAnalysis, setManualAnalysis] = useState<ConversationAnalysis | null>(null);
+  const [isManualLoading, setIsManualLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
+
+  const analysis = externalAnalysis || manualAnalysis;
+  const isLoading = externalLoading || isManualLoading;
 
   const runAnalysis = async () => {
     if (!prospectId) return;
-    setIsLoading(true);
-
+    setIsManualLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("analyze-conversation", {
-        body: { prospectId },
-      });
+      const { data, error } = await supabase.functions.invoke("analyze-conversation", { body: { prospectId } });
       if (error) throw error;
       if (data.error) throw new Error(data.error);
-      setAnalysis(data);
+      setManualAnalysis(data);
     } catch (e: any) {
       console.error("Analysis error:", e);
       toast.error(e.message || "Failed to analyze conversation");
     } finally {
-      setIsLoading(false);
+      setIsManualLoading(false);
     }
   };
 
@@ -83,7 +85,6 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
 
   return (
     <div className="border-t bg-muted/20">
-      {/* Header toggle */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className="w-full flex items-center justify-between px-4 py-2 hover:bg-muted/40 transition-colors"
@@ -91,33 +92,25 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
         <div className="flex items-center gap-2">
           <Brain className="h-4 w-4 text-primary" />
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Conversation Intelligence
+            Intelligence
           </span>
           {analysis && (
             <Badge variant="outline" className={`text-[10px] px-1.5 py-0 border ${stageColors[analysis.stage]}`}>
               {analysis.stage} · {analysis.warmth_score}°
             </Badge>
           )}
+          {isLoading && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
         </div>
         {isExpanded ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
       </button>
 
       {isExpanded && (
         <div className="px-4 pb-3 space-y-3">
-          {/* Analyze button */}
-          <Button
-            onClick={runAnalysis}
-            disabled={isLoading || messageCount === 0}
-            size="sm"
-            variant="outline"
-            className="w-full h-8 text-xs"
-          >
-            {isLoading ? (
-              <><Loader2 className="h-3 w-3 animate-spin mr-1" />Analyzing...</>
-            ) : (
-              <><Brain className="h-3 w-3 mr-1" />{analysis ? "Re-analyze" : "Analyze Conversation"}</>
-            )}
-          </Button>
+          {!externalAnalysis && (
+            <Button onClick={runAnalysis} disabled={isLoading || messageCount === 0} size="sm" variant="outline" className="w-full h-8 text-xs">
+              {isLoading ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />Analyzing...</> : <><Brain className="h-3 w-3 mr-1" />{analysis ? "Re-analyze" : "Analyze Conversation"}</>}
+            </Button>
+          )}
 
           {messageCount === 0 && !analysis && (
             <p className="text-xs text-muted-foreground text-center">Send messages first to analyze</p>
@@ -132,9 +125,7 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
                     <Thermometer className="h-3.5 w-3.5 text-muted-foreground" />
                     <span className="text-xs font-medium">Warmth</span>
                   </div>
-                  <span className={`text-sm font-bold ${warmthColor(analysis.warmth_score)}`}>
-                    {analysis.warmth_score}°
-                  </span>
+                  <span className={`text-sm font-bold ${warmthColor(analysis.warmth_score)}`}>{analysis.warmth_score}°</span>
                 </div>
                 <Progress value={analysis.warmth_score} className={`h-2 ${warmthBg(analysis.warmth_score)}`} />
               </div>
@@ -145,13 +136,10 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
                   <div className="flex items-center gap-1.5">
                     <Target className="h-3.5 w-3.5 text-muted-foreground" />
                     <span className="text-xs font-medium">Stage</span>
-                    <Badge variant="outline" className={`text-[10px] ml-auto px-1.5 py-0 border ${stageColors[analysis.stage]}`}>
-                      {analysis.stage}
-                    </Badge>
+                    <Badge variant="outline" className={`text-[10px] ml-auto px-1.5 py-0 border ${stageColors[analysis.stage]}`}>{analysis.stage}</Badge>
                   </div>
                   <p className="text-[11px] text-muted-foreground">{analysis.stage_reason}</p>
                 </Card>
-
                 <Card className="p-2.5 space-y-1">
                   <div className="flex items-center gap-1.5">
                     <Eye className="h-3.5 w-3.5 text-muted-foreground" />
@@ -163,10 +151,10 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
 
               {/* Pain */}
               {analysis.pain_expressed && analysis.pain_summary && (
-                <Card className="p-2.5 border-red-500/20 bg-red-500/5">
+                <Card className="p-2.5 border-destructive/20 bg-destructive/5">
                   <div className="flex items-center gap-1.5 mb-1">
-                    <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
-                    <span className="text-xs font-medium text-red-700 dark:text-red-400">Pain Detected</span>
+                    <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+                    <span className="text-xs font-medium text-destructive">Pain Detected</span>
                   </div>
                   <p className="text-[11px] text-muted-foreground">{analysis.pain_summary}</p>
                 </Card>
@@ -180,9 +168,7 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
                   </span>
                   <div className="flex flex-wrap gap-1">
                     {analysis.signals_detected.map((signal, i) => (
-                      <Badge key={i} variant="secondary" className="text-[10px] px-1.5 py-0">
-                        {signal}
-                      </Badge>
+                      <Badge key={i} variant="secondary" className="text-[10px] px-1.5 py-0">{signal}</Badge>
                     ))}
                   </div>
                 </div>
