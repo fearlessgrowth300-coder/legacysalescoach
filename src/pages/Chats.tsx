@@ -1302,6 +1302,8 @@ export default function Chats() {
             <ConversationIntelligencePanel
               prospectId={selectedProspectId}
               messageCount={messages?.length || 0}
+              analysis={conversationAnalysis}
+              isLoading={isAnalyzingIntel}
             />
 
             {/* Messages */}
