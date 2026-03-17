@@ -718,9 +718,10 @@ export default function AiChat() {
             }
           }
         },
-        onDone: async () => {
+        onDone: async (truncated: boolean) => {
           setIsLoading(false);
           setIsTyping(false);
+          setWasTruncated(truncated);
           if (savedMsg?.id) {
             setMessages(prev => prev.map(m => m.id === savedMsg.id ? { ...m, status: "read" as const } : m));
           }
@@ -728,7 +729,6 @@ export default function AiChat() {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: convId, user_id: user!.id, role: "assistant", content: assistantSoFar,
             });
-            // Q&A saved to ai_chat_messages only — brain is read-only vault
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
