@@ -222,6 +222,14 @@ export default function AiChat() {
     }, 50);
   };
 
+  const scrollToUserMsg = () => {
+    setTimeout(() => {
+      if (userMsgRef.current) {
+        userMsgRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 80);
+  };
+
   useEffect(() => { scrollToBottom(); }, [messages]);
 
   // Load brain stats
