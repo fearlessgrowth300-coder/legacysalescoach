@@ -1272,11 +1272,38 @@ export default function AiChat() {
                   ) : (
                     <>
                       {msg.role === "assistant" ? (
-                        <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words">
-                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        <div className={`relative ${isCollapsed ? "max-h-[400px] overflow-hidden" : ""}`}>
+                          <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words">
+                            <ReactMarkdown>{msg.content}</ReactMarkdown>
+                          </div>
+                          {isCollapsed && (
+                            <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-muted to-transparent" />
+                          )}
                         </div>
                       ) : (
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      )}
+                      {isLongAssistant && (
+                        <button
+                          onClick={() => setCollapsedMsgs(prev => {
+                            const next = new Set(prev);
+                            if (next.has(i)) next.delete(i);
+                            else next.add(i);
+                            return next;
+                          })}
+                          className="text-xs text-primary mt-2 hover:underline"
+                        >
+                          {isCollapsed ? "▼ Show full response" : "▲ Collapse"}
+                        </button>
+                      )}
+                      {/* Truncation warning on last assistant message */}
+                      {wasTruncated && msg.role === "assistant" && i === messages.length - 1 && !isLoading && (
+                        <button
+                          onClick={() => { setWasTruncated(false); send(); }}
+                          className="flex items-center gap-1 text-xs text-amber-500 mt-2 hover:underline"
+                        >
+                          ⚠️ Response may be incomplete — tap to regenerate
+                        </button>
                       )}
                       {msg.is_edited && <span className="text-[10px] opacity-60 mt-1 block">edited</span>}
                       {msg.role === "user" && (
@@ -1284,7 +1311,7 @@ export default function AiChat() {
                           {msg.status === "sending" && <span className="text-[10px] opacity-50">●</span>}
                           {msg.status === "sent" && <Check className="h-3 w-3 opacity-50" />}
                           {msg.status === "delivered" && <CheckCheck className="h-3 w-3 opacity-50" />}
-                          {(msg.status === "read" || (!msg.status && msg.id)) && <CheckCheck className="h-3 w-3 text-blue-400" />}
+                          {(msg.status === "read" || (!msg.status && msg.id)) && <CheckCheck className="h-3 w-3 text-primary/60" />}
                         </span>
                       )}
                       {/* Desktop: hover icons outside bubble */}
@@ -1318,7 +1345,8 @@ export default function AiChat() {
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
 
             {isTyping && (
               <div className="flex justify-start">
