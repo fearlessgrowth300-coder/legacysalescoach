@@ -886,14 +886,14 @@ export default function AiChat() {
             }
           }
         },
-        onDone: async () => {
+        onDone: async (truncated: boolean) => {
           setIsLoading(false);
           setIsTyping(false);
+          setWasTruncated(truncated);
           if (assistantSoFar && activeConvId) {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: activeConvId, user_id: user!.id, role: "assistant", content: assistantSoFar,
             });
-            // Q&A saved to ai_chat_messages only — brain is read-only vault
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
