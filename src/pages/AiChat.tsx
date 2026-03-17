@@ -36,7 +36,7 @@ async function streamChat({
 }: {
   messages: { role: string; content: string | any[] }[];
   onDelta: (text: string) => void;
-  onDone: () => void;
+  onDone: (wasTruncated: boolean) => void;
   onError: (err: string) => void;
   onBrainMeta?: (meta: any) => void;
 }) {
@@ -44,22 +44,32 @@ async function streamChat({
   const token = session?.access_token;
   if (!token) { onError("Not authenticated"); return; }
 
-  let resp: Response;
-  try {
-    resp = await fetch(CHAT_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-      },
-      body: JSON.stringify({ messages }),
-    });
-  } catch (networkErr) {
-    console.error("Network error calling brain-chat:", networkErr);
-    onError("Network error — check your connection and try again.");
-    return;
+  const MAX_RETRIES = 2;
+  let resp: Response | null = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      resp = await fetch(CHAT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ messages }),
+      });
+      break; // success
+    } catch (networkErr) {
+      console.error(`Network error (attempt ${attempt + 1}):`, networkErr);
+      if (attempt === MAX_RETRIES) {
+        onError("Network error — check your connection and try again.");
+        return;
+      }
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+    }
   }
+
+  if (!resp) { onError("Network error — check your connection and try again."); return; }
 
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}));
@@ -73,37 +83,48 @@ async function streamChat({
   const decoder = new TextDecoder();
   let buf = "";
   let done = false;
+  let fullContent = "";
+  let receivedDone = false;
 
-  while (!done) {
-    const { done: rdone, value } = await reader.read();
-    if (rdone) break;
-    buf += decoder.decode(value, { stream: true });
+  try {
+    while (!done) {
+      const { done: rdone, value } = await reader.read();
+      if (rdone) break;
+      buf += decoder.decode(value, { stream: true });
 
-    let idx: number;
-    while ((idx = buf.indexOf("\n")) !== -1) {
-      let line = buf.slice(0, idx);
-      buf = buf.slice(idx + 1);
-      if (line.endsWith("\r")) line = line.slice(0, -1);
-      if (line.startsWith(":") || line.trim() === "") continue;
-      if (!line.startsWith("data: ")) continue;
-      const json = line.slice(6).trim();
-      if (json === "[DONE]") { done = true; break; }
-      try {
-        const parsed = JSON.parse(json);
-        // Check for brain metadata
-        if (parsed.brain_meta) {
-          onBrainMeta?.(parsed.brain_meta);
-          continue;
+      let idx: number;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        let line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (line.endsWith("\r")) line = line.slice(0, -1);
+        if (line.startsWith(":") || line.trim() === "") continue;
+        if (!line.startsWith("data: ")) continue;
+        const json = line.slice(6).trim();
+        if (json === "[DONE]") { done = true; receivedDone = true; break; }
+        try {
+          const parsed = JSON.parse(json);
+          if (parsed.brain_meta) {
+            onBrainMeta?.(parsed.brain_meta);
+            continue;
+          }
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) {
+            fullContent += content;
+            onDelta(content);
+          }
+        } catch {
+          buf = line + "\n" + buf;
+          break;
         }
-        const content = parsed.choices?.[0]?.delta?.content;
-        if (content) onDelta(content);
-      } catch {
-        buf = line + "\n" + buf;
-        break;
       }
     }
+  } catch (streamErr) {
+    console.error("Stream read error:", streamErr);
   }
-  onDone();
+
+  // Detect truncation: stream ended without [DONE] or ends mid-sentence
+  const wasTruncated = !receivedDone || (fullContent.length > 100 && !/[.!?:)\]"'`]\s*$/.test(fullContent.trim()));
+  onDone(wasTruncated);
 }
 
 function generateFollowUps(content: string): string[] {
@@ -163,6 +184,9 @@ export default function AiChat() {
 
   const [followUps, setFollowUps] = useState<string[]>([]);
   const [isTyping, setIsTyping] = useState(false);
+  const [wasTruncated, setWasTruncated] = useState(false);
+  const [collapsedMsgs, setCollapsedMsgs] = useState<Set<number>>(new Set());
+  const userMsgRef = useRef<HTMLDivElement>(null);
 
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -196,6 +220,14 @@ export default function AiChat() {
       const vp = scrollRef.current?.querySelector("[data-radix-scroll-area-viewport]");
       if (vp) vp.scrollTop = vp.scrollHeight;
     }, 50);
+  };
+
+  const scrollToUserMsg = () => {
+    setTimeout(() => {
+      if (userMsgRef.current) {
+        userMsgRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 80);
   };
 
   useEffect(() => { scrollToBottom(); }, [messages]);
@@ -605,6 +637,9 @@ export default function AiChat() {
     setAttachedImages([]);
     setImagePreviews([]);
     setIsLoading(true);
+    setWasTruncated(false);
+    // Scroll to user message first so they see their input
+    setTimeout(() => scrollToUserMsg(), 100);
 
     const { data: savedMsg } = await supabase
       .from("ai_chat_messages")
@@ -694,9 +729,10 @@ export default function AiChat() {
             }
           }
         },
-        onDone: async () => {
+        onDone: async (truncated: boolean) => {
           setIsLoading(false);
           setIsTyping(false);
+          setWasTruncated(truncated);
           if (savedMsg?.id) {
             setMessages(prev => prev.map(m => m.id === savedMsg.id ? { ...m, status: "read" as const } : m));
           }
@@ -704,7 +740,6 @@ export default function AiChat() {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: convId, user_id: user!.id, role: "assistant", content: assistantSoFar,
             });
-            // Q&A saved to ai_chat_messages only — brain is read-only vault
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
@@ -851,14 +886,14 @@ export default function AiChat() {
             }
           }
         },
-        onDone: async () => {
+        onDone: async (truncated: boolean) => {
           setIsLoading(false);
           setIsTyping(false);
+          setWasTruncated(truncated);
           if (assistantSoFar && activeConvId) {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: activeConvId, user_id: user!.id, role: "assistant", content: assistantSoFar,
             });
-            // Q&A saved to ai_chat_messages only — brain is read-only vault
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
@@ -1174,8 +1209,12 @@ export default function AiChat() {
               </div>
             )}
 
-            {messages.map((msg, i) => (
-              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+            {messages.map((msg, i) => {
+              const isLastUser = msg.role === "user" && (i === messages.length - 1 || (i === messages.length - 2 && messages[messages.length - 1]?.role === "assistant"));
+              const isLongAssistant = msg.role === "assistant" && msg.content.length > 2000;
+              const isCollapsed = isLongAssistant && !collapsedMsgs.has(i);
+              return (
+              <div key={i} ref={isLastUser ? userMsgRef : undefined} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
                   className={`max-w-[85%] rounded-lg p-3 relative group overflow-hidden break-words ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
                   onTouchStart={() => {
@@ -1233,11 +1272,38 @@ export default function AiChat() {
                   ) : (
                     <>
                       {msg.role === "assistant" ? (
-                        <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words">
-                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        <div className={`relative ${isCollapsed ? "max-h-[400px] overflow-hidden" : ""}`}>
+                          <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words">
+                            <ReactMarkdown>{msg.content}</ReactMarkdown>
+                          </div>
+                          {isCollapsed && (
+                            <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-muted to-transparent" />
+                          )}
                         </div>
                       ) : (
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      )}
+                      {isLongAssistant && (
+                        <button
+                          onClick={() => setCollapsedMsgs(prev => {
+                            const next = new Set(prev);
+                            if (next.has(i)) next.delete(i);
+                            else next.add(i);
+                            return next;
+                          })}
+                          className="text-xs text-primary mt-2 hover:underline"
+                        >
+                          {isCollapsed ? "▼ Show full response" : "▲ Collapse"}
+                        </button>
+                      )}
+                      {/* Truncation warning on last assistant message */}
+                      {wasTruncated && msg.role === "assistant" && i === messages.length - 1 && !isLoading && (
+                        <button
+                          onClick={() => { setWasTruncated(false); send(); }}
+                          className="flex items-center gap-1 text-xs text-amber-500 mt-2 hover:underline"
+                        >
+                          ⚠️ Response may be incomplete — tap to regenerate
+                        </button>
                       )}
                       {msg.is_edited && <span className="text-[10px] opacity-60 mt-1 block">edited</span>}
                       {msg.role === "user" && (
@@ -1245,7 +1311,7 @@ export default function AiChat() {
                           {msg.status === "sending" && <span className="text-[10px] opacity-50">●</span>}
                           {msg.status === "sent" && <Check className="h-3 w-3 opacity-50" />}
                           {msg.status === "delivered" && <CheckCheck className="h-3 w-3 opacity-50" />}
-                          {(msg.status === "read" || (!msg.status && msg.id)) && <CheckCheck className="h-3 w-3 text-blue-400" />}
+                          {(msg.status === "read" || (!msg.status && msg.id)) && <CheckCheck className="h-3 w-3 text-primary/60" />}
                         </span>
                       )}
                       {/* Desktop: hover icons outside bubble */}
@@ -1279,7 +1345,8 @@ export default function AiChat() {
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
 
             {isTyping && (
               <div className="flex justify-start">
