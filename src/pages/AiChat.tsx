@@ -36,7 +36,7 @@ async function streamChat({
 }: {
   messages: { role: string; content: string | any[] }[];
   onDelta: (text: string) => void;
-  onDone: () => void;
+  onDone: (wasTruncated: boolean) => void;
   onError: (err: string) => void;
   onBrainMeta?: (meta: any) => void;
 }) {
@@ -44,22 +44,32 @@ async function streamChat({
   const token = session?.access_token;
   if (!token) { onError("Not authenticated"); return; }
 
-  let resp: Response;
-  try {
-    resp = await fetch(CHAT_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-      },
-      body: JSON.stringify({ messages }),
-    });
-  } catch (networkErr) {
-    console.error("Network error calling brain-chat:", networkErr);
-    onError("Network error — check your connection and try again.");
-    return;
+  const MAX_RETRIES = 2;
+  let resp: Response | null = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      resp = await fetch(CHAT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ messages }),
+      });
+      break; // success
+    } catch (networkErr) {
+      console.error(`Network error (attempt ${attempt + 1}):`, networkErr);
+      if (attempt === MAX_RETRIES) {
+        onError("Network error — check your connection and try again.");
+        return;
+      }
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+    }
   }
+
+  if (!resp) { onError("Network error — check your connection and try again."); return; }
 
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}));
@@ -73,37 +83,48 @@ async function streamChat({
   const decoder = new TextDecoder();
   let buf = "";
   let done = false;
+  let fullContent = "";
+  let receivedDone = false;
 
-  while (!done) {
-    const { done: rdone, value } = await reader.read();
-    if (rdone) break;
-    buf += decoder.decode(value, { stream: true });
+  try {
+    while (!done) {
+      const { done: rdone, value } = await reader.read();
+      if (rdone) break;
+      buf += decoder.decode(value, { stream: true });
 
-    let idx: number;
-    while ((idx = buf.indexOf("\n")) !== -1) {
-      let line = buf.slice(0, idx);
-      buf = buf.slice(idx + 1);
-      if (line.endsWith("\r")) line = line.slice(0, -1);
-      if (line.startsWith(":") || line.trim() === "") continue;
-      if (!line.startsWith("data: ")) continue;
-      const json = line.slice(6).trim();
-      if (json === "[DONE]") { done = true; break; }
-      try {
-        const parsed = JSON.parse(json);
-        // Check for brain metadata
-        if (parsed.brain_meta) {
-          onBrainMeta?.(parsed.brain_meta);
-          continue;
+      let idx: number;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        let line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (line.endsWith("\r")) line = line.slice(0, -1);
+        if (line.startsWith(":") || line.trim() === "") continue;
+        if (!line.startsWith("data: ")) continue;
+        const json = line.slice(6).trim();
+        if (json === "[DONE]") { done = true; receivedDone = true; break; }
+        try {
+          const parsed = JSON.parse(json);
+          if (parsed.brain_meta) {
+            onBrainMeta?.(parsed.brain_meta);
+            continue;
+          }
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) {
+            fullContent += content;
+            onDelta(content);
+          }
+        } catch {
+          buf = line + "\n" + buf;
+          break;
         }
-        const content = parsed.choices?.[0]?.delta?.content;
-        if (content) onDelta(content);
-      } catch {
-        buf = line + "\n" + buf;
-        break;
       }
     }
+  } catch (streamErr) {
+    console.error("Stream read error:", streamErr);
   }
-  onDone();
+
+  // Detect truncation: stream ended without [DONE] or ends mid-sentence
+  const wasTruncated = !receivedDone || (fullContent.length > 100 && !/[.!?:)\]"'`]\s*$/.test(fullContent.trim()));
+  onDone(wasTruncated);
 }
 
 function generateFollowUps(content: string): string[] {
