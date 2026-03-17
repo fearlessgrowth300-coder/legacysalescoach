@@ -1209,8 +1209,12 @@ export default function AiChat() {
               </div>
             )}
 
-            {messages.map((msg, i) => (
-              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+            {messages.map((msg, i) => {
+              const isLastUser = msg.role === "user" && (i === messages.length - 1 || (i === messages.length - 2 && messages[messages.length - 1]?.role === "assistant"));
+              const isLongAssistant = msg.role === "assistant" && msg.content.length > 2000;
+              const isCollapsed = isLongAssistant && !collapsedMsgs.has(i);
+              return (
+              <div key={i} ref={isLastUser ? userMsgRef : undefined} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
                   className={`max-w-[85%] rounded-lg p-3 relative group overflow-hidden break-words ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
                   onTouchStart={() => {
