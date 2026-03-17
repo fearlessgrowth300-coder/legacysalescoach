@@ -637,6 +637,9 @@ export default function AiChat() {
     setAttachedImages([]);
     setImagePreviews([]);
     setIsLoading(true);
+    setWasTruncated(false);
+    // Scroll to user message first so they see their input
+    setTimeout(() => scrollToUserMsg(), 100);
 
     const { data: savedMsg } = await supabase
       .from("ai_chat_messages")
