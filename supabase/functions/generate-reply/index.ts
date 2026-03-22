@@ -193,12 +193,14 @@ serve(async (req) => {
       workspace.products_detected ? `Products: ${workspace.products_detected}` : "",
     ].filter(Boolean).join("\n") : "No workspace profile.";
 
-    const analysisPrompt = `You are a sales conversation intelligence engine. Analyze and return JSON ONLY.
+    const analysisPrompt = `You are a sales conversation intelligence engine with an OBJECTION RADAR and multi-framework analyzer. Analyze and return JSON ONLY.
 
-Return: { "warmth_score": <0-100>, "stage": <"friend"|"warming"|"referral">, "prospect_psychology": <string>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <"empathy_mirror"|"story_drop"|"curiosity_gap"|"referral"|"re_engage">, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string> }
+Return: { "warmth_score": <0-100>, "stage": <"friend"|"warming"|"referral">, "prospect_psychology": <string — what they REALLY mean>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <"empathy_mirror"|"story_drop"|"curiosity_gap"|"referral"|"re_engage"|"spin_situation"|"spin_problem"|"spin_implication"|"spin_need_payoff"|"five_whys"|"pain_dream_gap"|"micro_commitment"|"objection_navigate">, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <"TIME"|"MONEY"|"TRUST"|"CERTAINTY"|"PRIORITY"|"FEAR"|"TIMING"|"NEED_MORE_CLARITY"|null>, "objection_response_type": <"CLARIFY"|"REASSURE"|"REFRAME"|"DEEPEN"|"ISOLATE"|"HAND_OFF"|null>, "spin_stage": <"situation"|"problem"|"implication"|"need_payoff">, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
 
+OBJECTION RADAR: Scan EVERY message for objection language. Classify: TIME, MONEY, TRUST, CERTAINTY, PRIORITY, FEAR, TIMING, NEED_MORE_CLARITY. Recommend response type: CLARIFY, REASSURE, REFRAME, DEEPEN, ISOLATE, HAND_OFF.
+SPIN DETECTION: <4 exchanges="situation", personal but no pain="problem", pain not amplified="implication", pain+wants change="need_payoff".
 STAGE RULES: "friend" 0-40, "warming" 41-74, "referral" 75+ AND pain_expressed=true.
-WARMTH: +5-15 per personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.`;
+WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.`;
 
     const analysisResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -207,7 +209,7 @@ WARMTH: +5-15 per personal detail, +10 shared struggle, +15 asked about you, +20
         model: "google/gemini-2.5-flash",
         messages: [
           { role: "system", content: analysisPrompt },
-          { role: "user", content: `WORKSPACE_PROFILE:\n${workspaceProfile}\n\nSALES_BRAIN_PRINCIPLES:\n${principlesText.substring(0, 3000)}\n\nCONVERSATION_HISTORY:\n${conversationHistory}` },
+          { role: "user", content: `WORKSPACE_PROFILE:\n${workspaceProfile}\n\nSALES_BRAIN_PRINCIPLES:\n${principlesText.substring(0, 4000)}\n\nCONVERSATION_HISTORY:\n${conversationHistory}` },
         ],
         temperature: 0.3,
       }),
@@ -227,10 +229,10 @@ WARMTH: +5-15 per personal detail, +10 shared struggle, +15 asked about you, +20
       const match = analysisRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
       analysisJson = JSON.parse((match ? match[1] : analysisRaw).trim());
     } catch {
-      analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown" };
+      analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation" };
     }
 
-    // ===== STEP 2: GENERATE STAGE-AWARE REPLIES =====
+    // ===== STEP 2: GENERATE STAGE-AWARE REPLIES WITH MULTI-FRAMEWORK =====
     const styleFingerprint = buildStyleFingerprint(workspace?.style_vector);
 
     // Include training examples in style context
@@ -256,34 +258,63 @@ WARMTH: +5-15 per personal detail, +10 shared struggle, +15 asked about you, +20
     // Lead registry context
     let leadContext = "";
     if (leadEntry) {
-      leadContext = `\n\nLEAD REGISTRY:\nPersona: ${leadEntry.persona_type || "?"}\nPsychological State: ${leadEntry.psychological_state || "?"}\nSubtext: ${leadEntry.subtext_analysis || "none"}`;
+      const pastAdvice = Array.isArray(leadEntry.past_advice) ? leadEntry.past_advice : [];
+      const recentObjections = pastAdvice
+        .filter((a: any) => a.framework?.includes("objection") || a.stage === "objection")
+        .slice(-3);
+      leadContext = `\n\nLEAD REGISTRY:\nPersona: ${leadEntry.persona_type || "?"}\nPsychological State: ${leadEntry.psychological_state || "?"}\nSubtext: ${leadEntry.subtext_analysis || "none"}\nPast Objections: ${recentObjections.length > 0 ? recentObjections.map((o: any) => o.advice?.substring(0, 80)).join(" | ") : "none"}`;
     }
 
     const styleModifierInstruction = styleModifier
       ? `\n\nSTYLE MODIFIER: Make all variants more ${styleModifier}. Adjust tone accordingly while staying in the correct stage.`
       : "";
 
-    const replySystemPrompt = `You are a DM reply generator for a social media sales conversion system.
+    // Build objection-aware instructions
+    const objectionInstruction = analysisJson.objection_detected
+      ? `\n\nOBJECTION DETECTED: "${analysisJson.objection_detected}"
+BUCKET: ${analysisJson.objection_bucket}
+RESPONSE TYPE: ${analysisJson.objection_response_type}
+PRIMARY variant MUST use ${analysisJson.objection_response_type} technique for this objection.
+ALTERNATIVE variant should use a DIFFERENT response type.
+NEVER argue with the objection. ALWAYS acknowledge first.`
+      : "";
 
-You are given the analysis result, workspace profile, style fingerprint, conversation history, and brain principles.
+    const spinInstruction = `\nSPIN STAGE: ${analysisJson.spin_stage || "situation"}
+Based on this stage, the primary variant should include a ${analysisJson.spin_stage === "situation" ? "SITUATION" : analysisJson.spin_stage === "problem" ? "PROBLEM" : analysisJson.spin_stage === "implication" ? "IMPLICATION" : "NEED-PAYOFF"} question.`;
+
+    const replySystemPrompt = `You are a DM reply generator using a MULTI-FRAMEWORK STACK for social media sales conversion.
+
+You are given the analysis result (including objection radar and SPIN stage), workspace profile, style fingerprint, conversation history, and brain principles.
 
 Generate exactly 3 reply variants as JSON. Each must sound EXACTLY like the person in WORKSPACE_PROFILE and STYLE_FINGERPRINT. Never sound like AI.
 
+MULTI-FRAMEWORK REQUIREMENTS:
+Every reply MUST layer AT LEAST 2 frameworks:
+1. A DISCOVERY framework question (SPIN, 5 Why's, Jobs-to-be-done, or Pain/Dream/Gap)
+2. A PERSUASION technique (StoryBrand, PAS, Before/After/Bridge, Identity-Based, or Micro-Commitments)
+Plus optionally: a CLOSER pattern (Voss, Hormozi, Belfort, Cardone, or Pink)
+
 STAGE RULES:
-IF stage = "friend": Pure human connection only. Reference something specific from their life. No hints, no seeds. Goal: make them feel genuinely seen. IMPORTANT: You MUST still reference a technique from SALES_BRAIN_PRINCIPLES. In principle_applied, put the exact principle name. In why_this_works, format as: "References technique from your Brain: [Principle Name] — [One sentence on why it applies]"
+IF stage = "friend": Pure human connection. Use SPIN Situation/Problem questions. Apply StoryBrand (they are the hero). Reference brain principles as YOUR lived experience. End with a question that deepens rapport.
 IF stage = "warming":
-  MOVE = empathy_mirror: Reflect their exact pain back. End with a deepening question. Zero solutions.
-  MOVE = story_drop: Share ONE line from workspace that mirrors their struggle. Be specific. End with nothing — let it sit.
-  MOVE = curiosity_gap: Reference your transformation with one teaser. Do NOT explain. Let curiosity pull.
-IF stage = "referral": Build in 3 parts: 1) Mirror their pain warmly, 2) One sentence about your transformation, 3) Soft no-pressure open door. NEVER pitch or use sales language.
+  MOVE = empathy_mirror: Reflect pain + SPIN Implication question. Apply PAS framework.
+  MOVE = story_drop: Before/After/Bridge from YOUR journey. End with 5 Why's question.
+  MOVE = curiosity_gap: Identity-Based selling + one teaser. Micro-commitment question.
+  MOVE = spin_implication: Amplify pain using Implication questions + PAS agitation.
+  MOVE = objection_navigate: Use the 5-step objection process (Acknowledge→Clarify→Isolate→Answer→Confirm)
+IF stage = "referral": Mirror pain (Voss tactical empathy) + Before/After/Bridge + soft Need-Payoff question + referral handoff.
+${objectionInstruction}
+${spinInstruction}
+
+TONE: Warm, human, calm, confident, relatable, NOT needy. Like a friend who's been through the same struggle.
 
 VARIANT RULES:
-- Variant 1 (primary): Uses recommended_move at full strength
-- Variant 2 (alternative): Same stage, different angle or softer emotional entry
-- Variant 3 (casual): Shortest, most natural, quick genuine message
+- Variant 1 (primary): Uses recommended_move + strongest framework combination
+- Variant 2 (alternative): Same stage, DIFFERENT framework angle, DIFFERENT discovery question
+- Variant 3 (casual): Shortest, most natural, single powerful question + one framework technique
 
 Return JSON only:
-{ "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "...", "principle_applied": "...", "why_this_works": "...", "warmth_prediction": <number> }] }${styleModifierInstruction}`;
+{ "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "...", "principle_applied": "...", "why_this_works": "References technique from your Brain: [Principle Name] — [Why it applies]. Frameworks used: [list]", "warmth_prediction": <number>, "frameworks_used": ["SPIN-Implication", "PAS", "Voss-Mirroring"] }] }${styleModifierInstruction}`;
 
     const replyUserPrompt = `WORKSPACE_PROFILE:
 ${workspaceProfile}
