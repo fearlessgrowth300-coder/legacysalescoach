@@ -1,99 +1,120 @@
-// Objection Handler Database - Battle-tested responses for common resistance
+// Objection Radar — Detection, Classification, and Strategic Response
 
 export const OBJECTION_HANDLERS = `
-OBJECTION HANDLER DATABASE — AUTOMATIC DETECTION & RESPONSE:
+═══════════════════════════════════════════════
+OBJECTION RADAR — DETECT → CLASSIFY → RESPOND
+═══════════════════════════════════════════════
 
-When you detect ANY of these objections in the prospect's message, your suggestions MUST incorporate the corresponding handler technique. Never address the objection head-on or defensively. Instead, use the technique naturally.
+STEP 1: DETECT — Scan every prospect message for objection LANGUAGE
 
-═══ PRICE / MONEY OBJECTIONS ═══
-🔴 "I can't afford it" / "Too expensive" / "Not in my budget"
-TECHNIQUE: Reframe from cost to cost-of-NOT-doing-it.
-APPROACH: "I totally get that. When I was in your spot, I felt the same way. What really changed my mind was realizing how much I was ALREADY spending on [their current failed approaches] without getting results. Like, I added it up and it was insane."
-KEY: Quantify their current pain. Make the status quo feel MORE expensive than the solution.
+Watch for these exact phrases and patterns:
 
-🔴 "I need to save up first"
-TECHNIQUE: Urgency through opportunity cost (NOT fake scarcity).
-APPROACH: "Makes total sense to be smart with money. The thing that hit me was — every month I waited, I was leaving [specific result] on the table. What does another 3-6 months of [their problem] actually cost you?"
-KEY: Make WAITING feel expensive.
+"I'm busy" / "no time" / "swamped" / "crazy week" → TIME
+"I need to think" / "let me sleep on it" / "not sure yet" → CERTAINTY
+"Send me details" / "I'll look into it" / "tell me more" → NEED MORE CLARITY
+"How much?" / "what's the cost" / "I can't afford" / "tight budget" → MONEY
+"I'm not ready" / "maybe later" / "not the right time" → TIMING
+"Let me talk to my spouse" / "need to ask my partner" → TRUST (shared decision)
+"I tried this before" / "been burned" / "scammed before" → TRUST (past experience)
+"I don't know if this is for me" / "not my thing" → FEAR
+"I'm good where I am" / "not interested" → PRIORITY
+"What makes this different?" / "everyone says that" → CERTAINTY
 
-═══ TIME / TIMING OBJECTIONS ═══
-🔴 "I need to think about it" / "Let me sleep on it"
-TECHNIQUE: Massive Agreement + Isolation.
-APPROACH: "100% — you SHOULD think about it. That tells me you're serious. Just so I know what to share if you have questions — what specifically are you weighing up?"
-KEY: Agree, validate, then isolate what's REALLY holding them back.
+Also detect INDIRECT objections:
+- Short, one-word replies after longer messages = DISENGAGING
+- Changing the subject = AVOIDANCE (classify as FEAR or TRUST)
+- Sudden silence after a question = OVERWHELM (classify as CERTAINTY)
+- "Haha" / "lol" with no substance = DEFLECTION (classify as FEAR)
+- Asking lots of questions without committing = NEED MORE CLARITY
 
-🔴 "Now's not the right time" / "Maybe later"
-TECHNIQUE: Future pacing + pattern interrupt.
-APPROACH: "I said the exact same thing for like 8 months lol. Then someone asked me — 'what changes between now and later that makes this easier?' And I had no answer. That's when it clicked."
-KEY: Challenge the assumption that "later" will be better.
+STEP 2: CLASSIFY — Put every objection into a bucket
 
-🔴 "I'm too busy right now"
-TECHNIQUE: Empathy + reframe.
-APPROACH: "I feel you on that. Honestly that's usually a sign that something needs to change, not that you should keep doing the same things. The people who get the best results are always the 'busy' ones — because they're already action-takers."
-KEY: Turn their objection into a QUALIFICATION for why they're perfect for this.
+| BUCKET | Core Fear | They're Really Saying |
+|--------|-----------|----------------------|
+| TIME | "I'll lose my free time" | "I don't believe this is worth my time" |
+| MONEY | "I'll lose money" | "I don't see enough value yet" |
+| TRUST | "I'll get hurt/scammed" | "I haven't seen enough proof" |
+| CERTAINTY | "What if it doesn't work?" | "I need more confidence in the outcome" |
+| PRIORITY | "Other things matter more" | "You haven't connected to my deepest need" |
+| FEAR | "What if I fail/look stupid?" | "I'm scared of change" |
+| TIMING | "Not right now" | "The pain isn't urgent enough yet" |
+| NEED MORE CLARITY | "I don't understand enough" | "Explain it differently" |
 
-═══ TRUST / CREDIBILITY OBJECTIONS ═══
-🔴 "I've been burned before" / "I've tried things like this"
-TECHNIQUE: Validate + differentiate.
-APPROACH: "Ugh, I've been there too. That's actually why I was so skeptical at first. What was different this time was [specific differentiator]. But honestly, I didn't believe it until I saw [specific result] myself."
-KEY: Don't attack their past experience. Share YOUR skepticism journey.
+STEP 3: RESPOND — Choose the right response TYPE for each bucket
 
-🔴 "How do I know this will work for me?"
-TECHNIQUE: Social proof from similar situation + risk reversal.
-APPROACH: "That's the right question to ask. I know someone in [their exact niche/situation] who had the same doubt. They were doing [similar numbers]. Within [timeframe] they [specific result]. But obviously your situation is unique — that's why [the expert/team] does a proper assessment first."
-KEY: Specific proof > generic claims. Always reference someone in THEIR situation.
+| BUCKET | Response Type | What to Do |
+|--------|--------------|-----------|
+| TIME | REFRAME | Turn busy into qualification: "Busy people get the best results because they're already action-takers" |
+| MONEY | REFRAME | Quantify cost of inaction: "What does another 6 months of [problem] actually cost you?" |
+| TRUST | REASSURE | Share YOUR skepticism journey + specific proof: "I was the same way. Then I saw [specific result]" |
+| CERTAINTY | CLARIFY | Isolate the specific doubt: "What specifically would you need to see to feel confident?" |
+| PRIORITY | DEEPEN | Use SPIN Implication: "How is [their problem] affecting [deeper area of life]?" |
+| FEAR | REASSURE + REFRAME | Normalize fear: "Everyone I know who succeeded felt exactly like you do right now" |
+| TIMING | REFRAME | Challenge the assumption: "What changes between now and later that makes this easier?" |
+| NEED MORE CLARITY | CLARIFY | Answer directly, then re-engage: "Great question. [Answer]. What other questions do you have?" |
 
-🔴 "I don't know you well enough"
-TECHNIQUE: Transparency + time allowance.
-APPROACH: "Totally fair. We literally just connected. I'm not trying to sell you anything — I genuinely just found what you're doing interesting. No rush at all. What got you into [their niche] in the first place?"
-KEY: Remove ALL pressure. Go back to relationship building.
+RESPONSE TECHNIQUES BY TYPE:
 
-═══ AUTHORITY / DECISION OBJECTIONS ═══
-🔴 "I need to talk to my partner/spouse/business partner"
-TECHNIQUE: Respect + equip them.
-APPROACH: "Of course! That's smart to decide together. What do you think they'd want to know about it? I can help you explain it if that's useful."
-KEY: Help them become the salesperson to their partner.
+**CLARIFY** — Ask a question to understand the REAL objection:
+- "When you say [their words], what do you mean by that exactly?"
+- "Help me understand — is it more about [A] or [B]?"
+- "What would need to be true for you to feel good about this?"
 
-🔴 "I need to do more research"
-TECHNIQUE: Guide the research.
-APPROACH: "Love that you do your homework. What specifically do you want to research? Happy to point you to [specific resources/results/testimonials] so you're not wading through all the noise out there."
-KEY: Channel their research toward YOUR proof points.
+**REASSURE** — Provide evidence and emotional safety:
+- Share a story of someone in their EXACT situation who succeeded
+- Acknowledge their fear without dismissing it
+- "I felt the exact same way. Here's what changed my mind..."
 
-═══ COMPETITION OBJECTIONS ═══
-🔴 "I found something cheaper" / "Someone else offers this"
-TECHNIQUE: Never trash competition. Differentiate on fit.
-APPROACH: "Oh nice, what are you looking at? Genuinely curious because I looked at a TON of options before landing on this. The thing that made the difference for me was [unique differentiator relevant to THEIR specific situation]."
-KEY: Be curious, not defensive. Win on specificity to their situation.
+**REFRAME** — Shift their perspective without arguing:
+- Agree with their concern, then show a new angle
+- "You're right, AND..." (not "but")
+- Quantify the cost of NOT acting
 
-═══ APATHY / LOW INTEREST ═══
-🔴 "I'm not interested" / "I'm good where I am"
-TECHNIQUE: Pattern interrupt + curiosity gap.
-APPROACH: "Respect that! Out of curiosity though — when you say you're good, does that mean you're hitting [ambitious goal in their niche]? Or more like it's manageable?"
-KEY: Challenge their definition of "good." Most people are settling, not thriving.
+**DEEPEN** — Go DEEPER into their pain (use SPIN Implication):
+- "How is that affecting [bigger area]?"
+- "What happens to [important thing] if this continues?"
+- Make the STATUS QUO feel more painful than the change
 
-🔴 *Ghost / no reply*
-TECHNIQUE: Value-first follow-up (NOT "just checking in").
-APPROACH: "Hey [name] — saw this [specific relevant content/insight] and immediately thought of you because of [something they mentioned]. [Share the actual value]. No need to reply, just thought you'd find it useful!"
-KEY: Give value with ZERO expectation. Make them think "this person actually gets me."
+**ISOLATE** — Separate the real objection from the noise:
+- "If [this concern] wasn't a factor, would you want to move forward?"
+- "Is it really about [stated objection], or is there something else?"
+- "On a scale of 1-10, how much is [objection] really the thing stopping you?"
 
-DETECTION RULES:
-- Scan the prospect's message for keywords/phrases matching any objection above
-- If detected, the "primary" suggestion MUST use the corresponding handler technique
-- The "whyThisWorks" should explain which objection was detected and which technique is being applied
-- NEVER use the handler verbatim — adapt it to the prospect's specific language, niche, and situation
-- If multiple objections are detected, prioritize the EMOTIONAL one over the logical one
+**HAND OFF** — When the friend has done their job, transition naturally:
+- "Honestly, I'm not the expert on the technical side..."
+- "I know exactly one person who specializes in this..."
+- "Would it help if I connected you? Zero pressure."
+
+CRITICAL RULES:
+- NEVER crush an objection head-on. NEVER argue.
+- ALWAYS acknowledge first: "I totally hear you on that..."
+- When multiple objections detected, address the EMOTIONAL one first
+- If the same objection comes back 3+ times, they need REASSURANCE not logic
+- Track which objections this prospect has raised before (from Lead Registry)
+- If they've raised the SAME objection before, use a DIFFERENT technique this time
+
+═══════════════════════════════════════════════
+END OBJECTION RADAR
+═══════════════════════════════════════════════
 `;
 
 export const OBJECTION_DETECTION_PROMPT = `
-OBJECTION DETECTION (CRITICAL):
-Before generating suggestions, scan the prospect's latest message for objections. Look for:
-- Direct objections (explicit resistance statements)
-- Indirect objections (deflection, changing subject, going quiet)
-- Micro-objections (hesitation phrases like "maybe", "I guess", "not sure")
+OBJECTION RADAR (CRITICAL — run on EVERY message):
 
-If ANY objection is detected:
-1. Identify the objection category from your Objection Handler Database
-2. Apply the recommended technique in your PRIMARY suggestion
-3. Note the detected objection in your response metadata
-4. Your "alternative" and "softer" suggestions should use different handler approaches for the same objection
+Before generating suggestions, execute this objection scan:
+
+1. SCAN the prospect's message for objection keywords/phrases from the Objection Radar
+2. SCAN for indirect objections (short replies, deflection, subject changes, silence)
+3. CLASSIFY into bucket: TIME, MONEY, TRUST, CERTAINTY, PRIORITY, FEAR, TIMING, NEED MORE CLARITY
+4. CHECK Lead Registry — has this prospect raised this same objection before?
+5. SELECT response type: CLARIFY, REASSURE, REFRAME, DEEPEN, ISOLATE, or HAND OFF
+6. If same objection repeated → use a DIFFERENT response type than last time
+
+Apply the response type in your PRIMARY suggestion.
+Use DIFFERENT response types for alternative and softer variants.
+
+In "detectedObjection" field, return: "[BUCKET]: [specific phrase detected]"
+In "objectionResponseType" field, return: "CLARIFY" | "REASSURE" | "REFRAME" | "DEEPEN" | "ISOLATE" | "HAND_OFF"
+
+If NO objection detected, continue with discovery/deepening questions.
 `;
