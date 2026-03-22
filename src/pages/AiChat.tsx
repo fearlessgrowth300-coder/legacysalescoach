@@ -800,12 +800,17 @@ export default function AiChat() {
     if (msg.id) {
       await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true, image_url: primaryUrl }).eq("id", msg.id);
     }
-    const truncated = messages.slice(0, editingMsgIdx);
-    truncated.push({ ...msg, content: editText, is_edited: true, image_url: primaryUrl, image_urls: allImageUrls.length > 0 ? allImageUrls : undefined });
-    if (activeConvId) {
-      const idsToDelete = messages.slice(editingMsgIdx + 1).filter(m => m.id).map(m => m.id!);
-      if (idsToDelete.length > 0) await supabase.from("ai_chat_messages").delete().in("id", idsToDelete);
+    // Remove all messages after the edited one (including old assistant responses)
+    const idsToDelete = messages.slice(editingMsgIdx).filter(m => m.id && m.id !== msg.id).map(m => m.id!);
+    if (activeConvId && idsToDelete.length > 0) {
+      await supabase.from("ai_chat_messages").delete().in("id", idsToDelete);
     }
+    // Also update the edited message in DB
+    if (msg.id) {
+      await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true, image_url: primaryUrl }).eq("id", msg.id);
+    }
+    const truncated: Msg[] = messages.slice(0, editingMsgIdx);
+    truncated.push({ ...msg, content: editText, is_edited: true, image_url: primaryUrl, image_urls: allImageUrls.length > 0 ? allImageUrls : undefined });
     setMessages(truncated);
     setEditingMsgIdx(null);
     setEditText("");
