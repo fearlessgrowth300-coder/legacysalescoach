@@ -1216,8 +1216,6 @@ export default function AiChat() {
 
             {messages.map((msg, i) => {
               const isLastUser = msg.role === "user" && (i === messages.length - 1 || (i === messages.length - 2 && messages[messages.length - 1]?.role === "assistant"));
-              const isLongAssistant = msg.role === "assistant" && msg.content.length > 2000;
-              const isCollapsed = isLongAssistant && !collapsedMsgs.has(i);
               return (
               <div key={i} ref={isLastUser ? userMsgRef : undefined} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
@@ -1277,29 +1275,11 @@ export default function AiChat() {
                   ) : (
                     <>
                       {msg.role === "assistant" ? (
-                        <div className={`relative ${isCollapsed ? "max-h-[400px] overflow-hidden" : ""}`}>
-                          <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words">
-                            <ReactMarkdown>{msg.content}</ReactMarkdown>
-                          </div>
-                          {isCollapsed && (
-                            <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-muted to-transparent" />
-                          )}
+                        <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words">
+                          <ReactMarkdown>{msg.content}</ReactMarkdown>
                         </div>
                       ) : (
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                      )}
-                      {isLongAssistant && (
-                        <button
-                          onClick={() => setCollapsedMsgs(prev => {
-                            const next = new Set(prev);
-                            if (next.has(i)) next.delete(i);
-                            else next.add(i);
-                            return next;
-                          })}
-                          className="text-xs text-primary mt-2 hover:underline"
-                        >
-                          {isCollapsed ? "▼ Show full response" : "▲ Collapse"}
-                        </button>
                       )}
                       {/* Truncation warning on last assistant message */}
                       {wasTruncated && msg.role === "assistant" && i === messages.length - 1 && !isLoading && (
