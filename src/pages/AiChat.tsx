@@ -185,7 +185,7 @@ export default function AiChat() {
   const [followUps, setFollowUps] = useState<string[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [wasTruncated, setWasTruncated] = useState(false);
-  const [collapsedMsgs, setCollapsedMsgs] = useState<Set<number>>(new Set());
+  // collapsible feature removed per user request
   const userMsgRef = useRef<HTMLDivElement>(null);
 
   // Delete confirmation
