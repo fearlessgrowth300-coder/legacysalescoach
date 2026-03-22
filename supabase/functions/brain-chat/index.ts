@@ -203,14 +203,14 @@ serve(async (req) => {
       const [semPrinciples, semChunks] = await Promise.all([
         supabaseAdmin.rpc("match_sales_brain", {
           query_embedding: embeddingStr,
-          match_count: 60,
-          match_threshold: 0.3,
+          match_count: 200,
+          match_threshold: 0.25,
           p_user_id: user.id,
         }),
         supabaseAdmin.rpc("match_knowledge_chunks", {
           query_embedding: embeddingStr,
-          match_count: 60,
-          match_threshold: 0.3,
+          match_count: 200,
+          match_threshold: 0.25,
           p_user_id: user.id,
         }),
       ]);
