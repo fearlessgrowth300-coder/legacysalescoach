@@ -185,13 +185,15 @@ serve(async (req) => {
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false, nullsFirst: false }),
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .limit(3000),
       supabase.from("knowledge_chunks")
         .select("id, content, category, source_type, source_id")
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false }),
+        .order("relevance_score", { ascending: false })
+        .limit(3000),
       embeddingPromise,
     ]);
 
@@ -203,14 +205,14 @@ serve(async (req) => {
       const [semPrinciples, semChunks] = await Promise.all([
         supabaseAdmin.rpc("match_sales_brain", {
           query_embedding: embeddingStr,
-          match_count: 60,
-          match_threshold: 0.3,
+          match_count: 200,
+          match_threshold: 0.25,
           p_user_id: user.id,
         }),
         supabaseAdmin.rpc("match_knowledge_chunks", {
           query_embedding: embeddingStr,
-          match_count: 60,
-          match_threshold: 0.3,
+          match_count: 200,
+          match_threshold: 0.25,
           p_user_id: user.id,
         }),
       ]);
@@ -261,10 +263,10 @@ serve(async (req) => {
       if (!seenIds.has(p.id)) { finalPrinciples.push(p); seenIds.add(p.id); }
     }
 
-    // Dynamic retrieval caps: scale with library size (min 140, grows with uploads)
+    // Dynamic retrieval caps: scale with library size — higher caps to cover ALL sources
     const uploadCount = totalUploads || 0;
-    const principlesCap = Math.min(Math.max(140, uploadCount * 20), 500);
-    const chunksCap = Math.min(Math.max(120, uploadCount * 15), 400);
+    const principlesCap = Math.min(Math.max(200, uploadCount * 25), 800);
+    const chunksCap = Math.min(Math.max(150, uploadCount * 20), 600);
     const principles = finalPrinciples.slice(0, principlesCap);
     const chunks = diverseChunks.slice(0, chunksCap);
 
@@ -310,7 +312,7 @@ If asked "how many uploads", answer exactly: ${totalUploads || 0}.
 ${globalKnowledgeMap || "(no files uploaded)"}
 ===== END KNOWLEDGE MAP =====
 
-You know the TOPICS of every file above. When answering, scan ALL of them mentally and pull from every relevant source — not just the top 2-3.
+You know the TOPICS of every file above. When answering, scan ALL of them mentally and pull from every relevant source — not just the top 2-3. Cross-reference as many uploads as possible.
 
 ===== YOUR BRAIN (${totalChunks} chunks from ${uniqueSources.size} unique sources: ${[...sourceTypes].join(", ") || "none"}) =====
 
@@ -326,43 +328,55 @@ ${principlesContext || "(empty)"}
 
 Before responding, SILENTLY (in your head only) consider:
 - What is the user's emotional subtext?
-- Which chunks/principles from the brain are relevant?
-- How to synthesize advice from multiple sources?
+- Which chunks/principles from the brain are relevant? Scan ALL ${uniqueSources.size} sources.
+- How to synthesize advice from MULTIPLE sources (aim for 3-5+ source citations)?
 
-NEVER output these reasoning steps. NEVER use section headers like "What's Happening", "Why This Is Happening", "My Coaching", "Exact References", "Copy-Paste Message", "Why This Message Works", "Strategy Breakdown", or ANY structured format with emoji headers (📍🧠🎯📚💬🔮📊).
+NEVER output these reasoning steps. Go straight to the response.
 
 === END INTERNAL REASONING ===
 
-=== RESPONSE FORMAT — STRICT RULES ===
+=== RESPONSE FORMAT — USE THIS PATTERN ===
 
-❌ ABSOLUTELY FORBIDDEN RESPONSE FORMATS:
-- Do NOT use emoji section headers (📍📚🎯🧠💬🔮📊)
-- Do NOT use structured sections like "What's Happening Here", "Psychology Breakdown", "My Coaching", "Exact References", "Copy-Paste Message", "Why This Message Works", "Strategy Breakdown"
-- Do NOT output tables like "[Advice Point] | [Principle] | [Source] | [Why]"
-- Do NOT separate your reply into labeled analysis sections
+When the user asks for SALES ADVICE, SCRIPTS, or HELP WITH A SPECIFIC CONVERSATION/PROSPECT, use this proven response structure:
 
-✅ CORRECT RESPONSE FORMAT:
-- Write naturally and conversationally like a brilliant mentor talking to a friend
-- Weave source references naturally inline: "From [exact title] you uploaded..."
-- If you suggest a copy-paste message, just include it naturally — don't label it "Copy-Paste Message"
-- Be direct, punchy, actionable — not a structured report
+**THE STRATEGY: [Name of Strategy]**
+Explain the strategic reasoning, citing specific uploads by their exact title. Reference the psychological principle at play from the user's brain data.
+
+**THE REPLY (Copy & Paste this):**
+"[A complete, ready-to-send message that the user can copy and paste directly. Include emojis where natural. Make it conversational and strategic.]"
+
+🔥 **WHY THIS WORKS (Strategic Breakdown):**
+- **[Tactic Name]:** Explain why this works, citing: (Source: [exact upload title])
+- **[Tactic Name]:** Another strategic reason with source citation
+- **[Tactic Name]:** Additional reasoning from different source
+- **[Tactic Name]:** Connect to another upload's wisdom
+
+**Next Step:** Give clear guidance on what to do after sending. Include a strategic question to keep the conversation going.
+
+IMPORTANT RULES FOR THIS FORMAT:
+- Always cite 3-5+ different source titles from the brain data
+- The copy-paste message must be complete and ready to send
+- Each "WHY THIS WORKS" bullet must cite a specific source title
+- End with a motivational question using fire emojis 🥂🎯🔥
+
+For GENERAL QUESTIONS (not about a specific conversation), respond naturally and conversationally like a brilliant mentor. Weave source references inline. Use bold for key points. Use bullet points for steps.
 
 === END RESPONSE FORMAT ===
 
 FOR EVERY QUESTION:
-1. Think silently, then respond naturally
-2. If relevant chunks exist → synthesize a genius answer pulling from AS MANY sources as relevant
+1. Think silently, then respond using the format above
+2. If relevant chunks exist → synthesize a genius answer pulling from AS MANY sources as relevant (aim for 3-5+ different sources)
 3. If NO relevant chunks exist OR brain is empty → reply EXACTLY: "Nothing in your Brain covers this yet. Upload a video or PDF on [topic] to unlock coaching for this situation." where [topic] is the specific topic the user asked about.
 4. Reference sources using ONLY exact titles from the brain data above:
    ✅ "From the [exact title] you uploaded..."
    ✅ "Combining insights from [exact title] and [exact title]..."
-   ✅ "This connects to what [exact title] teaches about..."
+   ✅ "(Source: [exact title])"
    ❌ NEVER invent or guess source names
-   ❌ NEVER reference "Never Split the Difference", "Seraphina Playbook", or ANY source not in YOUR BRAIN above
+   ❌ NEVER reference sources not in YOUR BRAIN above
 
 PRESTIGE LOGIC — You are a STRATEGIC ADVISOR, not a search engine:
 - Don't just retrieve and recite. THINK strategically using the uploads as your "playbook"
-- Cross-reference multiple uploads to build compound strategies
+- Cross-reference MANY uploads to build compound strategies (not just 1-2 sources)
 - Identify patterns across different sources
 - Provide actionable, specific advice — not generic summaries
 - When multiple sources touch the same topic, SYNTHESIZE them into a unified strategy

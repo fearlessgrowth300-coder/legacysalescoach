@@ -185,7 +185,7 @@ export default function AiChat() {
   const [followUps, setFollowUps] = useState<string[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [wasTruncated, setWasTruncated] = useState(false);
-  const [collapsedMsgs, setCollapsedMsgs] = useState<Set<number>>(new Set());
+  // collapsible feature removed per user request
   const userMsgRef = useRef<HTMLDivElement>(null);
 
   // Delete confirmation
@@ -800,12 +800,17 @@ export default function AiChat() {
     if (msg.id) {
       await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true, image_url: primaryUrl }).eq("id", msg.id);
     }
-    const truncated = messages.slice(0, editingMsgIdx);
-    truncated.push({ ...msg, content: editText, is_edited: true, image_url: primaryUrl, image_urls: allImageUrls.length > 0 ? allImageUrls : undefined });
-    if (activeConvId) {
-      const idsToDelete = messages.slice(editingMsgIdx + 1).filter(m => m.id).map(m => m.id!);
-      if (idsToDelete.length > 0) await supabase.from("ai_chat_messages").delete().in("id", idsToDelete);
+    // Remove all messages after the edited one (including old assistant responses)
+    const idsToDelete = messages.slice(editingMsgIdx).filter(m => m.id && m.id !== msg.id).map(m => m.id!);
+    if (activeConvId && idsToDelete.length > 0) {
+      await supabase.from("ai_chat_messages").delete().in("id", idsToDelete);
     }
+    // Also update the edited message in DB
+    if (msg.id) {
+      await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true, image_url: primaryUrl }).eq("id", msg.id);
+    }
+    const truncated: Msg[] = messages.slice(0, editingMsgIdx);
+    truncated.push({ ...msg, content: editText, is_edited: true, image_url: primaryUrl, image_urls: allImageUrls.length > 0 ? allImageUrls : undefined });
     setMessages(truncated);
     setEditingMsgIdx(null);
     setEditText("");
@@ -1211,8 +1216,6 @@ export default function AiChat() {
 
             {messages.map((msg, i) => {
               const isLastUser = msg.role === "user" && (i === messages.length - 1 || (i === messages.length - 2 && messages[messages.length - 1]?.role === "assistant"));
-              const isLongAssistant = msg.role === "assistant" && msg.content.length > 2000;
-              const isCollapsed = isLongAssistant && !collapsedMsgs.has(i);
               return (
               <div key={i} ref={isLastUser ? userMsgRef : undefined} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
@@ -1272,29 +1275,11 @@ export default function AiChat() {
                   ) : (
                     <>
                       {msg.role === "assistant" ? (
-                        <div className={`relative ${isCollapsed ? "max-h-[400px] overflow-hidden" : ""}`}>
-                          <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words">
-                            <ReactMarkdown>{msg.content}</ReactMarkdown>
-                          </div>
-                          {isCollapsed && (
-                            <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-muted to-transparent" />
-                          )}
+                        <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words">
+                          <ReactMarkdown>{msg.content}</ReactMarkdown>
                         </div>
                       ) : (
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                      )}
-                      {isLongAssistant && (
-                        <button
-                          onClick={() => setCollapsedMsgs(prev => {
-                            const next = new Set(prev);
-                            if (next.has(i)) next.delete(i);
-                            else next.add(i);
-                            return next;
-                          })}
-                          className="text-xs text-primary mt-2 hover:underline"
-                        >
-                          {isCollapsed ? "▼ Show full response" : "▲ Collapse"}
-                        </button>
                       )}
                       {/* Truncation warning on last assistant message */}
                       {wasTruncated && msg.role === "assistant" && i === messages.length - 1 && !isLoading && (
