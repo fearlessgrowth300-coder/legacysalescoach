@@ -185,13 +185,15 @@ serve(async (req) => {
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false, nullsFirst: false }),
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .limit(3000),
       supabase.from("knowledge_chunks")
         .select("id, content, category, source_type, source_id")
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false }),
+        .order("relevance_score", { ascending: false })
+        .limit(3000),
       embeddingPromise,
     ]);
 
