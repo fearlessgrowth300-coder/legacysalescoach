@@ -10,6 +10,14 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+async function hashOtp(code: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(code);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -23,7 +31,7 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Find valid OTP
+    // Find valid OTP records for this email/type
     const { data: otpRecord, error: fetchErr } = await supabase
       .from("otp_codes")
       .select("*")
@@ -44,7 +52,6 @@ serve(async (req) => {
 
     // Max 5 attempts
     if (otpRecord.attempts >= 5) {
-      // Delete the code to force requesting a new one
       await supabase.from("otp_codes").delete().eq("id", otpRecord.id);
       return new Response(JSON.stringify({ valid: false, error: "Too many attempts. Request a new code." }), {
         status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -54,7 +61,9 @@ serve(async (req) => {
     // Increment attempts
     await supabase.from("otp_codes").update({ attempts: otpRecord.attempts + 1 }).eq("id", otpRecord.id);
 
-    if (otpRecord.code !== code) {
+    // Hash the user-provided code and compare against stored hash
+    const hashedInput = await hashOtp(code);
+    if (otpRecord.code !== hashedInput) {
       return new Response(JSON.stringify({ valid: false, error: "Invalid code" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

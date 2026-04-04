@@ -10,6 +10,14 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+async function hashOtp(code: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(code);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -51,7 +59,9 @@ serve(async (req) => {
 
     await supabase.from("otp_codes").update({ attempts: otpRecord.attempts + 1 }).eq("id", otpRecord.id);
 
-    if (otpRecord.code !== otpCode) {
+    // Hash the user-provided code and compare against stored hash
+    const hashedInput = await hashOtp(otpCode);
+    if (otpRecord.code !== hashedInput) {
       return new Response(JSON.stringify({ error: "Invalid code" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

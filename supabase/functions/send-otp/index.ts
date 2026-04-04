@@ -11,6 +11,14 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+async function hashOtp(code: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(code);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -46,16 +54,19 @@ serve(async (req) => {
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     const expiresAt = new Date(Date.now() + 600_000).toISOString(); // 10 min
 
-    // Store in database
+    // Hash OTP before storing
+    const hashedCode = await hashOtp(otp);
+
+    // Store hashed code in database
     const { error: insertErr } = await supabase.from("otp_codes").insert({
       email: normalizedEmail,
-      code: otp,
+      code: hashedCode,
       type: type || "signup",
       expires_at: expiresAt,
     });
     if (insertErr) throw insertErr;
 
-    // Send email
+    // Send email with plaintext OTP (user needs to read it)
     const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
 
     const subject = type === "reset"
