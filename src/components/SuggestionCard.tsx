@@ -1,10 +1,12 @@
+import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
   Copy, Check, ThumbsUp, ThumbsDown,
-  Thermometer, Target, Lightbulb, Brain, AlertTriangle
+  Thermometer, Target, Lightbulb, Brain, AlertTriangle,
+  ChevronDown, ChevronUp, Crosshair, RotateCcw, Zap
 } from "lucide-react";
 import type { ConversationAnalysis } from "@/components/ConversationIntelligencePanel";
 
@@ -15,6 +17,13 @@ export interface Suggestion {
   whyThisWorks?: string;
   frameworkUsed?: string;
   warmthPrediction?: number;
+  // New intelligence fields
+  detectedObjection?: string;
+  objectionBucket?: string;
+  objectionResponseType?: string;
+  spinStage?: string;
+  frameworksApplied?: string[];
+  conversionTrigger?: string;
 }
 
 interface SuggestionCardProps {
@@ -46,10 +55,46 @@ const warmthBarColor = (score: number) => {
   return "[&>div]:bg-blue-500";
 };
 
+const bucketColors: Record<string, string> = {
+  TIME: "border-orange-500/30 text-orange-700 dark:text-orange-400 bg-orange-500/10",
+  MONEY: "border-red-500/30 text-red-700 dark:text-red-400 bg-red-500/10",
+  TRUST: "border-violet-500/30 text-violet-700 dark:text-violet-400 bg-violet-500/10",
+  CERTAINTY: "border-indigo-500/30 text-indigo-700 dark:text-indigo-400 bg-indigo-500/10",
+  PRIORITY: "border-yellow-500/30 text-yellow-700 dark:text-yellow-400 bg-yellow-500/10",
+  FEAR: "border-rose-500/30 text-rose-700 dark:text-rose-400 bg-rose-500/10",
+  TIMING: "border-cyan-500/30 text-cyan-700 dark:text-cyan-400 bg-cyan-500/10",
+  CLARITY: "border-teal-500/30 text-teal-700 dark:text-teal-400 bg-teal-500/10",
+};
+
+const frameworkLabels: Record<string, string> = {
+  spin: "🔄 SPIN",
+  pas: "⚡ PAS",
+  storybrand: "📖 StoryBrand",
+  "before/after/bridge": "🌉 Bridge",
+  "before_after_bridge": "🌉 Bridge",
+  identity: "🪞 Identity",
+  "micro-commitment": "✅ Micro-Yes",
+  micro_commitment: "✅ Micro-Yes",
+  "pain_dream_gap": "🎯 Pain/Dream",
+  "5_whys": "❓ 5 Whys",
+  jobs_to_be_done: "🎯 JTBD",
+  voss: "🗣 Voss",
+  hormozi: "💰 Hormozi",
+  belfort: "🐺 Belfort",
+};
+
 function parseFramework(fw?: string) {
-  if (!fw) return { move: null, principle: null };
+  if (!fw) return { move: null, principle: null, frameworks: [] as string[] };
   const parts = fw.split("|").map(s => s.trim());
-  return { move: parts[0] || null, principle: parts[1] || null };
+  const move = parts[0] || null;
+  const principle = parts[1] || null;
+  // Extract any framework names from the string
+  const frameworks: string[] = [];
+  const lower = fw.toLowerCase();
+  for (const key of Object.keys(frameworkLabels)) {
+    if (lower.includes(key)) frameworks.push(key);
+  }
+  return { move, principle, frameworks };
 }
 
 const moveLabels: Record<string, string> = {
@@ -69,10 +114,33 @@ export default function SuggestionCard({
   onUse,
   onFeedback,
 }: SuggestionCardProps) {
-  const { move, principle } = parseFramework(suggestion.frameworkUsed);
+  const [intelExpanded, setIntelExpanded] = useState(false);
+  const { move, principle, frameworks: parsedFrameworks } = parseFramework(suggestion.frameworkUsed);
   const warmth = analysis?.warmth_score ?? 0;
   const stage = analysis?.stage ?? "friend";
   const displayMove = move ? (moveLabels[move] || move) : null;
+
+  // Merge frameworks from parsed + explicit
+  const allFrameworks = [
+    ...new Set([
+      ...parsedFrameworks,
+      ...(suggestion.frameworksApplied || []),
+    ])
+  ];
+
+  const hasIntelContext = !!(
+    suggestion.objectionBucket ||
+    suggestion.spinStage ||
+    suggestion.conversionTrigger ||
+    allFrameworks.length > 0 ||
+    analysis?.objection_bucket ||
+    analysis?.spin_stage
+  );
+
+  const objBucket = suggestion.objectionBucket || (analysis?.objection_detected ? analysis.objection_bucket : null);
+  const objResponse = suggestion.objectionResponseType || analysis?.objection_response_type;
+  const spinStage = suggestion.spinStage || analysis?.spin_stage;
+  const trigger = suggestion.conversionTrigger || (analysis?.conversion_triggers?.[0]);
 
   return (
     <Card className="overflow-hidden border-border/60">
@@ -95,13 +163,83 @@ export default function SuggestionCard({
         </Badge>
       </div>
 
+      {/* Intelligence Context Row */}
+      {hasIntelContext && (
+        <div className="border-b border-border/30">
+          <button
+            onClick={() => setIntelExpanded(!intelExpanded)}
+            className="w-full px-3 py-1.5 flex items-center gap-1.5 hover:bg-muted/30 transition-colors"
+          >
+            <Brain className="h-3 w-3 text-primary" />
+            <span className="text-[10px] font-medium text-primary">Intelligence</span>
+            {/* Compact badges always visible */}
+            <div className="flex items-center gap-1 ml-1 flex-wrap flex-1">
+              {objBucket && (
+                <Badge variant="outline" className={`text-[9px] px-1 py-0 border ${bucketColors[objBucket] || ""}`}>
+                  🎯 {objBucket}
+                </Badge>
+              )}
+              {spinStage && (
+                <Badge variant="outline" className="text-[9px] px-1 py-0 border-primary/30 text-primary bg-primary/5">
+                  🔄 {spinStage}
+                </Badge>
+              )}
+              {trigger && (
+                <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-500/30 text-amber-700 dark:text-amber-400 bg-amber-500/5">
+                  ⚡ {trigger}
+                </Badge>
+              )}
+            </div>
+            {intelExpanded ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
+          </button>
+          {intelExpanded && (
+            <div className="px-3 pb-2 space-y-1.5">
+              {objBucket && (
+                <div className="flex items-center gap-1.5">
+                  <Crosshair className="h-3 w-3 text-destructive" />
+                  <span className="text-[10px] text-muted-foreground">
+                    Objection: <span className="font-medium">{objBucket}</span>
+                    {objResponse && <> → <span className="text-primary font-medium">{objResponse}</span></>}
+                  </span>
+                </div>
+              )}
+              {spinStage && (
+                <div className="flex items-center gap-1.5">
+                  <RotateCcw className="h-3 w-3 text-primary" />
+                  <span className="text-[10px] text-muted-foreground">
+                    SPIN: <span className="font-medium text-primary">{spinStage}</span>
+                  </span>
+                </div>
+              )}
+              {trigger && (
+                <div className="flex items-center gap-1.5">
+                  <Zap className="h-3 w-3 text-amber-500" />
+                  <span className="text-[10px] text-muted-foreground">
+                    Trigger: <span className="font-medium">{trigger}</span>
+                  </span>
+                </div>
+              )}
+              {allFrameworks.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {allFrameworks.map((fw, i) => (
+                    <Badge key={i} variant="secondary" className="text-[9px] px-1 py-0">
+                      {frameworkLabels[fw] || fw}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Message body */}
       <div className="px-3 py-3">
         <p className="text-sm leading-relaxed whitespace-pre-wrap">{suggestion.text}</p>
       </div>
 
-      {/* Footer: Why + Prediction + Principle */}
-      {(suggestion.whyThisWorks || suggestion.warmthPrediction || principle) && (
+      {/* Footer: Why + Prediction + Principle + Frameworks */}
+      {(suggestion.whyThisWorks || suggestion.warmthPrediction || principle || allFrameworks.length > 0) && (
         <div className="px-3 pb-3 space-y-2 border-t border-border/30 pt-2">
           {suggestion.whyThisWorks && (
             <div className="flex items-start gap-1.5">
@@ -124,6 +262,16 @@ export default function SuggestionCard({
               </div>
             )}
           </div>
+          {/* Persuasion Framework Tags */}
+          {allFrameworks.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {allFrameworks.map((fw, i) => (
+                <Badge key={i} variant="outline" className="text-[9px] px-1 py-0 border-primary/20 text-primary/80">
+                  {frameworkLabels[fw] || fw}
+                </Badge>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
