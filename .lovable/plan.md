@@ -1,81 +1,54 @@
 
-# Twilio Practice Calling Integration
 
-## Overview
-When you click "Start Call" on a practice scenario, Twilio will call your real phone number. The AI prospect will answer based on the scenario you chose, using your brain's knowledge to coach you. The conversation flows naturally over a real phone call.
+## Plan: Enhanced Intelligence Panel + Persuasion Engine for Friends Chat
 
-## How It Works
-1. You select a scenario and enter your phone number
-2. Click "Start Call" -- Twilio calls your phone
-3. When you pick up, the AI prospect greets you based on the scenario
-4. You speak, the AI transcribes via Twilio's speech recognition, generates a response using the existing practice-call AI, and speaks it back using text-to-speech
-5. The conversation continues turn-by-turn until you hang up
-6. After the call ends, you see your full transcript and coaching analysis in the app
+### What's Changing
 
-## Setup Required (from you)
-You'll need 3 things from your Twilio Console (https://console.twilio.com):
-- **Account SID** (found on dashboard)
-- **Auth Token** (found on dashboard)
-- **Twilio Phone Number** (a number you've purchased that can make outbound calls)
+The Conversation Intelligence Panel currently shows warmth, stage, psychology, pain, signals, and recommended move. We'll expand it to also display the **objection bucket**, **SPIN stage**, **prospect fears/dreams**, and **conversion triggers** — all data the `analyze-conversation` function already returns but the UI doesn't show.
 
-## Technical Plan
+We'll also surface this intelligence **inline on each suggestion card** so the user sees the strategic context right alongside the reply.
 
-### 1. Store Twilio Credentials
-Add 3 secrets: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`
+### 1. Expand ConversationIntelligencePanel UI
 
-### 2. Create Edge Function: `twilio-practice-call`
-This function handles two actions:
-- **`initiate`**: Called from the app when user clicks "Start Call". Makes an outbound call via Twilio REST API to the user's phone number, pointing the call's webhook URL to the `twilio-practice-webhook` function
-- **`status`**: Receives call status updates (ringing, answered, completed) and forwards them to the app
+**File: `src/components/ConversationIntelligencePanel.tsx`**
 
-### 3. Create Edge Function: `twilio-practice-webhook`
-This is the TwiML webhook that Twilio hits during the call:
-- On first request: Plays the AI prospect's opening line using `<Say>` and starts listening with `<Gather input="speech">`
-- On each speech input: Sends the transcribed text to the existing `practice-call` AI logic, gets the prospect response, speaks it back with `<Say>`, and loops with another `<Gather>`
-- Stores each exchange in a temporary session (in-memory or database) for post-call analysis
+- Add the new fields to the `ConversationAnalysis` interface: `objection_detected`, `objection_bucket`, `objection_response_type`, `objection_is_repeat`, `spin_stage`, `discovery_question_type`, `prospect_fears`, `prospect_dreams`, `conversion_triggers`, `trust_words_detected`, `resistance_words_detected`, `prospect_decision_language`
+- Add new visual sections to the expanded panel:
+  - **Objection Radar** card: Shows detected objection phrase, colored bucket badge (TIME/MONEY/TRUST/etc.), response type badge, and a "repeat" warning if the same bucket appeared before
+  - **SPIN Stage** indicator: 4-step progress bar (Situation → Problem → Implication → Need-Payoff) with the current stage highlighted, plus the suggested next question type
+  - **Fears & Dreams** side-by-side cards: Red-tinted card listing prospect fears, green-tinted card listing prospect dreams
+  - **Conversion Triggers** section: Badges showing specific things that could push the prospect to convert
+  - **Trust vs Resistance** mini-section: Green badges for trust words, red badges for resistance words
 
-### 4. Update Practice Call UI (`PracticeCall.tsx`)
-- Add a phone number input field (saved to user profile for convenience)
-- Add "Call My Phone" button alongside the existing text-based practice
-- Show real-time call status (ringing, connected, in-progress)
-- When call ends, display the full transcript with coaching scores (reusing existing analysis UI)
+### 2. Add Intelligence Context to SuggestionCard
 
-### 5. Database Changes
-- Add `phone_number` column to `profiles` table (optional, for saving the user's number)
-- Create `practice_call_sessions` table to store call transcripts and scores:
-  - `id`, `user_id`, `scenario_id`, `twilio_call_sid`, `transcript` (jsonb), `overall_score`, `status`, `created_at`
+**File: `src/components/SuggestionCard.tsx`**
 
-### 6. Call Flow Diagram
-```text
-[App] ---> twilio-practice-call (initiate)
-                |
-                v
-         Twilio REST API ---> Calls user's phone
-                |
-                v
-         User answers ---> Twilio hits twilio-practice-webhook
-                |
-                v
-         AI generates prospect greeting (TwiML <Say>)
-                |
-                v
-         <Gather speech> listens to user
-                |
-                v
-         User speaks ---> Twilio transcribes ---> webhook receives text
-                |
-                v
-         practice-call AI generates response ---> <Say> speaks it back
-                |
-                v
-         Loop until hangup ---> Call ends ---> status callback
-                |
-                v
-         App shows transcript + coaching analysis
-```
+- Add a new collapsible "Intelligence" row between the header and message body
+- When analysis data is available, show compact badges for:
+  - Objection bucket (if detected): e.g., `🎯 MONEY — REFRAME`
+  - SPIN stage: e.g., `🔄 Implication`
+  - Top conversion trigger (if any): e.g., `⚡ proof of results`
+- This gives the user strategic context *per suggestion* without scrolling up to the panel
 
-### Important Notes
-- Twilio charges per minute for outbound calls (check your Twilio pricing)
-- The webhook URL must be publicly accessible -- the deployed edge function URL works for this
-- Speech recognition language defaults to English (configurable)
-- Each call turn has a ~2-3 second AI processing delay (similar to talking to a real person thinking)
+### 3. Add Persuasion Framework Indicators
+
+**File: `src/components/SuggestionCard.tsx`**
+
+- Parse the `frameworkUsed` field (already returned by `generate-reply`) to show which persuasion frameworks are being layered
+- Display framework badges like `SPIN`, `PAS`, `StoryBrand`, `Before/After/Bridge` in the card footer
+- Show the specific persuasion technique being used (e.g., "Identity-based selling", "Micro-commitment") alongside the existing "Why This Works"
+
+### 4. Update Suggestion Interface
+
+**File: `src/components/SuggestionCard.tsx`**
+
+- Extend the `Suggestion` interface to include optional fields: `detectedObjection`, `objectionBucket`, `objectionResponseType`, `spinStage`, `frameworksApplied` (string array)
+- These are already returned by `chat-suggest` and `generate-reply` edge functions but not yet passed through to the UI
+
+### Technical Details
+
+- The `analyze-conversation` edge function already returns all required fields (objection_bucket, spin_stage, prospect_fears, prospect_dreams, conversion_triggers, etc.) — this is purely a frontend display task
+- No backend changes needed; all data is already flowing through `conversationAnalysis` state in `Chats.tsx`
+- The `Suggestion` type needs to carry the per-suggestion framework metadata from the edge function response
+
