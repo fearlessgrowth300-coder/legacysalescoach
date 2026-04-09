@@ -1,27 +1,28 @@
 
 
-## Plan: Fix Truncated Brain Responses
+## Plan: Fix Text Overflowing Past Margins in AI Chat
+
+### Problem
+
+The assistant message text in Val's conversation overflows past the container margins on mobile. The bubble should stay within bounds like Desirae's conversation does. This is a CSS text-wrapping issue, not a truncation issue.
 
 ### Root Cause
 
-The first screenshot (Val's chat) shows a response that got **cut off mid-sentence** — it never finished rendering. The second screenshot (Desirae's chat) shows a complete response. The cause is the **`max_tokens: 16384` limit** in the brain-chat edge function.
-
-When the Brain generates a long, detailed response with multiple source citations, strategic breakdowns, and a full copy-paste reply, it can easily exceed 16,384 output tokens — especially when the system prompt is already massive (hundreds of principles + chunks injected). The model hits the token ceiling and the stream ends abruptly without a proper `[DONE]` signal.
-
-The client-side code already detects this (`wasTruncated` flag on line 126), but it doesn't do anything visible to help the user — the response just appears cut off.
+The markdown prose wrapper on line 1277 uses `max-w-none` which removes the max-width constraint inside the bubble. Combined with long bold text and inline formatting, some content pushes past the bubble boundary on narrow screens. The bubble itself (line 1221) has `max-w-[85%]` and `overflow-hidden`, but the inner prose content can still cause layout issues when words or bold phrases don't naturally break.
 
 ### Fix
 
-**File: `supabase/functions/brain-chat/index.ts`**
-- Increase `max_tokens` from `16384` to `32768` — this gives the model 2x more room to complete long strategic responses with full source citations
-- The model (`google/gemini-3-flash-preview`) supports this output size
-
 **File: `src/pages/AiChat.tsx`**
-- When `wasTruncated` is true, automatically append a "Continue" button or auto-send a follow-up request asking the model to continue from where it left off
-- Show a subtle indicator like "⚠️ Response was cut short — click to continue" so the user knows what happened and can recover
 
-### Technical Details
+1. On the assistant message prose div (line 1277), add `overflow-wrap: anywhere` and `word-break: break-word` to force long text to wrap within the bubble:
+   - Change the className to include `[&_*]:overflow-wrap-anywhere` or apply via inline style `style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}`
 
-- Line 418 in `brain-chat/index.ts`: change `max_tokens: 16384` → `max_tokens: 32768`
-- In the `onDone` callback in `AiChat.tsx`: when `wasTruncated === true`, either auto-continue or show a "Continue generating" button that re-sends the conversation with the partial response included, asking the model to finish
+2. On the bubble container (line 1221), add `min-w-0` to ensure the flex child can shrink properly below its content size on mobile.
+
+### Changes Summary
+
+- **Line 1221**: Add `min-w-0` to the bubble div className
+- **Line 1277**: Replace `max-w-none` with `max-w-full` and add `style={{ overflowWrap: 'anywhere' }}` to the prose wrapper so all nested text elements wrap correctly within the container
+
+This is a 2-line CSS fix. No backend changes needed.
 
