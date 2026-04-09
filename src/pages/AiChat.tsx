@@ -1218,7 +1218,7 @@ export default function AiChat() {
               return (
               <div key={i} ref={isLastUser ? userMsgRef : undefined} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[85%] rounded-lg p-3 relative group overflow-hidden break-words ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                  className={`max-w-[85%] min-w-0 rounded-lg p-3 relative group overflow-hidden break-words ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
                   onTouchStart={() => {
                     msgLongPressTimer.current = setTimeout(() => {
                       if (navigator.vibrate) navigator.vibrate(50);
@@ -1274,7 +1274,7 @@ export default function AiChat() {
                   ) : (
                     <>
                       {msg.role === "assistant" ? (
-                        <div className="prose prose-sm dark:prose-invert max-w-none break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words">
+                        <div className="prose prose-sm dark:prose-invert max-w-full break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                           <ReactMarkdown>{msg.content}</ReactMarkdown>
                         </div>
                       ) : (
