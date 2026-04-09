@@ -415,7 +415,7 @@ Q&A will be auto-saved as "ai_chat" but ai_chat is NEVER used in future retrieva
       },
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
-        max_tokens: 16384,
+        max_tokens: 32768,
         messages: [
           { role: "system", content: systemPrompt },
           ...validatedMessages,
