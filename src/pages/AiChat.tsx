@@ -1283,10 +1283,14 @@ export default function AiChat() {
                       {/* Truncation warning on last assistant message */}
                       {wasTruncated && msg.role === "assistant" && i === messages.length - 1 && !isLoading && (
                         <button
-                          onClick={() => { setWasTruncated(false); send(); }}
+                          onClick={() => {
+                            setWasTruncated(false);
+                            setInput("Continue from where you left off — finish the rest of your response");
+                            setTimeout(() => send(), 100);
+                          }}
                           className="flex items-center gap-1 text-xs text-amber-500 mt-2 hover:underline"
                         >
-                          ⚠️ Response may be incomplete — tap to regenerate
+                          ⚠️ Response was cut short — tap to continue
                         </button>
                       )}
                       {msg.is_edited && <span className="text-[10px] opacity-60 mt-1 block">edited</span>}
