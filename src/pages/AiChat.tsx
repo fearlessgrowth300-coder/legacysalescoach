@@ -1218,7 +1218,7 @@ export default function AiChat() {
               return (
               <div key={i} ref={isLastUser ? userMsgRef : undefined} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[85%] rounded-lg p-3 relative group overflow-hidden break-words ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                  className={`max-w-[85%] min-w-0 rounded-lg p-3 relative group overflow-hidden break-words ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
                   onTouchStart={() => {
                     msgLongPressTimer.current = setTimeout(() => {
                       if (navigator.vibrate) navigator.vibrate(50);
