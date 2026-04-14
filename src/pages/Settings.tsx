@@ -71,7 +71,7 @@ export default function Settings() {
               YouTube Transcript API Key
             </CardTitle>
             <CardDescription>
-              Used for extracting YouTube video transcripts automatically via TranscriptAPI.com.
+               Used for extracting YouTube video transcripts automatically via TranscriptAPI.com.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -82,7 +82,7 @@ export default function Settings() {
                 <a href="https://transcriptapi.com" target="_blank" rel="noopener noreferrer" className="text-primary underline">
                   transcriptapi.com
                 </a>
-                . Sign up for free to get started. Your key is stored securely on the server and never sent back to the browser.
+                . Your key is stored securely on the server and never sent back to the browser. Depending on TranscriptAPI.com's account rules, transcript extraction may require an active paid plan even if credits are available.
               </AlertDescription>
             </Alert>
 
