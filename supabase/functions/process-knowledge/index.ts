@@ -29,37 +29,97 @@ async function extractStructuredLearningsChunk(content: string, sourceName: stri
         messages: [
           {
             role: "system",
-            content: `You are an expert knowledge analyst. Extract EVERY SINGLE meaningful, actionable learning from this training material. Leave NOTHING out.
+            content: `You are an elite sales student watching this video / reading this material for the first time. Your job is to extract EVERYTHING valuable — every insight, technique, script, story, warning, and principle — as if you are the most obsessive note-taker who has ever studied sales.
 
-IMPORTANT: This content may NOT be about sales. It could be about leadership, life experiences, motivation, team building, networking, mindset, family, health, or ANY topic. Detect what the content is actually about.
+You will be given a TRANSCRIPT CHUNK from a video or document.
 
-For each learning, output in this exact JSON format:
-[
-  {
-    "principle_name": "Short name, e.g. Speak Calm & Slow",
-    "what_i_learned": "1-2 sentence explanation of the principle",
-    "how_to_apply": "Specific example of how to use this in real life or when advising someone",
-    "category": "auto-detected category name"
-  }
-]
+Extract every single distinct learning. There is no limit. If the chunk has 40 learnings, extract all 40. Miss nothing.
 
-CATEGORY DETECTION RULES:
-- Detect the main category for each insight based on its ACTUAL content
-- If it fits an existing common category, use it: Opening Lines, Rapport Building, Objection Handling, Closing Techniques, Trust Building, Prospecting, Team Leading, Life Experiences, Networking Business, Motivation Mindset, Family Balance, Personal Growth, Leadership, Health & Wellness, Financial Literacy, Content Creation, Social Media Strategy
-- If NONE of these fit, CREATE a new descriptive category name (e.g., "Parenting Wisdom", "Spiritual Growth", "Career Transitions")
-- Use Title Case for category names (e.g., "Team Leading" not "team_leading")
-- NEVER force sales categories onto non-sales content
+For EVERY learning you extract, return it in this exact JSON structure:
 
-CRITICAL RULES:
-- There is NO LIMIT on how many learnings you can extract. Extract 5, 20, 50, 100+ — whatever the content warrants
-- Extract EVERY distinct idea, technique, phrase, framework, story lesson, mindset shift, and actionable tip
-- If a paragraph contains 3 separate ideas, that's 3 separate learnings
-- Specific word-for-word phrases and scripts = each one is a learning
-- Stories with a moral = extract the moral as a learning
-- Do NOT summarize or combine multiple ideas into one learning
-- Each principle must be ACTIONABLE and SPECIFIC
-- "how_to_apply" must give a concrete example of what to say/do
-- Return ONLY the JSON array, no other text`,
+{
+  "principle_name": "[Short memorable name for this technique or insight]",
+  
+  "category": "[One of: Prospecting | Opening | Trust Building | Objection Handling | 
+               Closing | Follow Up | Mindset | Script | Story | Warning | Framework | 
+               Psychology | Marketing | Leadership | Pricing | DM Outreach | 
+               Social Media | Referral | Tonality | Body Language | Energy]",
+  
+  "what_i_learned": "[The full insight as if writing it in your own notes — 
+                     not just a headline. Capture the complete idea including 
+                     any context, nuance, or detail the speaker gave. 
+                     Minimum 3 sentences.]",
+  
+  "the_deep_why": "[WHY does this work on human psychology? What is happening 
+                   in the prospect's brain, emotions, or decision-making when 
+                   this technique is used? This is the psychological mechanism 
+                   behind the technique.]",
+  
+  "how_to_apply": "[Step-by-step practical application. Not vague advice — 
+                   specific actionable steps someone can follow TODAY. 
+                   Minimum 3 steps.]",
+  
+  "exact_words_to_use": "[If the speaker gave any exact phrases, scripts, 
+                         sentences, or word-for-word lines — capture them 
+                         here exactly as said. If no exact words given, 
+                         write the closest natural script for applying 
+                         this technique. Always write as spoken dialogue.]",
+  
+  "words_to_never_use": "[Phrases, words, or approaches the speaker warned 
+                         against — or that would sabotage this technique. 
+                         If not mentioned, infer from context what would 
+                         go wrong.]",
+  
+  "real_example_or_story": "[Any story, case study, example, or scenario 
+                            the speaker used to illustrate this. If they 
+                            gave a real example, capture it fully. 
+                            If not, write a concrete realistic example 
+                            of this technique in action.]",
+  
+  "when_to_use": "[The exact situation, moment, or trigger that calls for 
+                  this technique. Be specific — what has the prospect said 
+                  or done that signals this is the right move?]",
+  
+  "when_not_to_use": "[Situations where this would backfire. What context 
+                      makes this the wrong move?]",
+  
+  "common_mistake": "[The most common way people get this wrong — and what 
+                     happens when they do.]",
+  
+  "power_level": "[1-10 rating of how high-impact this technique is for 
+                  converting a prospect]",
+  
+  "works_best_for": "[Which type of prospect or situation this is most 
+                     powerful for — e.g. price objectors, warm leads, 
+                     cold DMs, phone calls, in-person]",
+  
+  "connected_principles": "[Names of other techniques or principles this 
+                           connects to or should be used alongside]"
+}
+
+---
+
+EXTRACTION RULES:
+
+1. NEVER summarise multiple ideas into one principle. Each distinct idea gets its own entry. If the speaker makes 8 points — extract 8.
+
+2. CAPTURE EXACT QUOTES. If the speaker says a specific sentence or script — capture it word for word in exact_words_to_use. These are gold. Do not paraphrase them.
+
+3. EXTRACT STORIES FULLY. If the speaker tells a story or example — that story is a principle in itself. Extract it as its own entry with category "Story" and capture the full narrative.
+
+4. EXTRACT WARNINGS. If the speaker says "never do this" or "the mistake people make is" — that is its own principle entry with category "Warning."
+
+5. EXTRACT FRAMEWORKS. If the speaker describes a multi-step system, formula, or framework — extract the full framework as one entry AND extract each step as its own entry.
+
+6. NUMBERS AND STATISTICS matter. If the speaker gives a stat like "80% of sales happen on the 5th follow up" — capture it in what_i_learned and use it in the script.
+
+7. TONALITY AND ENERGY cues. If the speaker talks about HOW to say something — the tone, pace, energy, pause — capture that as its own entry with category "Tonality."
+
+8. MINDSET SHIFTS. Any belief, mindset, or identity shift the speaker describes gets its own entry with category "Mindset."
+
+---
+
+Return a JSON array of principle objects. No extra text. No markdown. Just the raw JSON array starting with [ and ending with ].`,
           },
           {
             role: "user",
@@ -283,12 +343,12 @@ Make each chunk detailed enough to be useful on its own.`
     console.log(`Stored ${chunks.length} knowledge chunks with embeddings`);
 
     // ===== STEP 2: Extract STRUCTURED LEARNINGS =====
-    console.log("Extracting structured sales learnings...");
+    console.log("Extracting structured sales learnings with weapon-grade detail...");
     const learnings = await extractStructuredLearnings(contentToProcess, sourceName, LOVABLE_API_KEY);
 
     const storedLearnings: any[] = [];
     for (const learning of learnings) {
-      const embeddingText = `${learning.principle_name}: ${learning.what_i_learned} ${learning.how_to_apply}`;
+      const embeddingText = `${learning.principle_name}: ${learning.what_i_learned} ${learning.how_to_apply} ${learning.the_deep_why || ""}`;
       const embedding = await generateEmbedding(embeddingText, LOVABLE_API_KEY);
       
       const { data: inserted, error: insertErr } = await supabase.from("sales_brain").insert({
@@ -306,6 +366,16 @@ Make each chunk detailed enough to be useful on its own.`
           principle_name: learning.principle_name,
           what_i_learned: learning.what_i_learned,
           how_to_apply: learning.how_to_apply,
+          the_deep_why: learning.the_deep_why,
+          exact_words_to_use: learning.exact_words_to_use,
+          words_to_never_use: learning.words_to_never_use,
+          real_example_or_story: learning.real_example_or_story,
+          when_to_use: learning.when_to_use,
+          when_not_to_use: learning.when_not_to_use,
+          common_mistake: learning.common_mistake,
+          power_level: learning.power_level,
+          works_best_for: learning.works_best_for,
+          connected_principles: learning.connected_principles,
           source: sourceName,
         },
         embedding: embedding,
@@ -322,7 +392,7 @@ Make each chunk detailed enough to be useful on its own.`
       }
     }
 
-    console.log(`Stored ${storedLearnings.length} structured learnings in sales_brain`);
+    console.log(`Stored ${storedLearnings.length} weapon-grade structured learnings in sales_brain`);
 
     // ===== STEP 3: Break text into vector chunks (500-1000 tokens) =====
     const textChunks = breakIntoChunks(contentToProcess, 800);
