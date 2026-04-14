@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { describeApiKey, getLatestUserApiKey } from "../_shared/api-key-utils.ts";
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
@@ -177,7 +178,6 @@ serve(async (req) => {
       console.log("Using manual transcript, length:", content.length);
     } else if (type === "pdf" && filePath) {
       content = await extractPdfContent(filePath, supabase, itemId, corsHeaders, LOVABLE_API_KEY);
-      if (content === "__ERROR__") return; // error response already sent
     } else if (url) {
       content = await extractUrlContent(url, supabaseUrl, supabaseKey, supabase, user.id);
     }
@@ -586,35 +586,34 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
 
   if (videoId) {
     // 1. Try TranscriptAPI.com with user's key first, then global fallback
-    let transcriptApiKey: string | null = null;
+    let userTranscriptApiKey: string | null = null;
     if (userId && supabaseClient) {
       try {
-        const { data } = await supabaseClient
-          .from("user_api_keys")
-          .select("api_key")
-          .eq("user_id", userId)
-          .in("service", ["supadata", "transcriptapi"])
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (data?.api_key) {
-          transcriptApiKey = data.api_key;
-          console.log("Using user's TranscriptAPI key from user_api_keys");
+        const userKey = await getLatestUserApiKey(supabaseClient, userId, ["supadata", "transcriptapi"]);
+        if (userKey?.key) {
+          userTranscriptApiKey = userKey.key;
+          console.log("Using user's TranscriptAPI key from user_api_keys", {
+            service: userKey.service,
+            ...describeApiKey(userKey.key),
+          });
         }
       } catch (e) { console.error("Failed to fetch user API key:", e); }
     }
-    transcriptApiKey = transcriptApiKey || Deno.env.get("SUPADATA_API_KEY") || null;
 
     // Try TranscriptAPI with available keys, falling back from user key to global key
     const globalKey = Deno.env.get("SUPADATA_API_KEY") || null;
+    const seenKeys = new Set<string>();
     const keysToTry: { key: string; label: string }[] = [];
-    if (transcriptApiKey) keysToTry.push({ key: transcriptApiKey, label: "user" });
-    if (globalKey && globalKey !== transcriptApiKey) keysToTry.push({ key: globalKey, label: "global" });
+    if (userTranscriptApiKey) {
+      keysToTry.push({ key: userTranscriptApiKey, label: "user" });
+      seenKeys.add(userTranscriptApiKey);
+    }
+    if (globalKey && !seenKeys.has(globalKey)) keysToTry.push({ key: globalKey, label: "global" });
 
     for (const { key, label } of keysToTry) {
       if (content && content.length > 100) break;
       try {
-        console.log(`Trying TranscriptAPI.com with ${label} key...`);
+        console.log(`Trying TranscriptAPI.com with ${label} key`, describeApiKey(key));
         const sdRes = await fetch(
           `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`,
           {

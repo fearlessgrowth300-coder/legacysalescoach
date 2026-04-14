@@ -1,4 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { describeApiKey, getLatestUserApiKey } from "../_shared/api-key-utils.ts";
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
@@ -30,19 +32,14 @@ function extractInstagramUsername(url: string): string | null {
 async function getUserTranscriptApiKey(userId: string | null): Promise<string | null> {
   if (!userId) return null;
   try {
-    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2.49.4");
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-    const { data } = await supabase
-      .from("user_api_keys")
-      .select("api_key")
-      .eq("user_id", userId)
-      .in("service", ["supadata", "transcriptapi"])
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (data?.api_key) {
-      console.log("Using user's TranscriptAPI key from user_api_keys");
-      return data.api_key;
+    const userKey = await getLatestUserApiKey(supabase, userId, ["supadata", "transcriptapi"]);
+    if (userKey?.key) {
+      console.log("Using user's TranscriptAPI key from user_api_keys", {
+        service: userKey.service,
+        ...describeApiKey(userKey.key),
+      });
+      return userKey.key;
     }
   } catch (e) { console.error("Failed to fetch user API key:", e); }
   return null;
@@ -75,7 +72,7 @@ async function fetchYouTubeData(videoId: string, userId: string | null = null) {
   for (const { key, label } of keysToTry) {
     if (transcript && transcript.length > 50) break;
     try {
-      console.log(`Trying TranscriptAPI.com (${label}), key length:`, key.length);
+      console.log(`Trying TranscriptAPI.com (${label})`, describeApiKey(key));
       const sdRes = await fetch(
         `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`,
         {
@@ -249,7 +246,6 @@ serve(async (req) => {
     try {
       const authHeader = req.headers.get("Authorization");
       if (authHeader) {
-        const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2.49.4");
         const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
         const token = authHeader.replace("Bearer ", "");
         const { data: { user } } = await supabase.auth.getUser(token);
