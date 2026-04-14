@@ -710,52 +710,82 @@ export type Database = {
         Row: {
           brain_type: string
           category: string
+          common_mistake: string | null
+          connected_principles: string | null
           created_at: string
           embedding: string | null
+          exact_words_to_use: string | null
           how_to_apply: string
           id: string
           metadata: Json | null
+          power_level: string | null
           principle_name: string
+          real_example_or_story: string | null
           relevance_score: number | null
           source_id: string | null
           source_name: string
           source_type: string
+          the_deep_why: string | null
           user_id: string
           what_i_learned: string
+          when_not_to_use: string | null
+          when_to_use: string | null
+          words_to_never_use: string | null
+          works_best_for: string | null
           workspace_id: string | null
         }
         Insert: {
           brain_type?: string
           category?: string
+          common_mistake?: string | null
+          connected_principles?: string | null
           created_at?: string
           embedding?: string | null
+          exact_words_to_use?: string | null
           how_to_apply: string
           id?: string
           metadata?: Json | null
+          power_level?: string | null
           principle_name: string
+          real_example_or_story?: string | null
           relevance_score?: number | null
           source_id?: string | null
           source_name: string
           source_type?: string
+          the_deep_why?: string | null
           user_id: string
           what_i_learned: string
+          when_not_to_use?: string | null
+          when_to_use?: string | null
+          words_to_never_use?: string | null
+          works_best_for?: string | null
           workspace_id?: string | null
         }
         Update: {
           brain_type?: string
           category?: string
+          common_mistake?: string | null
+          connected_principles?: string | null
           created_at?: string
           embedding?: string | null
+          exact_words_to_use?: string | null
           how_to_apply?: string
           id?: string
           metadata?: Json | null
+          power_level?: string | null
           principle_name?: string
+          real_example_or_story?: string | null
           relevance_score?: number | null
           source_id?: string | null
           source_name?: string
           source_type?: string
+          the_deep_why?: string | null
           user_id?: string
           what_i_learned?: string
+          when_not_to_use?: string | null
+          when_to_use?: string | null
+          words_to_never_use?: string | null
+          works_best_for?: string | null
           workspace_id?: string | null
         }
         Relationships: [
