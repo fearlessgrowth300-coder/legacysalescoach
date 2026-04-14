@@ -1,28 +1,45 @@
 
 
-## Plan: Fix Text Overflowing Past Margins in AI Chat
+## Plan: Fix Malformed JSON in Structured Learnings Extraction
 
 ### Problem
 
-The assistant message text in Val's conversation overflows past the container margins on mobile. The bubble should stay within bounds like Desirae's conversation does. This is a CSS text-wrapping issue, not a truncation issue.
-
-### Root Cause
-
-The markdown prose wrapper on line 1277 uses `max-w-none` which removes the max-width constraint inside the bubble. Combined with long bold text and inline formatting, some content pushes past the bubble boundary on narrow screens. The bubble itself (line 1221) has `max-w-[85%]` and `overflow-hidden`, but the inner prose content can still cause layout issues when words or bold phrases don't naturally break.
+The `process-knowledge` edge function extracts knowledge chunks successfully (9 stored), but the structured learnings extraction fails because the AI model returns malformed JSON (single quotes or unquoted property names). The raw `JSON.parse()` on line 86 throws and returns 0 learnings, causing "No structured learnings found" in the UI.
 
 ### Fix
 
-**File: `src/pages/AiChat.tsx`**
+**File: `supabase/functions/process-knowledge/index.ts`** (lines 81-88)
 
-1. On the assistant message prose div (line 1277), add `overflow-wrap: anywhere` and `word-break: break-word` to force long text to wrap within the bubble:
-   - Change the className to include `[&_*]:overflow-wrap-anywhere` or apply via inline style `style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}`
+Add robust JSON repair before parsing:
 
-2. On the bubble container (line 1221), add `min-w-0` to ensure the flex child can shrink properly below its content size on mobile.
+1. Strip markdown code fences (` ```json ... ``` `)
+2. Replace single-quoted property names with double quotes
+3. Remove trailing commas before `]` or `}`
+4. Remove control characters
+5. If `JSON.parse` still fails after repair, attempt a second extraction with a smaller temperature or return a fallback
 
-### Changes Summary
+```typescript
+// After extracting jsonMatch[0]:
+let jsonStr = jsonMatch[0];
+// Strip control chars
+jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, ' ');
+// Fix single-quoted keys/values → double quotes
+jsonStr = jsonStr.replace(/'/g, '"');
+// Remove trailing commas
+jsonStr = jsonStr.replace(/,\s*([}\]])/g, '$1');
+try {
+  return JSON.parse(jsonStr);
+} catch {
+  // Try to salvage partial array by finding complete objects
+  const objects: any[] = [];
+  const objRegex = /\{[^{}]+\}/g;
+  let match;
+  while ((match = objRegex.exec(jsonStr)) !== null) {
+    try { objects.push(JSON.parse(match[0])); } catch { /* skip */ }
+  }
+  return objects;
+}
+```
 
-- **Line 1221**: Add `min-w-0` to the bubble div className
-- **Line 1277**: Replace `max-w-none` with `max-w-full` and add `style={{ overflowWrap: 'anywhere' }}` to the prose wrapper so all nested text elements wrap correctly within the container
-
-This is a 2-line CSS fix. No backend changes needed.
+This is a single-file backend fix. No UI changes needed — once the JSON parsing is robust, the structured learnings will be stored correctly and show up in "View All."
 
