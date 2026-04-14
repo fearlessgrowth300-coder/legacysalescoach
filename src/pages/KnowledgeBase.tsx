@@ -419,6 +419,25 @@ export default function KnowledgeBase() {
   };
 
   const getChunksForItem = (itemId: string) => chunks?.filter(c => c.source_id === itemId) || [];
+  const getLearningsForItem = (itemId: string) => allBrainLearnings?.filter(l => l.source_id === itemId) || [];
+  const getPreferredInsightsForItem = (itemId: string) => {
+    const itemLearnings = getLearningsForItem(itemId);
+    const itemChunks = getChunksForItem(itemId);
+
+    if (itemChunks.length > itemLearnings.length) {
+      return itemChunks.map((chunk) => ({
+        id: chunk.id,
+        title: chunk.category?.replace(/_/g, " ") || "Insight",
+        category: chunk.category || "general",
+        content: chunk.content,
+        trigger_phrases: chunk.trigger_phrases,
+        sourceType: "chunk",
+      }));
+    }
+
+    return itemLearnings;
+  };
+  const getInsightCountForItem = (itemId: string) => getPreferredInsightsForItem(itemId).length;
 
   return (
     <div className="px-4 py-6 md:py-8 max-w-4xl mx-auto overflow-x-hidden">
@@ -435,19 +454,30 @@ export default function KnowledgeBase() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {processedLearnings?.map((learning: any, idx: number) => (
-              <div key={idx} className="p-4 rounded-lg border bg-card space-y-2">
-                <div className="flex items-center gap-2">
-                  <Lightbulb className="h-4 w-4 text-amber-500 shrink-0" />
-                  <span className="font-semibold text-sm">Principle: {learning.principle_name}</span>
-                  <Badge variant="outline" className="text-[10px] ml-auto">{learning.category?.replace(/_/g, " ")}</Badge>
+            {processedLearnings?.map((learning: any, idx: number) => {
+              const isStructured = !!learning.principle_name;
+              const title = isStructured
+                ? learning.principle_name
+                : learning.title || learning.category?.replace(/_/g, " ") || "Insight";
+
+              return (
+                <div key={learning.id || idx} className="p-4 rounded-lg border bg-card space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Lightbulb className="h-4 w-4 text-amber-500 shrink-0" />
+                    <span className="font-semibold text-sm">{isStructured ? `Principle: ${title}` : `Insight: ${title}`}</span>
+                    <Badge variant="outline" className="text-[10px] ml-auto">{(learning.category || "general")?.replace(/_/g, " ")}</Badge>
+                  </div>
+                  <div className="pl-6 space-y-1">
+                    <p className="text-sm"><span className="font-medium text-muted-foreground">{isStructured ? "What I Learned:" : "Detail:"}</span> {isStructured ? learning.what_i_learned : learning.content}</p>
+                    {isStructured ? (
+                      <p className="text-sm"><span className="font-medium text-muted-foreground">How to Apply:</span> {learning.how_to_apply}</p>
+                    ) : learning.trigger_phrases ? (
+                      <p className="text-sm"><span className="font-medium text-muted-foreground">Trigger Phrases:</span> {learning.trigger_phrases}</p>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="pl-6 space-y-1">
-                  <p className="text-sm"><span className="font-medium text-muted-foreground">What I Learned:</span> {learning.what_i_learned}</p>
-                  <p className="text-sm"><span className="font-medium text-muted-foreground">How to Apply:</span> {learning.how_to_apply}</p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setLearningsDialogOpen(false)}>Close</Button>
@@ -917,21 +947,17 @@ export default function KnowledgeBase() {
                     <div
                       className="mt-3 pt-3 border-t cursor-pointer hover:bg-accent/50 rounded-b-lg transition-colors -mx-3 -mb-3 sm:-mx-6 sm:-mb-4 px-3 pb-3 sm:px-6 sm:pb-4"
                       onClick={() => {
-                        const itemLearnings = allBrainLearnings?.filter(l => l.source_id === item.id) || [];
-                        if (itemLearnings.length > 0) {
+                        const itemInsights = getPreferredInsightsForItem(item.id);
+                        if (itemInsights.length > 0) {
                           setSelectedItemId(item.id);
-                          showLearnings(itemLearnings, item.title);
+                          showLearnings(itemInsights, item.title);
                         } else {
-                          // Fallback to chunks if no brain learnings
-                          toast.info("No structured learnings found for this item — showing raw chunks.");
+                          toast.info("No insights found for this item yet.");
                         }
                       }}
                     >
                       <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                        <Sparkles className="h-3 w-3" /> Learned {(() => {
-                          const brainCount = allBrainLearnings?.filter(l => l.source_id === item.id).length || 0;
-                          return brainCount > 0 ? brainCount : itemChunks.length;
-                        })()} insights · <span className="text-primary underline underline-offset-2">View all</span>
+                        <Sparkles className="h-3 w-3" /> Learned {getInsightCountForItem(item.id)} insights · <span className="text-primary underline underline-offset-2">View all</span>
                       </p>
                       <div className="space-y-1">
                         {itemChunks.slice(0, 3).map((chunk) => (
