@@ -83,7 +83,26 @@ CRITICAL RULES:
     const aiContent = data.choices?.[0]?.message?.content || "";
     const jsonMatch = aiContent.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+      let jsonStr = jsonMatch[0];
+      // Strip control chars
+      jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, ' ');
+      // Fix single-quoted keys/values → double quotes
+      jsonStr = jsonStr.replace(/'/g, '"');
+      // Remove trailing commas before ] or }
+      jsonStr = jsonStr.replace(/,\s*([}\]])/g, '$1');
+      try {
+        return JSON.parse(jsonStr);
+      } catch {
+        // Salvage individual objects if full array parse fails
+        const objects: any[] = [];
+        const objRegex = /\{[^{}]+\}/g;
+        let match;
+        while ((match = objRegex.exec(jsonStr)) !== null) {
+          try { objects.push(JSON.parse(match[0])); } catch { /* skip */ }
+        }
+        console.log(`JSON repair: salvaged ${objects.length} objects from malformed response`);
+        return objects;
+      }
     }
     return [];
   } catch (e) {
