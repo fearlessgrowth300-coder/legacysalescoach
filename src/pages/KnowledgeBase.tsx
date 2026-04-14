@@ -433,9 +433,10 @@ export default function KnowledgeBase() {
     // Only fall back to raw chunks if zero structured learnings exist
     return itemChunks.map((chunk) => ({
       id: chunk.id,
-      title: chunk.category?.replace(/_/g, " ") || "Insight",
+      principle_name: chunk.category?.replace(/_/g, " ") || "Insight",
       category: chunk.category || "general",
-      content: chunk.content,
+      what_i_learned: chunk.content,
+      how_to_apply: "",
       trigger_phrases: chunk.trigger_phrases,
       sourceType: "chunk",
     }));
