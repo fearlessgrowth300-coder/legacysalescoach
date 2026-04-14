@@ -718,7 +718,7 @@ export type Database = {
           how_to_apply: string
           id: string
           metadata: Json | null
-          power_level: string | null
+          power_level: number | null
           principle_name: string
           real_example_or_story: string | null
           relevance_score: number | null
@@ -745,7 +745,7 @@ export type Database = {
           how_to_apply: string
           id?: string
           metadata?: Json | null
-          power_level?: string | null
+          power_level?: number | null
           principle_name: string
           real_example_or_story?: string | null
           relevance_score?: number | null
@@ -772,7 +772,7 @@ export type Database = {
           how_to_apply?: string
           id?: string
           metadata?: Json | null
-          power_level?: string | null
+          power_level?: number | null
           principle_name?: string
           real_example_or_story?: string | null
           relevance_score?: number | null
