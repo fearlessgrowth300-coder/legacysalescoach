@@ -21,6 +21,10 @@ function hexToBytes(value: string): Uint8Array {
   return Uint8Array.from(parts.map((part) => parseInt(part, 16)));
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
 export async function decryptStoredApiKey(storedValue: string): Promise<string> {
   const trimmedValue = storedValue.trim();
   if (!trimmedValue.startsWith("enc:")) return trimmedValue;
@@ -29,10 +33,12 @@ export async function decryptStoredApiKey(storedValue: string): Promise<string> 
   if (!ivHex || !ciphertextHex) throw new Error("Invalid encrypted API key format");
 
   const key = await getDecryptionKey();
+  const iv = toArrayBuffer(hexToBytes(ivHex));
+  const ciphertext = toArrayBuffer(hexToBytes(ciphertextHex));
   const plainBuffer = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: hexToBytes(ivHex) },
+    { name: "AES-GCM", iv },
     key,
-    hexToBytes(ciphertextHex),
+    ciphertext,
   );
 
   return new TextDecoder().decode(plainBuffer).trim();

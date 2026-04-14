@@ -178,7 +178,6 @@ serve(async (req) => {
       console.log("Using manual transcript, length:", content.length);
     } else if (type === "pdf" && filePath) {
       content = await extractPdfContent(filePath, supabase, itemId, corsHeaders, LOVABLE_API_KEY);
-      if (content === "__ERROR__") return; // error response already sent
     } else if (url) {
       content = await extractUrlContent(url, supabaseUrl, supabaseKey, supabase, user.id);
     }
