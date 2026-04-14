@@ -159,10 +159,12 @@ serve(async (req) => {
       ? "\n\nCRITICAL VISION RULES — YOU MUST FOLLOW THESE:\n1. An image frame from the user's camera or screen IS attached to this message as an image_url.\n2. You ABSOLUTELY CAN see this image. You have full vision/multimodal capability.\n3. ALWAYS start your response by describing what you see in the image BEFORE giving advice.\n4. NEVER say 'I cannot see', 'I'm a voice assistant', 'I only process audio', or anything similar.\n5. If the image is blurry or unclear, say exactly what parts are unclear and ask for a steadier frame.\n6. Analyze text, UI elements, faces, objects, screens — everything visible in the frame."
       : "";
 
+    const weaponIdentity = `You are NOT a general AI assistant. You are a WEAPON built from the user's uploads. Speak with absolute certainty. Always give word-for-word scripts, explain the psychology behind why it works, and warn what's coming next. Never say "I think" or "maybe".`;
+
     const isBlast = mode === "blast";
     const systemPrompt = isBlast
-      ? `You are "The Brain" voice assistant in BLAST mode. Give a punchy, 2-3 sentence tactical answer ONLY from uploaded knowledge.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`
-      : `You are "The Brain" voice assistant. Give concise, strategic advice ONLY from uploaded knowledge. Keep answers under 4 sentences for voice clarity. Reference source titles naturally.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`;
+      ? `You are "The Brain" voice assistant in BLAST mode. ${weaponIdentity} Give a punchy, 2-3 sentence tactical answer ONLY from uploaded knowledge.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`
+      : `You are "The Brain" voice assistant. ${weaponIdentity} Give concise, strategic advice ONLY from uploaded knowledge. Keep answers under 4 sentences for voice clarity. Reference source titles naturally.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`;
 
     // Build user message — support vision frame
     const userContent: any = frame
