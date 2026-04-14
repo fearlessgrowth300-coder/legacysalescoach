@@ -44,7 +44,7 @@ async function decryptValue(stored: string): Promise<string> {
 }
 
 serve(async (req) => {
-  const headers = getCorsHeaders(req);
+  const headers = corsHeaders;
   if (req.method === "OPTIONS") return new Response(null, { headers });
 
   try {
@@ -148,7 +148,7 @@ serve(async (req) => {
     });
   } catch (error) {
     console.error("manage-api-keys error:", error);
-    const headers = getCorsHeaders(req);
+    const headers = corsHeaders;
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
       { status: 500, headers: { ...headers, "Content-Type": "application/json" } }
