@@ -369,7 +369,7 @@ Make each chunk detailed enough to be useful on its own.`
         when_to_use: learning.when_to_use || null,
         when_not_to_use: learning.when_not_to_use || null,
         common_mistake: learning.common_mistake || null,
-        power_level: learning.power_level ? String(learning.power_level) : null,
+        power_level: learning.power_level ? Number(learning.power_level) : 5,
         works_best_for: learning.works_best_for || null,
         connected_principles: learning.connected_principles || null,
         relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
