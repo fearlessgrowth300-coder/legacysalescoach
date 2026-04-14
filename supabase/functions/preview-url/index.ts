@@ -29,6 +29,51 @@ function extractInstagramUsername(url: string): string | null {
   return match ? match[1] : null;
 }
 
+function extractUserIdFromJwt(token: string): string | null {
+  try {
+    const [, payload] = token.split(".");
+    if (!payload) return null;
+
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const decoded = JSON.parse(atob(padded));
+
+    return typeof decoded?.sub === "string" ? decoded.sub : null;
+  } catch (error) {
+    console.warn("Failed to decode auth token payload:", error);
+    return null;
+  }
+}
+
+async function resolveUserId(authHeader: string | null): Promise<string | null> {
+  if (!authHeader?.startsWith("Bearer ")) return null;
+
+  const token = authHeader.replace("Bearer ", "").trim();
+  if (!token) return null;
+
+  try {
+    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const { data, error } = await supabase.auth.getUser(token);
+
+    if (error) {
+      console.warn("Auth lookup failed, falling back to JWT payload:", error.message);
+    }
+
+    if (data?.user?.id) {
+      return data.user.id;
+    }
+  } catch (error) {
+    console.warn("Auth lookup threw, falling back to JWT payload:", error);
+  }
+
+  const fallbackUserId = extractUserIdFromJwt(token);
+  if (fallbackUserId) {
+    console.log("Resolved user ID from JWT payload fallback");
+  }
+
+  return fallbackUserId;
+}
+
 async function getUserTranscriptApiKey(userId: string | null): Promise<string | null> {
   if (!userId) return null;
   try {
@@ -241,17 +286,10 @@ serve(async (req) => {
     const { url } = await req.json();
     if (!url) throw new Error("URL required");
 
-    // Extract user ID from auth token to fetch their API keys
-    let userId: string | null = null;
-    try {
-      const authHeader = req.headers.get("Authorization");
-      if (authHeader) {
-        const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-        const token = authHeader.replace("Bearer ", "");
-        const { data: { user } } = await supabase.auth.getUser(token);
-        userId = user?.id || null;
-      }
-    } catch { /* continue without user key */ }
+    const userId = await resolveUserId(req.headers.get("Authorization"));
+    if (!userId) {
+      console.log("No authenticated user resolved for preview-url; using global fallback only");
+    }
 
     const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
     const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
