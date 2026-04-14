@@ -1,14 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
-function getCorsHeaders(req: Request) {
-  const origin = req.headers.get("origin") || "";
-  const isAllowed = origin.endsWith(".lovable.app") || origin.startsWith("http://localhost:");
-  return {
-    "Access-Control-Allow-Origin": isAllowed ? origin : "https://legacysalescoach.lovable.app",
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-  };
-}
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+};
 
 // Application-level encryption using AES-GCM with a server-side key
 const ENCRYPTION_KEY_ENV = "SUPABASE_SERVICE_ROLE_KEY"; // Use service role key as encryption seed
@@ -48,7 +44,7 @@ async function decryptValue(stored: string): Promise<string> {
 }
 
 serve(async (req) => {
-  const headers = getCorsHeaders(req);
+  const headers = corsHeaders;
   if (req.method === "OPTIONS") return new Response(null, { headers });
 
   try {
@@ -152,7 +148,7 @@ serve(async (req) => {
     });
   } catch (error) {
     console.error("manage-api-keys error:", error);
-    const headers = getCorsHeaders(req);
+    const headers = corsHeaders;
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
       { status: 500, headers: { ...headers, "Content-Type": "application/json" } }
