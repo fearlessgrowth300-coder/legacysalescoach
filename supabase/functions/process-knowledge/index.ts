@@ -94,7 +94,10 @@ For EVERY learning you extract, return it in this exact JSON structure:
                      cold DMs, phone calls, in-person]",
   
   "connected_principles": "[Names of other techniques or principles this 
-                           connects to or should be used alongside]"
+                            connects to or should be used alongside]",
+
+  "trigger_phrases": "[3-5 key words or phrases that should trigger retrieval 
+                      of this principle when someone asks about it]"
 }
 
 ---
