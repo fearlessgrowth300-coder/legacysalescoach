@@ -17,6 +17,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { BrainInsightCard } from "@/components/BrainInsightCard";
 
 type UrlPreview = {
   type: "youtube" | "instagram" | "webpage";
@@ -455,27 +456,20 @@ export default function KnowledgeBase() {
               Here's what I learned from <strong>{learningsSourceName}</strong>:
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="space-y-1 py-2">
             {processedLearnings?.map((learning: any, idx: number) => {
-              const isStructured = !!learning.principle_name;
-              const title = isStructured
-                ? learning.principle_name
-                : learning.title || learning.category?.replace(/_/g, " ") || "Insight";
-
+              if (learning.principle_name) {
+                return <BrainInsightCard key={learning.id || idx} principle={learning} />;
+              }
               return (
                 <div key={learning.id || idx} className="p-4 rounded-lg border bg-card space-y-2">
                   <div className="flex items-center gap-2">
                     <Lightbulb className="h-4 w-4 text-amber-500 shrink-0" />
-                    <span className="font-semibold text-sm">{isStructured ? `Principle: ${title}` : `Insight: ${title}`}</span>
+                    <span className="font-semibold text-sm">Insight: {learning.title || learning.category?.replace(/_/g, " ") || "Insight"}</span>
                     <Badge variant="outline" className="text-[10px] ml-auto">{(learning.category || "general")?.replace(/_/g, " ")}</Badge>
                   </div>
-                  <div className="pl-6 space-y-1">
-                    <p className="text-sm"><span className="font-medium text-muted-foreground">{isStructured ? "What I Learned:" : "Detail:"}</span> {isStructured ? learning.what_i_learned : learning.content}</p>
-                    {isStructured ? (
-                      <p className="text-sm"><span className="font-medium text-muted-foreground">How to Apply:</span> {learning.how_to_apply}</p>
-                    ) : learning.trigger_phrases ? (
-                      <p className="text-sm"><span className="font-medium text-muted-foreground">Trigger Phrases:</span> {learning.trigger_phrases}</p>
-                    ) : null}
+                  <div className="pl-6">
+                    <p className="text-sm">{learning.content}</p>
                   </div>
                 </div>
               );
@@ -498,21 +492,10 @@ export default function KnowledgeBase() {
             <DialogDescription>Principles extracted from uploaded videos &amp; PDFs only (read-only vault)</DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh]">
-            <div className="space-y-3 py-2 pr-4">
+            <div className="space-y-1 py-2 pr-4">
               {allBrainLearnings && allBrainLearnings.length > 0 ? (
                 allBrainLearnings.map((learning: any) => (
-                  <div key={learning.id} className="p-4 rounded-lg border bg-card space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Lightbulb className="h-4 w-4 text-amber-500 shrink-0" />
-                      <span className="font-semibold text-sm">{learning.principle_name}</span>
-                      <Badge variant="outline" className="text-[10px] ml-auto">{learning.category?.replace(/_/g, " ")}</Badge>
-                    </div>
-                    <div className="pl-6 space-y-1">
-                      <p className="text-sm"><span className="font-medium text-muted-foreground">What I Learned:</span> {learning.what_i_learned}</p>
-                      <p className="text-sm"><span className="font-medium text-muted-foreground">How to Apply:</span> {learning.how_to_apply}</p>
-                      <p className="text-xs text-muted-foreground mt-1">Source: {learning.source_name} • {learning.brain_type} mode</p>
-                    </div>
-                  </div>
+                  <BrainInsightCard key={learning.id} principle={learning} />
                 ))
               ) : (
                 <div className="text-center py-8 text-muted-foreground">
