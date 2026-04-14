@@ -1,45 +1,64 @@
 
+## Plan: Fix TranscriptAPI key usage for YouTube extraction
 
-## Plan: Fix Malformed JSON in Structured Learnings Extraction
+### What is actually happening
+- The app is trying to use your saved key first.
+- But your saved key is stored encrypted in `user_api_keys`.
+- `preview-url` and `process-knowledge` are reading that encrypted value and sending it directly to TranscriptAPI.
+- That is why the logs show the “user-provided” key length is `153` and TranscriptAPI returns `401 Invalid API key`.
+- After that, the app falls back to the project-level key, and that account returns `402 no_active_paid_plan`.
 
-### Problem
+So the issue is:
+1. App bug: encrypted user key is not being decrypted before use
+2. Backup key/account issue: the fallback TranscriptAPI account does not have an active paid plan
 
-The `process-knowledge` edge function extracts knowledge chunks successfully (9 stored), but the structured learnings extraction fails because the AI model returns malformed JSON (single quotes or unquoted property names). The raw `JSON.parse()` on line 86 throws and returns 0 learnings, causing "No structured learnings found" in the UI.
+### Changes to make
+1. **Decrypt saved user keys before using them**
+   - Update `supabase/functions/preview-url/index.ts`
+   - Update `supabase/functions/process-knowledge/index.ts`
+   - Reuse the same AES-GCM decrypt logic already used in `manage-api-keys`
+   - Send only the decrypted key in the `Authorization` header
 
-### Fix
+2. **Keep the existing fallback order**
+   - Try decrypted user key first
+   - If it fails with `401` or `402`, try the project fallback key
+   - Keep the current scraping fallback as last resort
 
-**File: `supabase/functions/process-knowledge/index.ts`** (lines 81-88)
+3. **Improve logs and error states**
+   - Keep logs safe: source of key only, never raw key
+   - Make it clearer whether failure is:
+     - invalid saved key
+     - no active paid plan
+     - no transcript available for that video
 
-Add robust JSON repair before parsing:
+4. **Fix misleading Settings copy**
+   - Update `src/pages/Settings.tsx`
+   - Remove wording that implies a free account always works
+   - Clarify that TranscriptAPI may require an active paid plan depending on their account rules
 
-1. Strip markdown code fences (` ```json ... ``` `)
-2. Replace single-quoted property names with double quotes
-3. Remove trailing commas before `]` or `}`
-4. Remove control characters
-5. If `JSON.parse` still fails after repair, attempt a second extraction with a smaller temperature or return a fallback
+5. **Retest the exact failing flow**
+   - Paste the YouTube URL again
+   - Confirm preview fetches transcript
+   - Confirm processing stores chunks and structured learnings
+   - Confirm “View All” shows learnings instead of the raw-chunk fallback
 
-```typescript
-// After extracting jsonMatch[0]:
-let jsonStr = jsonMatch[0];
-// Strip control chars
-jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, ' ');
-// Fix single-quoted keys/values → double quotes
-jsonStr = jsonStr.replace(/'/g, '"');
-// Remove trailing commas
-jsonStr = jsonStr.replace(/,\s*([}\]])/g, '$1');
-try {
-  return JSON.parse(jsonStr);
-} catch {
-  // Try to salvage partial array by finding complete objects
-  const objects: any[] = [];
-  const objRegex = /\{[^{}]+\}/g;
-  let match;
-  while ((match = objRegex.exec(jsonStr)) !== null) {
-    try { objects.push(JSON.parse(match[0])); } catch { /* skip */ }
-  }
-  return objects;
-}
-```
+### Files to update
+- `supabase/functions/preview-url/index.ts`
+- `supabase/functions/process-knowledge/index.ts`
+- `src/pages/Settings.tsx`
 
-This is a single-file backend fix. No UI changes needed — once the JSON parsing is robust, the structured learnings will be stored correctly and show up in "View All."
+### Expected result
+- Your saved TranscriptAPI key will be used correctly instead of the encrypted blob
+- If your TranscriptAPI account is valid, transcript extraction should work again
+- If it still fails after decryption, the remaining problem is with the provider account status, not the app
 
+### Technical details
+- Current evidence:
+  - user key log length: `153` → looks like encrypted `enc:...` data, not a real API key
+  - fallback key log length: `46` → plain fallback key is being sent
+  - provider responses:
+    - user key: `401 Invalid API key`
+    - fallback key: `402 You don’t have an active paid plan yet`
+- Root mismatch in code:
+  - `manage-api-keys` encrypts on save
+  - `preview-url` and `process-knowledge` do not decrypt on read
