@@ -424,18 +424,20 @@ export default function KnowledgeBase() {
     const itemLearnings = getLearningsForItem(itemId);
     const itemChunks = getChunksForItem(itemId);
 
-    if (itemChunks.length > itemLearnings.length) {
-      return itemChunks.map((chunk) => ({
-        id: chunk.id,
-        title: chunk.category?.replace(/_/g, " ") || "Insight",
-        category: chunk.category || "general",
-        content: chunk.content,
-        trigger_phrases: chunk.trigger_phrases,
-        sourceType: "chunk",
-      }));
+    // Always prefer structured learnings (sales_brain) when any exist
+    if (itemLearnings.length > 0) {
+      return itemLearnings;
     }
 
-    return itemLearnings;
+    // Only fall back to raw chunks if zero structured learnings exist
+    return itemChunks.map((chunk) => ({
+      id: chunk.id,
+      title: chunk.category?.replace(/_/g, " ") || "Insight",
+      category: chunk.category || "general",
+      content: chunk.content,
+      trigger_phrases: chunk.trigger_phrases,
+      sourceType: "chunk",
+    }));
   };
   const getInsightCountForItem = (itemId: string) => getPreferredInsightsForItem(itemId).length;
 
