@@ -71,12 +71,12 @@ export function BrainInsightCard({ principle }: { principle: BrainPrinciple }) {
       {/* Expanded detail */}
       {expanded && (
         <div className="px-4 pb-4 space-y-4 border-t pt-4">
-          {/* Full what_i_learned */}
-          <Section label="Full Insight">
+          {/* 1. Full what_i_learned */}
+          <Section label="What I Learned">
             <p className="text-sm leading-relaxed">{principle.what_i_learned}</p>
           </Section>
 
-          {/* Deep why */}
+          {/* 2. Deep why */}
           {principle.the_deep_why && (
             <Section label="Why This Works Psychologically">
               <p className="text-sm leading-relaxed text-purple-400">
@@ -85,7 +85,7 @@ export function BrainInsightCard({ principle }: { principle: BrainPrinciple }) {
             </Section>
           )}
 
-          {/* Exact words */}
+          {/* 3. Exact words */}
           {principle.exact_words_to_use && (
             <Section label="Exact Words To Use">
               <div className="bg-green-900/20 border border-green-500/20 rounded-lg p-3">
@@ -96,16 +96,25 @@ export function BrainInsightCard({ principle }: { principle: BrainPrinciple }) {
             </Section>
           )}
 
-          {/* How to apply */}
-          {principle.how_to_apply && (
-            <Section label="How To Apply">
-              <p className="text-sm leading-relaxed whitespace-pre-line">
-                {principle.how_to_apply}
+          {/* 4. Words to never use */}
+          {principle.words_to_never_use && (
+            <Section label="Never Say This" labelColor="text-red-400">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {principle.words_to_never_use}
               </p>
             </Section>
           )}
 
-          {/* When to use / not use */}
+          {/* 5. Real example */}
+          {principle.real_example_or_story && (
+            <Section label="Real Example" labelColor="text-yellow-400">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {principle.real_example_or_story}
+              </p>
+            </Section>
+          )}
+
+          {/* 6. When to use / not use */}
           {(principle.when_to_use || principle.when_not_to_use) && (
             <div className="grid grid-cols-2 gap-3">
               {principle.when_to_use && (
@@ -131,7 +140,7 @@ export function BrainInsightCard({ principle }: { principle: BrainPrinciple }) {
             </div>
           )}
 
-          {/* Common mistake */}
+          {/* 7. Common mistake */}
           {principle.common_mistake && (
             <div className="bg-red-900/15 border border-red-500/20 rounded-lg p-3">
               <p className="text-xs text-red-400 uppercase tracking-wider mb-1 font-medium">
@@ -143,25 +152,7 @@ export function BrainInsightCard({ principle }: { principle: BrainPrinciple }) {
             </div>
           )}
 
-          {/* Words to never use */}
-          {principle.words_to_never_use && (
-            <Section label="Never Say This" labelColor="text-red-400">
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                {principle.words_to_never_use}
-              </p>
-            </Section>
-          )}
-
-          {/* Real example */}
-          {principle.real_example_or_story && (
-            <Section label="Real Example" labelColor="text-yellow-400">
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                {principle.real_example_or_story}
-              </p>
-            </Section>
-          )}
-
-          {/* Tags row */}
+          {/* 8. Power level + works best for */}
           <div className="flex flex-wrap gap-2 pt-1">
             {principle.works_best_for && (
               <Badge variant="outline" className="text-[10px] bg-blue-900/20 text-blue-300 border-blue-500/20">
@@ -179,6 +170,15 @@ export function BrainInsightCard({ principle }: { principle: BrainPrinciple }) {
               </span>
             )}
           </div>
+
+          {/* 9. How to apply — LAST */}
+          {principle.how_to_apply && (
+            <Section label="How To Apply">
+              <p className="text-sm leading-relaxed whitespace-pre-line">
+                {principle.how_to_apply}
+              </p>
+            </Section>
+          )}
         </div>
       )}
     </div>
