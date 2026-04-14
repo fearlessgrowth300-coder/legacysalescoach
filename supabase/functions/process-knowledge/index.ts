@@ -348,7 +348,7 @@ Make each chunk detailed enough to be useful on its own.`
 
     const storedLearnings: any[] = [];
     for (const learning of learnings) {
-      const embeddingText = `${learning.principle_name}: ${learning.what_i_learned} ${learning.how_to_apply} ${learning.the_deep_why || ""}`;
+      const embeddingText = `${learning.principle_name} ${learning.what_i_learned} ${learning.exact_words_to_use || ""} ${learning.the_deep_why || ""}`;
       const embedding = await generateEmbedding(embeddingText, LOVABLE_API_KEY);
       
       const { data: inserted, error: insertErr } = await supabase.from("sales_brain").insert({
@@ -361,23 +361,19 @@ Make each chunk detailed enough to be useful on its own.`
         source_type: "sales_principle",
         brain_type: item.brain_type,
         category: learning.category || "general",
-        metadata: {
-          type: "sales_principle",
-          principle_name: learning.principle_name,
-          what_i_learned: learning.what_i_learned,
-          how_to_apply: learning.how_to_apply,
-          the_deep_why: learning.the_deep_why,
-          exact_words_to_use: learning.exact_words_to_use,
-          words_to_never_use: learning.words_to_never_use,
-          real_example_or_story: learning.real_example_or_story,
-          when_to_use: learning.when_to_use,
-          when_not_to_use: learning.when_not_to_use,
-          common_mistake: learning.common_mistake,
-          power_level: learning.power_level,
-          works_best_for: learning.works_best_for,
-          connected_principles: learning.connected_principles,
-          source: sourceName,
-        },
+        // New weapon-grade columns
+        the_deep_why: learning.the_deep_why || null,
+        exact_words_to_use: learning.exact_words_to_use || null,
+        words_to_never_use: learning.words_to_never_use || null,
+        real_example_or_story: learning.real_example_or_story || null,
+        when_to_use: learning.when_to_use || null,
+        when_not_to_use: learning.when_not_to_use || null,
+        common_mistake: learning.common_mistake || null,
+        power_level: learning.power_level ? String(learning.power_level) : null,
+        works_best_for: learning.works_best_for || null,
+        connected_principles: learning.connected_principles || null,
+        relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
+        metadata: { source: sourceName },
         embedding: embedding,
         workspace_id: null,
       }).select().single();
@@ -389,6 +385,8 @@ Make each chunk detailed enough to be useful on its own.`
           how_to_apply: learning.how_to_apply,
           category: learning.category,
         });
+      } else if (insertErr) {
+        console.error("Insert error for principle:", learning.principle_name, insertErr.message);
       }
     }
 
