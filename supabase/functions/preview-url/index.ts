@@ -65,24 +65,27 @@ async function fetchYouTubeData(videoId: string, userId: string | null = null) {
     }
   } catch (e) { console.error("YouTube oembed error:", e); }
 
-  // 2. Try TranscriptAPI.com — user's key first, then global fallback
+  // 2. Try TranscriptAPI.com — user's key first, then global fallback on 401/402
   const userKey = await getUserTranscriptApiKey(userId);
-  const SUPADATA_API_KEY = userKey || Deno.env.get("SUPADATA_API_KEY");
-  if (SUPADATA_API_KEY) {
-    console.log("Using TranscriptAPI key:", userKey ? "user-provided" : "global fallback");
+  const globalKey = Deno.env.get("SUPADATA_API_KEY");
+  const keysToTry: { key: string; label: string }[] = [];
+  if (userKey) keysToTry.push({ key: userKey, label: "user-provided" });
+  if (globalKey && globalKey !== userKey) keysToTry.push({ key: globalKey, label: "global fallback" });
+
+  for (const { key, label } of keysToTry) {
+    if (transcript && transcript.length > 50) break;
     try {
-      console.log("Trying TranscriptAPI.com for transcript...", "key length:", SUPADATA_API_KEY.length);
+      console.log(`Trying TranscriptAPI.com (${label}), key length:`, key.length);
       const sdRes = await fetch(
         `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`,
         {
-          headers: { "Authorization": `Bearer ${SUPADATA_API_KEY}` },
+          headers: { "Authorization": `Bearer ${key}` },
           signal: AbortSignal.timeout(30000),
         }
       );
-      console.log("TranscriptAPI status:", sdRes.status);
+      console.log(`TranscriptAPI status (${label}):`, sdRes.status);
       if (sdRes.ok) {
         const sdData = await sdRes.json();
-        // Handle text response
         if (sdData.transcript && typeof sdData.transcript === "string" && sdData.transcript.length > 50) {
           transcript = sdData.transcript;
         } else if (sdData.text && typeof sdData.text === "string" && sdData.text.length > 50) {
@@ -92,12 +95,13 @@ async function fetchYouTubeData(videoId: string, userId: string | null = null) {
         } else if (sdData.content && typeof sdData.content === "string" && sdData.content.length > 50) {
           transcript = sdData.content;
         }
-        console.log("TranscriptAPI transcript length:", transcript.length);
+        console.log(`TranscriptAPI transcript length (${label}):`, transcript.length);
       } else {
         const errBody = await sdRes.text();
-        console.warn("TranscriptAPI error:", sdRes.status, errBody);
+        console.warn(`TranscriptAPI error (${label}):`, sdRes.status, errBody);
+        if (sdRes.status === 401 || sdRes.status === 402) continue;
       }
-    } catch (e) { console.error("TranscriptAPI error:", e); }
+    } catch (e) { console.error(`TranscriptAPI error (${label}):`, e); }
   }
 
   // 3. Fallback: watch page scraping

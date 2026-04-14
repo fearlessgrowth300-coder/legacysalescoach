@@ -605,13 +605,20 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
     }
     transcriptApiKey = transcriptApiKey || Deno.env.get("SUPADATA_API_KEY") || null;
 
-    if (transcriptApiKey) {
+    // Try TranscriptAPI with available keys, falling back from user key to global key
+    const globalKey = Deno.env.get("SUPADATA_API_KEY") || null;
+    const keysToTry: { key: string; label: string }[] = [];
+    if (transcriptApiKey) keysToTry.push({ key: transcriptApiKey, label: "user" });
+    if (globalKey && globalKey !== transcriptApiKey) keysToTry.push({ key: globalKey, label: "global" });
+
+    for (const { key, label } of keysToTry) {
+      if (content && content.length > 100) break;
       try {
-        console.log("Trying TranscriptAPI.com, key source:", userId && transcriptApiKey !== Deno.env.get("SUPADATA_API_KEY") ? "user" : "global");
+        console.log(`Trying TranscriptAPI.com with ${label} key...`);
         const sdRes = await fetch(
           `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`,
           {
-            headers: { "Authorization": `Bearer ${transcriptApiKey}` },
+            headers: { "Authorization": `Bearer ${key}` },
             signal: AbortSignal.timeout(30000),
           }
         );
@@ -626,19 +633,21 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
             transcript = sdData.transcript.map((c: any) => c.text || c.content || "").join(" ");
           }
           if (transcript.length > 100) {
-            // Get title
             let title = "";
             try {
               const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`, { signal: AbortSignal.timeout(10000) });
               if (oembedRes.ok) { title = (await oembedRes.json()).title || ""; }
             } catch { /* ignore */ }
             content = `Video Title: ${title}\n\nTranscript:\n${transcript.substring(0, 15000)}`;
-            console.log("TranscriptAPI success, content length:", content.length);
+            console.log(`TranscriptAPI success (${label} key), content length:`, content.length);
           }
         } else {
-          console.warn("TranscriptAPI error:", sdRes.status, await sdRes.text());
+          const errBody = await sdRes.text();
+          console.warn(`TranscriptAPI error (${label} key):`, sdRes.status, errBody);
+          // If 401/402, try next key
+          if (sdRes.status === 401 || sdRes.status === 402) continue;
         }
-      } catch (e) { console.error("TranscriptAPI error:", e); }
+      } catch (e) { console.error(`TranscriptAPI error (${label} key):`, e); }
     }
 
     // 2. Fallback: YouTube watch page scraping
