@@ -43,10 +43,11 @@ export function BookBriefCard({
 }: Props) {
   const isLive = status === "mapping" || status === "extracting";
   const isReady = status === "ready";
-
-  return (
-    <Card className="p-4 sm:p-5 space-y-4 border-primary/30">
-      {/* Header */}
+  const chapters = brief.chapters || [];
+  const totalCh = chapters.length;
+  const doneCh = chapters.filter((c) => c.status === "done").length;
+  const extractingCh = chapters.find((c) => c.status === "extracting");
+  const currentReadingIndex = extractingCh?.index ?? (totalCh > 0 ? Math.min(doneCh + 1, totalCh) : 0);
       <div className="flex items-start gap-3">
         <div className="rounded-md bg-primary/10 p-2 shrink-0">
           <BookOpen className="h-5 w-5 text-primary" />
@@ -72,7 +73,13 @@ export function BookBriefCard({
       {isLive && (
         <div className="flex items-center gap-2 rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2">
           <Loader2 className="h-4 w-4 animate-spin text-amber-500" />
-          <span className="text-xs sm:text-sm">Brain is now learning…</span>
+          <span className="text-xs sm:text-sm">
+            {status === "mapping"
+              ? "Reading the book…"
+              : totalCh > 0
+                ? `Reading chapter ${currentReadingIndex} of ${totalCh}`
+                : "Brain is now learning…"}
+          </span>
         </div>
       )}
 
