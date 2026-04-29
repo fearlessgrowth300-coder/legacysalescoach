@@ -192,40 +192,130 @@ Return a JSON array of principle objects. No extra text. No markdown. Just the r
     });
 
     if (!response.ok) {
-      console.error("Structured learnings API error:", response.status);
+      const errBody = await response.text().catch(() => "");
+      console.error("Structured learnings API error:", response.status, errBody.substring(0, 500));
       return [];
     }
 
     const data = await response.json();
     const aiContent = data.choices?.[0]?.message?.content || "";
-    const jsonMatch = aiContent.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-      let jsonStr = jsonMatch[0];
-      // Strip control chars
-      jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, ' ');
-      // Fix single-quoted keys/values → double quotes
-      jsonStr = jsonStr.replace(/'/g, '"');
-      // Remove trailing commas before ] or }
-      jsonStr = jsonStr.replace(/,\s*([}\]])/g, '$1');
-      try {
-        return JSON.parse(jsonStr);
-      } catch {
-        // Salvage individual objects if full array parse fails
-        const objects: any[] = [];
-        const objRegex = /\{[^{}]+\}/g;
-        let match;
-        while ((match = objRegex.exec(jsonStr)) !== null) {
-          try { objects.push(JSON.parse(match[0])); } catch { /* skip */ }
-        }
-        console.log(`JSON repair: salvaged ${objects.length} objects from malformed response`);
-        return objects;
-      }
+    if (!aiContent || aiContent.length < 5) {
+      console.warn("Empty AI extraction response. Full payload keys:", Object.keys(data || {}));
+      return [];
     }
-    return [];
+    const parsed = parsePrinciplesJson(aiContent);
+    if (parsed.length === 0) {
+      console.warn(
+        `Pass 2 returned 0 principles. Raw AI output (first 800 chars): ${aiContent.substring(0, 800)}`,
+      );
+    }
+    return parsed;
   } catch (e) {
     console.error("Structured learnings extraction failed:", e);
     return [];
   }
+}
+
+// Robust JSON-array parser for AI extraction output.
+// Handles: ```json fences, wrapping objects { "principles": [...] }, smart
+// quotes, trailing commas, and an array embedded anywhere in the response.
+function parsePrinciplesJson(raw: string): any[] {
+  if (!raw) return [];
+  let s = raw.trim();
+
+  // Strip code fences
+  s = s.replace(/^```(?:json|JSON)?\s*/i, "").replace(/```\s*$/i, "").trim();
+
+  // Normalize smart quotes → ASCII quotes
+  s = s
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"');
+
+  const tryParse = (txt: string): any[] | null => {
+    try {
+      const v = JSON.parse(txt);
+      if (Array.isArray(v)) return v;
+      if (v && typeof v === "object") {
+        // Common wrapper shapes
+        for (const key of ["principles", "learnings", "items", "results", "data", "extractions"]) {
+          if (Array.isArray(v[key])) return v[key];
+        }
+        // If it looks like a single principle object, wrap it
+        if (v.principle_name || v.what_i_learned) return [v];
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  // 1. Try the whole string
+  let result = tryParse(s);
+  if (result) return result;
+
+  // 2. Try after stripping control chars + trailing commas
+  const cleaned = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, " ").replace(/,\s*([}\]])/g, "$1");
+  result = tryParse(cleaned);
+  if (result) return result;
+
+  // 3. Find the outermost JSON array via brace counting
+  const arrStart = cleaned.indexOf("[");
+  if (arrStart !== -1) {
+    let depth = 0;
+    let inStr = false;
+    let escape = false;
+    for (let i = arrStart; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (escape) { escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === "[") depth++;
+      else if (ch === "]") {
+        depth--;
+        if (depth === 0) {
+          const candidate = cleaned.substring(arrStart, i + 1);
+          result = tryParse(candidate);
+          if (result) return result;
+          break;
+        }
+      }
+    }
+  }
+
+  // 4. Salvage individual top-level JSON objects (depth-aware)
+  const objects: any[] = [];
+  let depth = 0;
+  let inStr = false;
+  let escape = false;
+  let objStart = -1;
+  for (let i = 0; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === "{") {
+      if (depth === 0) objStart = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && objStart !== -1) {
+        const candidate = cleaned.substring(objStart, i + 1);
+        try {
+          const v = JSON.parse(candidate);
+          if (v && typeof v === "object" && (v.principle_name || v.what_i_learned)) {
+            objects.push(v);
+          }
+        } catch { /* skip */ }
+        objStart = -1;
+      }
+    }
+  }
+  if (objects.length > 0) {
+    console.log(`JSON repair: salvaged ${objects.length} principle objects via brace-counting`);
+  }
+  return objects;
 }
 
 import { chunkText, dedupePrinciples } from "./lib.ts";
