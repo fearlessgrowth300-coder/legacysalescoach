@@ -175,7 +175,10 @@ export function BookBriefCard({
                     </div>
                   </div>
                   {c.status === "done" && c.summary && (
-                    <p className="mt-1.5 text-xs text-muted-foreground leading-snug pl-4 border-l-2 border-primary/30">
+                    <p
+                      key={`sum-${c.index}-${c.summary.length}`}
+                      className="mt-1.5 text-xs text-muted-foreground leading-snug pl-4 border-l-2 border-primary/30 animate-in fade-in slide-in-from-left-2 duration-500"
+                    >
                       <span className="font-medium text-foreground/80">What I learned:</span> {c.summary}
                     </p>
                   )}
