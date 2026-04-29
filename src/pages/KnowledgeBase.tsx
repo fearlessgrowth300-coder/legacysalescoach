@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -365,6 +366,43 @@ export default function KnowledgeBase() {
     },
   });
 
+  const deleteAll = useMutation({
+    mutationFn: async () => {
+      if (!user) throw new Error("Not signed in");
+
+      // 1. Collect file_paths to remove from storage
+      const { data: allItems } = await supabase
+        .from("knowledge_base_items")
+        .select("id, file_path")
+        .eq("user_id", user.id);
+
+      const filePaths = (allItems || []).map((i: any) => i.file_path).filter(Boolean);
+      if (filePaths.length > 0) {
+        await supabase.storage.from("knowledge-files").remove(filePaths);
+      }
+
+      // 2. Wipe derived brain data
+      await supabase.from("sales_brain").delete().eq("user_id", user.id);
+      await supabase.from("knowledge_chunks").delete().eq("user_id", user.id);
+      try { await supabase.from("learned_insights").delete().eq("user_id", user.id); } catch {}
+      try { await supabase.from("conversation_insights").delete().eq("user_id", user.id); } catch {}
+
+      // 3. Delete all knowledge_base_items
+      const { error } = await supabase
+        .from("knowledge_base_items")
+        .delete()
+        .eq("user_id", user.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Everything deleted — start fresh!");
+      queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+      queryClient.invalidateQueries({ queryKey: ["all-brain-learnings"] });
+    },
+    onError: (e: any) => toast.error(e.message || "Failed to delete all"),
+  });
+
   const retryItem = useMutation({
     mutationFn: async (item: any) => {
       // Reset status to processing
@@ -524,6 +562,40 @@ export default function KnowledgeBase() {
           <Button variant="outline" size="sm" className="text-xs sm:text-sm" onClick={() => setViewAllLearningsOpen(true)}>
             <BookOpen className="h-4 w-4 mr-1 sm:mr-2" />Brain Learnings
           </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="text-xs sm:text-sm"
+                disabled={deleteAll.isPending || !items || items.length === 0}
+              >
+                {deleteAll.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-1 sm:mr-2 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4 mr-1 sm:mr-2" />
+                )}
+                Delete All
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete everything from scratch?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently removes all uploaded videos and PDFs, plus every principle and chunk the Brain learned from them. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteAll.mutate()}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Yes, delete everything
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           {/* Batch Import Dialog */}
           <Dialog open={batchDialogOpen} onOpenChange={setBatchDialogOpen}>
             <DialogTrigger asChild>
