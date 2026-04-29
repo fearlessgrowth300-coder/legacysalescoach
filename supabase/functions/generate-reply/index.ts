@@ -476,6 +476,8 @@ ${principlesText.substring(0, 6000)}`;
       whyThisWorks: v.why_this_works || "",
       frameworkUsed: `${v.move_used || ""} | ${v.principle_applied || ""}`,
       warmthPrediction: v.warmth_prediction,
+      citedPrincipleName: v.cited_principle_name || null,
+      citedSourceName: v.cited_source_name || null,
     }));
 
     const sourceTypes = new Set<string>();
