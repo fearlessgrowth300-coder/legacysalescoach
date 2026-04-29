@@ -228,43 +228,42 @@ Return a JSON array of principle objects. No extra text. No markdown. Just the r
   }
 }
 
+import { chunkText, dedupePrinciples } from "./lib.ts";
+
 async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
-  // Pass 2 chunk size: small chunks force the AI to go deep on each idea
-  // instead of summarising. 10k chars ≈ 2.5k tokens of dense source.
-  const CHUNK_SIZE = 10000;
-  const chunks: string[] = [];
+  // ===== PASS 1: Clean each 10k chunk independently, then concatenate =====
+  const rawChunks = chunkText(content, 10000);
+  console.log(`Pass 1: cleaning ${rawChunks.length} raw chunks of ~10k chars each`);
 
-  if (content.length <= CHUNK_SIZE) {
-    chunks.push(content);
-  } else {
-    let start = 0;
-    while (start < content.length) {
-      let end = start + CHUNK_SIZE;
-      if (end >= content.length) {
-        chunks.push(content.substring(start));
-        break;
-      }
-      const lastPeriod = content.lastIndexOf(". ", end);
-      const lastNewline = content.lastIndexOf("\n", end);
-      const breakPoint = Math.max(lastPeriod, lastNewline);
-      if (breakPoint > start + CHUNK_SIZE * 0.5) end = breakPoint + 1;
-      chunks.push(content.substring(start, end));
-      start = end;
-    }
+  const cleanedParts: string[] = [];
+  for (let i = 0; i < rawChunks.length; i++) {
+    const cleaned = await cleanTranscriptChunk(rawChunks[i], apiKey);
+    console.log(`Pass 1 chunk ${i + 1}/${rawChunks.length}: ${rawChunks[i].length} → ${cleaned.length} chars`);
+    cleanedParts.push(cleaned);
   }
+  const cleanedFull = cleanedParts.join("\n\n");
+  console.log(`Pass 1 done. Concatenated cleaned text: ${cleanedFull.length} chars`);
 
-  console.log(`Three-pass pipeline: ${chunks.length} chunks of ~${CHUNK_SIZE} chars each`);
+  // ===== PASS 2: Re-chunk the cleaned text at 10k and extract from each =====
+  const extractionChunks = chunkText(cleanedFull, 10000);
+  console.log(`Pass 2: extracting from ${extractionChunks.length} cleaned chunks`);
+
   const allLearnings: any[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    // Pass 1: clean
-    const cleaned = await cleanTranscriptChunk(chunks[i], apiKey);
-    console.log(`Chunk ${i + 1}/${chunks.length}: cleaned ${chunks[i].length} → ${cleaned.length} chars`);
-    // Pass 2: extract weapon-grade principles
-    const chunkLearnings = await extractStructuredLearningsChunk(cleaned, sourceName, apiKey, i, chunks.length);
+  for (let i = 0; i < extractionChunks.length; i++) {
+    const chunkLearnings = await extractStructuredLearningsChunk(
+      extractionChunks[i],
+      sourceName,
+      apiKey,
+      i,
+      extractionChunks.length,
+    );
     allLearnings.push(...chunkLearnings);
-    console.log(`Chunk ${i + 1}/${chunks.length}: extracted ${chunkLearnings.length} principles`);
+    console.log(`Pass 2 chunk ${i + 1}/${extractionChunks.length}: extracted ${chunkLearnings.length} principles`);
   }
-  return allLearnings;
+
+  const deduped = dedupePrinciples(allLearnings);
+  console.log(`Pass 2 done. ${allLearnings.length} raw → ${deduped.length} unique principles`);
+  return deduped;
 }
 
 serve(async (req) => {
@@ -334,13 +333,15 @@ serve(async (req) => {
     const learnings = await extractStructuredLearnings(contentToProcess, sourceName, LOVABLE_API_KEY);
     console.log(`Pass 2 complete: ${learnings.length} principles extracted`);
 
-    // ===== PASS 3: Rich-field embedding + insert into sales_brain =====
+    // ===== PASS 3: Rich-field embedding + UPSERT into sales_brain (dedup-safe) =====
     const storedLearnings: any[] = [];
+    const seenChunkContent = new Set<string>(); // in-memory dedup for knowledge_chunks
     for (const learning of learnings) {
+      const principleName = (learning.principle_name || "Untitled Principle").trim();
       // Concatenate ALL meaningful fields so semantic search finds the right
       // technique even when the user phrases it completely differently.
       const embeddingText = [
-        learning.principle_name,
+        principleName,
         learning.category,
         learning.what_i_learned,
         learning.exact_words_to_use,
@@ -351,10 +352,10 @@ serve(async (req) => {
       ].filter((s) => typeof s === "string" && s.trim().length > 0).join(" | ");
       const embedding = await generateEmbedding(embeddingText, LOVABLE_API_KEY);
 
-      const { data: inserted, error: insertErr } = await supabase.from("sales_brain").insert({
+      const brainRow = {
         user_id: user.id,
         source_id: itemId,
-        principle_name: learning.principle_name || "Untitled Principle",
+        principle_name: principleName,
         what_i_learned: learning.what_i_learned || "",
         how_to_apply: learning.how_to_apply || "",
         source_name: sourceName,
@@ -375,35 +376,73 @@ serve(async (req) => {
         metadata: { source: sourceName },
         embedding: embedding,
         workspace_id: null,
-      }).select().single();
+      };
 
-      if (!insertErr && inserted) {
+      // Upsert against the new unique index (user_id, source_id, lower(principle_name))
+      // Falls back to manual select+update if the DB rejects (e.g. very old schema).
+      let inserted: any = null;
+      const { data: upserted, error: upsertErr } = await supabase
+        .from("sales_brain")
+        .insert(brainRow)
+        .select()
+        .single();
+
+      if (upserted) {
+        inserted = upserted;
+      } else if (upsertErr && /duplicate key|unique/i.test(upsertErr.message || "")) {
+        // Already exists — update in place
+        const { data: updated } = await supabase
+          .from("sales_brain")
+          .update(brainRow)
+          .eq("user_id", user.id)
+          .eq("source_id", itemId)
+          .ilike("principle_name", principleName)
+          .select()
+          .single();
+        inserted = updated;
+        console.log(`Updated existing principle: ${principleName}`);
+      } else if (upsertErr) {
+        console.error("Insert error for principle:", principleName, upsertErr.message);
+      }
+
+      if (inserted) {
         storedLearnings.push({
-          principle_name: learning.principle_name,
-          what_i_learned: learning.what_i_learned,
-          how_to_apply: learning.how_to_apply,
-          category: learning.category,
+          id: inserted.id,
+          principle_name: inserted.principle_name,
+          what_i_learned: inserted.what_i_learned,
+          how_to_apply: inserted.how_to_apply,
+          category: inserted.category,
+          source_name: inserted.source_name,
+          power_level: inserted.power_level,
+          cited_principle_name: inserted.principle_name,
+          cited_source_name: inserted.source_name,
         });
 
-        // Also store a compact knowledge_chunks row for keyword/hybrid fallback
-        await supabase.from("knowledge_chunks").insert({
-          user_id: user.id,
-          source_id: itemId,
-          category: learning.category || "general",
-          content: `${learning.principle_name}: ${learning.what_i_learned}\n\nApply: ${learning.how_to_apply}`,
-          brain_type: item.brain_type,
-          trigger_phrases: learning.trigger_phrases || "",
-          relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
-          source_type: "core_knowledge",
-          embedding: embedding,
-          workspace_id: null,
-        });
-      } else if (insertErr) {
-        console.error("Insert error for principle:", learning.principle_name, insertErr.message);
+        // Compact chunk for keyword/hybrid fallback — dedup by content
+        const chunkContent = `${principleName}: ${learning.what_i_learned || ""}\n\nApply: ${learning.how_to_apply || ""}`;
+        const chunkKey = chunkContent.trim().toLowerCase();
+        if (!seenChunkContent.has(chunkKey)) {
+          seenChunkContent.add(chunkKey);
+          const { error: chunkErr } = await supabase.from("knowledge_chunks").insert({
+            user_id: user.id,
+            source_id: itemId,
+            category: learning.category || "general",
+            content: chunkContent,
+            brain_type: item.brain_type,
+            trigger_phrases: learning.trigger_phrases || "",
+            relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
+            source_type: "core_knowledge",
+            embedding: embedding,
+            workspace_id: null,
+          });
+          if (chunkErr && !/duplicate key|unique/i.test(chunkErr.message || "")) {
+            console.error("Chunk insert error:", chunkErr.message);
+          }
+        }
       }
     }
 
-    console.log(`Stored ${storedLearnings.length} weapon-grade principles + matching chunks`);
+    console.log(`Stored ${storedLearnings.length} weapon-grade principles (deduped) + matching chunks`);
 
     // Update item status
     await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
@@ -414,6 +453,8 @@ serve(async (req) => {
       learnings: storedLearnings,
       embeddedChunks: storedLearnings.length,
       sourceName,
+      cited_principle_name: storedLearnings[0]?.cited_principle_name || null,
+      cited_source_name: sourceName,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
