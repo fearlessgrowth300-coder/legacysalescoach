@@ -975,13 +975,8 @@ serve(async (req) => {
         status: "ready",
       }).eq("id", itemId);
 
-      return new Response(JSON.stringify({
-        success: true,
-        learnings: allStored,
-        chunks: allStored.length,
-        sourceName,
-        book_brief: { ...briefToStore, chapters: workingChapters },
-      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      console.log(`Book pipeline complete: ${allStored.length} principles`);
+      return;
     }
 
     // ============== STANDARD PIPELINE (videos / short content) ==============
