@@ -284,7 +284,8 @@ serve(async (req) => {
     // ─── Build brain context with real source titles ───
     const principlesContext = principles.map((p: any) => {
       const realSource = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id].title : p.source_name;
-      return `[Principle: ${p.principle_name}] [Source: ${realSource}] [Category: ${p.category}] [Relevance: ${p.relevance_score ?? 70}]\nWhat I Learned: ${p.what_i_learned}\nHow to Apply: ${p.how_to_apply}`;
+      const power = p.power_level ?? 5;
+      return `[Principle: ${p.principle_name}] [Source: ${realSource}] [Category: ${p.category}] [Power: ${power}/10] [Relevance: ${p.relevance_score ?? 70}]\nWhat I Learned: ${p.what_i_learned}\nHow to Apply: ${p.how_to_apply}`;
     }).join("\n\n");
 
     const chunksContext = chunks.map((c: any) => {
