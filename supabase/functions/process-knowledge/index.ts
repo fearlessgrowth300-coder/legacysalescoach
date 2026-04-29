@@ -764,7 +764,7 @@ serve(async (req) => {
             .eq("source_id", itemId)
             .filter("metadata->>chapter", "eq", String(retryChapterIndex));
 
-          const principles = await extractChapterPrinciples(
+          const principles = await extractChapterWithFallback(
             targetDetected,
             {
               title: brief.title,
@@ -778,16 +778,18 @@ serve(async (req) => {
           );
 
           let storedCount = 0;
+          const storedForChapter: any[] = [];
           for (const p of principles) {
             const stored = await persistLearning(
               supabase, user.id, itemId, item.brain_type, sourceName,
               { ...p, _chapter: retryChapterIndex }, LOVABLE_API_KEY, seenChunkContent,
             );
-            if (stored) { allStored.push(stored); storedCount++; }
+            if (stored) { allStored.push(stored); storedForChapter.push(stored); storedCount++; }
           }
 
+          const summary = await summarizeChapter(targetMeta.title, storedForChapter, LOVABLE_API_KEY);
           const finalChapters = updatedChapters.map((c: any) =>
-            c.index === retryChapterIndex ? { ...c, status: "done", principle_count: storedCount, error: null } : c,
+            c.index === retryChapterIndex ? { ...c, status: "done", principle_count: storedCount, error: null, summary } : c,
           );
           // If any chapter still pending/extracting, keep status; else flip to ready
           const stillPending = finalChapters.some((c: any) => c.status === "pending" || c.status === "extracting" || c.status === "failed");
