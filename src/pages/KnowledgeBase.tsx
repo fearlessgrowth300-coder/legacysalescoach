@@ -517,7 +517,31 @@ export default function KnowledgeBase() {
               Here's what I learned from <strong>{learningsSourceName}</strong>:
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1 py-2">
+          <div className="space-y-3 py-2">
+            {(() => {
+              const briefItem = items?.find(
+                (i: any) => i.type === "pdf" && i.book_brief && (i.title === learningsSourceName || processedLearnings?.some((l: any) => l.source_id === i.id))
+              );
+              if (briefItem?.book_brief) {
+                const top = (processedLearnings || [])
+                  .slice()
+                  .sort((a: any, b: any) => (b.power_level || 0) - (a.power_level || 0))
+                  .slice(0, 3);
+                const cats = new Set((processedLearnings || []).map((l: any) => l.category).filter(Boolean));
+                return (
+                  <BookBriefCard
+                    brief={briefItem.book_brief}
+                    status={briefItem.status}
+                    totalPrinciples={processedLearnings?.length || 0}
+                    topTechniques={top}
+                    categoriesCount={cats.size}
+                    onRetryChapter={(idx) => handleRetryChapter(briefItem.id, idx)}
+                    retryingIndex={retryingChapter?.itemId === briefItem.id ? retryingChapter.index : null}
+                  />
+                );
+              }
+              return null;
+            })()}
             {processedLearnings?.map((learning: any, idx: number) => {
               if (learning.principle_name) {
                 return <BrainInsightCard key={learning.id || idx} principle={learning} />;
