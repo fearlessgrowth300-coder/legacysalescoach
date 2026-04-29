@@ -48,6 +48,10 @@ export function BookBriefCard({
   const doneCh = chapters.filter((c) => c.status === "done").length;
   const extractingCh = chapters.find((c) => c.status === "extracting");
   const currentReadingIndex = extractingCh?.index ?? (totalCh > 0 ? Math.min(doneCh + 1, totalCh) : 0);
+
+  return (
+    <Card className="p-4 sm:p-5 space-y-4 border-primary/30">
+      {/* Header */}
       <div className="flex items-start gap-3">
         <div className="rounded-md bg-primary/10 p-2 shrink-0">
           <BookOpen className="h-5 w-5 text-primary" />
