@@ -1,201 +1,137 @@
-## Goal
+## The 5-minute check (done)
 
-Turn PDF uploads into a book-aware, three-pass extraction pipeline that produces a **visible Book Brief** (title, author, core system, chapter list, top techniques, "what your Brain just gained"), with OCR fallback and per-chapter retry on partial failures.
+Confirmed by reading `supabase/functions/process-knowledge/index.ts` lines 1075–1182:
 
-We build **backwards from the artifact**: the Book Brief card defines what the extraction must produce.
+- The current PDF path **does NOT use `pdf-parse`**. It downloads the file from Storage, base64-encodes it, and sends it to **Gemini 2.5 Flash** via the Lovable AI gateway as `data:application/pdf;base64,...`, asking the model to "read this entire PDF and return the full text".
+- That call is what's timing out at 180s on the 3.41 MB book (see edge logs: "Sending PDF to Gemini for reading (attempt 1/2)" → "Signal timed out").
+- The 180s/240s retry + manual binary `Tj`/`TJ` regex sweep are workarounds for this wrong choice.
 
----
-
-## Step 0 — The Artifact (build this UI first)
-
-New component: `src/components/BookBriefCard.tsx`
-
-Two states, both shown inside the existing learnings dialog on `KnowledgeBase.tsx` after a PDF finishes processing:
-
-1. **Pass 1 complete (live, while extraction runs):**
-   - Title, Author, Core System (1-line)
-   - 200-word "What this book teaches" briefing
-   - Chapter list with status pill per chapter: `Pending → Extracting → ✓ N principles | ✗ Failed (Retry)`
-   - Header banner: *"Brain is now learning…"*
-2. **Full extraction complete (the receipt):**
-   - "**47 new principles unlocked across 8 categories.**"
-   - Top 3 techniques by `power_level` with category + 1-line summary
-   - Per-failed-chapter **Retry** button
-
-ASCII layout:
-
-```text
-┌─ Book Brief ───────────────────────────────────┐
-│ Title · Author                                 │
-│ Core System: <one line>                        │
-│ ─────────────────────────                      │
-│ What this book teaches: <200 words>            │
-│ ─────────────────────────                      │
-│ Chapters (8)                                   │
-│  1. Intro            ✓ 6 principles            │
-│  2. The Setup        ⟳ extracting...           │
-│  3. Closing Frames   ✗ failed   [Retry]        │
-│ ─────────────────────────                      │
-│ Brain just gained: 47 principles · 8 cats      │
-│ Top 3: Loop Close · Pre-Suasion Frame · ...    │
-└────────────────────────────────────────────────┘
-```
+So we're on the **Phase 1 path that requires switching to a real PDF text extractor**. No code path needs to be wrested away from Lovable AI's auto handler — it's already a custom function; we just picked the wrong tool inside it.
 
 ---
 
-## Step 1 — PDF text extraction (with OCR fallback)
+## Phase 1 — Replace Gemini PDF reading with a real text extractor (the 2-hour fix)
 
-In `supabase/functions/process-knowledge/index.ts`, replace the single Gemini-PDF call in `extractPdfContent` with a layered strategy:
+### Library choice
 
-1. **Primary**: keep Gemini PDF read (current path) — fast, works for born-digital PDFs.
-2. **Detection**: if extracted text < ~200 chars per MB of PDF, treat as scanned.
-3. **OCR fallback**: render PDF pages and OCR each page via OpenAI vision (`gpt-4o-mini` through Lovable AI gateway) — `OPENAI_API_KEY` already exists in secrets. Concatenate page text in order, prefixed with `=== Page N ===` so chapter detection still works.
-4. Return the full text (lift the current 50,000-char clamp for PDFs only — books need it; we already raised `MAX_CONTENT_LENGTH` to 200,000 downstream).
+`pdf-parse` does not work on Deno edge runtime (it depends on Node's `fs` and a debug-mode test fixture path). The clean Deno equivalent is **`unpdf`** (`npm:unpdf@0.12.1`) — a serverless-friendly wrapper around Mozilla's pdf.js that exposes `extractText(buffer, { mergePages: true })` and runs in Deno/Workers/Edge with no Node polyfills. Same idea as `pdf-parse`, just actually compatible with our runtime.
 
----
+### Changes to `supabase/functions/process-knowledge/index.ts`
 
-## Step 2 — Chapter detection
+Rewrite `extractPdfContent` (lines 1075–1182):
 
-New helper `detectChapters(text)` in `supabase/functions/process-knowledge/lib.ts`:
+```ts
+import { extractText, getDocumentProxy } from "npm:unpdf@0.12.1";
 
-- Regex pass for: `^Chapter\s+\d+`, `^CHAPTER\s+[IVXLC]+`, `^Part\s+\d+`, `^Section\s+\d+`, numbered headings like `^\d+\.\s+[A-Z]`, all-caps lines ≥ 4 words.
-- Output: `Chapter[] = { index, title, startOffset, endOffset, text }`.
-- **Fallback**: if fewer than 2 chapters detected, fall back to size-based 12,000-char chunks (reuse existing `chunkText` from `lib.ts`) and label them `Chunk 1…N`. This preserves the existing YouTube path behavior.
+async function extractPdfContent(filePath, supabase, itemId, corsHeaders, apiKey) {
+  const { data: fileData, error } = await supabase.storage
+    .from("knowledge-files").download(filePath);
+  if (error || !fileData) { /* mark error, return "" */ }
 
-Unit tests added to `src/test/process-knowledge-lib.test.ts`:
-- Detects "Chapter 1" / "CHAPTER II" / numbered headings
-- Falls back to chunking when no markers
-- Boundaries don't overlap
+  const bytes = new Uint8Array(await fileData.arrayBuffer());
+  console.log(`PDF size: ${(bytes.byteLength/1024/1024).toFixed(2)} MB`);
 
----
-
-## Step 3 — Two-pass (really three-pass) extraction
-
-Rewrite `extractStructuredLearnings` for PDFs. **YouTube path stays untouched** — branch on `type === "pdf"`.
-
-### Pass 1 — Book Mapping (1 cheap call)
-
-New `extractBookSkeleton(firstPages, tocText, chapterHeadings, apiKey)`:
-
-- Input: first 3 pages + TOC region + detected chapter headings.
-- Model: `google/gemini-2.5-flash`, JSON mode.
-- Output:
-  ```json
-  {
-    "title": "...",
-    "author": "...",
-    "core_system": "one-line description of the system being taught",
-    "chapters": [{ "index": 1, "title": "...", "one_line": "..." }],
-    "what_this_book_teaches": "200-word briefing"
+  // 1) Primary: unpdf (born-digital PDFs — instant, no network)
+  let text = "";
+  try {
+    const pdf = await getDocumentProxy(bytes);
+    const { text: pages } = await extractText(pdf, { mergePages: false });
+    text = (pages as string[])
+      .map((p, i) => `=== Page ${i + 1} ===\n${p}`)
+      .join("\n\n")
+      .trim();
+    console.log(`unpdf extracted ${text.length} chars from ${pages.length} pages`);
+  } catch (e) {
+    console.warn("unpdf failed:", e instanceof Error ? e.message : e);
   }
-  ```
-- Persist immediately to a new column `knowledge_base_items.book_brief jsonb` so the UI can render the Brief while Pass 2 runs.
-- Set `knowledge_base_items.status = 'mapping'` → `'extracting'` → `'ready'` for staged UI updates (existing `'processing'` is too coarse).
 
-### Pass 2 — Chapter-Aware Deep Extraction (one call per chapter)
+  // 2) OCR fallback ONLY when scanned (<200 chars per MB heuristic, or total <200)
+  const sizeMB = bytes.byteLength / 1024 / 1024;
+  const looksScanned = text.length < Math.max(200, 200 * sizeMB);
+  if (looksScanned) {
+    console.log("Scanned PDF detected — falling back to vision OCR");
+    text = await ocrPdfWithVision(bytes, apiKey); // page-by-page via gpt-4o-mini
+  }
 
-For each chapter from Step 2:
-
-- Reuse the **existing `extractStructuredLearningsChunk` prompt** (do not rewrite — it works).
-- Inject two new fields into the user message: `book_context` (the skeleton) and `chapter_context` (this chapter's title + one-liner + role in the book).
-- If chapter text > 10k, sub-chunk via existing `chunkText` and merge.
-- Per-chapter failures are caught and recorded in a `chapter_status: { index, status, principle_count, error? }[]` array stored on `book_brief.chapters` so the UI can show retry buttons.
-
-### Pass 3 — Connection Layer (1 final call)
-
-After all chapters succeed (or are retried), one call:
-
-- Input: list of all extracted `principle_name` + 1-line `what_i_learned`.
-- Output: JSON map `{ principle_name: ["connected_name_1", "connected_name_2"] }`.
-- Update each `sales_brain` row's `connected_principles` field accordingly.
-
----
-
-## Step 4 — Reuse the existing prompt
-
-No prompt rewrite. The existing weapon-grade extraction prompt accepts arbitrary user content. We simply prepend:
-
-```text
-=== BOOK CONTEXT ===
-Title: ...
-Author: ...
-Core System: ...
-What this book teaches: <briefing>
-
-=== CHAPTER CONTEXT ===
-Chapter N: <title>
-Role in system: <one_line>
-
-=== CHAPTER TEXT ===
-<chapter content>
+  return text.substring(0, 200000);
+}
 ```
 
-This satisfies the "1 hour of work" reuse requirement.
+- **Drop** the 180s/240s Gemini retries, the base64 chunk loop, and the `Tj`/`TJ` regex sweep entirely. The "Signal timed out" / "Could not extract enough content" errors disappear because we no longer ship the whole PDF to a model.
+- **Keep `=== Page N ===` markers** so `detectChapters` in `lib.ts` still works (it already keys off line-anchored regexes, page markers don't interfere).
+- **OCR fallback** (`ocrPdfWithVision`) — render pages to PNG via pdf.js's canvas (or pass page image data extracted by unpdf) and call `openai/gpt-4o-mini` through the Lovable AI gateway, one page at a time, max 50 pages, 30s timeout per page. `OPENAI_API_KEY` already in secrets. Concatenate with the same `=== Page N ===` prefix.
+- **Background task stays** (`EdgeRuntime.waitUntil`) — extraction will now usually finish in seconds, but the 3-pass book pipeline downstream still benefits from being async.
+
+### Net effect
+
+- 3.41 MB born-digital book: extraction goes from 180s timeout → ~2-5s.
+- Scanned PDF: gracefully OCR'd page by page instead of silently failing.
+- The "Could not extract enough content" 400 and the IDLE_TIMEOUT 504 both go away.
 
 ---
 
-## Step 5 — Book Brief generation
+## Phase 2 — UX rebuild (run in parallel; mostly already wired)
 
-Already covered by Pass 1 — the 200-word "what this book teaches" IS the briefing. We surface it as the visible artifact in `BookBriefCard`.
+The `BookBriefCard` already renders Pass 1 (mapping) immediately and shows per-chapter status pills + retry. What's missing is a tighter live signal during extraction. Add:
 
----
+1. **Chapter counter banner** in `BookBriefCard` while `status === "extracting"`:
+   `Reading chapter {extractingIndex} of {total}` — derived from the first `chapter.status === "extracting"` in the array. Replaces the generic "Brain is now learning…" line during Pass 2.
+2. **Streaming insight ticker**: when a chapter flips to `done`, briefly highlight its `summary` ("What I learned from chapter N: …") with a 3s fade-in pulse so the user sees fresh insights land in real time. Pure CSS animation on a key bound to `chapter.status` transition.
+3. **Per-chapter retry** — already present via `retry-book-chapter`. Verify it still works with the new extractor (should, since extraction output shape is unchanged).
+4. **First-paint speedup**: because extraction now takes seconds instead of minutes, Pass 1 (book skeleton) fires almost immediately and the briefing card appears in ~5–10s. No code change needed; this falls out of Phase 1.
 
-## Visible flow (the receipt)
+### Files touched
 
-1. User uploads PDF → `status = mapping` → spinner with *"Reading the book…"*
-2. ~10 seconds later → `book_brief` populated → **BookBriefCard renders immediately** with chapter list (all `pending`) and the 200-word briefing.
-3. As each chapter completes, `chapter_status[i]` updates (polled every 3s by existing `processingCounts` effect, extended to also re-fetch `knowledge_base_items.book_brief`).
-4. When all chapters done → status = `ready` → bottom of card flips to: **"47 new principles unlocked across 8 categories. Top 3: …"**
-5. Failed chapters show a **Retry** button → calls a new edge function `retry-book-chapter` (just runs Pass 2 + Pass 3 for that one chapter).
-
----
-
-## Database changes (one migration)
-
-```sql
-ALTER TABLE public.knowledge_base_items
-  ADD COLUMN IF NOT EXISTS book_brief jsonb;
-
--- Allow new staged statuses (no constraint exists today, status is free-text — no change needed).
-```
-
-No RLS changes — `knowledge_base_items` already has user-scoped policies.
+- `src/components/BookBriefCard.tsx` — add `currentlyExtractingIndex` derivation + chapter counter banner, pulse animation on status→done transition.
 
 ---
 
-## Files to change / create
+## Phase 3 — Investigation + regression test
+
+### Why the architecture moved away from `pdf-parse`
+
+Short answer to document inline at the top of `extractPdfContent`:
+
+> We previously sent PDFs to Gemini Flash via `image_url` because Lovable AI's gateway accepts `data:application/pdf;base64,...` and "just works" for small files. It does NOT scale: the model has to OCR every page, the Lovable gateway has a hard ~150s idle timeout, and Deno edge runtime can't run `pdf-parse` (Node `fs` dependency). `unpdf` is the Deno-compatible equivalent of `pdf-parse` and runs locally in milliseconds for born-digital PDFs. Do not regress to `image_url` PDFs unless you also add chunked, page-by-page Gemini calls with a real timeout budget.
+
+### Test
+
+New file `supabase/functions/process-knowledge/extract_test.ts` (Deno test, runs via `supabase--test_edge_functions`):
+
+- Loads a small fixture PDF from `supabase/functions/process-knowledge/__fixtures__/sample.pdf` (committed, ~50 KB, 3 pages of lorem-with-chapter-headings).
+- Calls `extractPdfContent`-equivalent unit (refactor the unpdf call into a pure `extractPdfBytes(bytes)` helper inside `lib.ts` so it's testable without Storage).
+- Asserts: completes in under 60s, returns ≥ 1000 chars, contains `=== Page 1 ===` and the seeded chapter heading.
+
+Also add a unit test for the `looksScanned` heuristic so we don't accidentally OCR every born-digital PDF.
+
+---
+
+## File list
 
 **Backend**
-- `supabase/functions/process-knowledge/index.ts` — branch on `type === 'pdf'`, OCR fallback, three-pass orchestration, write `book_brief` early, update `chapter_status` per chapter.
-- `supabase/functions/process-knowledge/lib.ts` — add `detectChapters`, `splitByChapters`, plus tests.
-- `supabase/functions/retry-book-chapter/index.ts` — new function: inputs `{ itemId, chapterIndex }`, runs Pass 2 for that chapter + recomputes Pass 3 connections.
-- `supabase/config.toml` — register new function with `verify_jwt = false` (matches sibling pattern).
-
-**Migration**
-- New SQL migration adding `book_brief jsonb` column.
+- `supabase/functions/process-knowledge/index.ts` — rewrite `extractPdfContent` (unpdf + OCR fallback), delete the 180/240s retry block and `Tj`/`TJ` sweep, add doc comment explaining the choice.
+- `supabase/functions/process-knowledge/lib.ts` — extract pure `extractPdfBytes(bytes): Promise<string>` helper for testability; keep `detectChapters` unchanged (page markers are line-anchored, no interference).
+- `supabase/functions/process-knowledge/extract_test.ts` — new Deno test (60s budget, fixture PDF).
+- `supabase/functions/process-knowledge/__fixtures__/sample.pdf` — committed tiny fixture.
 
 **Frontend**
-- `src/components/BookBriefCard.tsx` — new component (the artifact).
-- `src/pages/KnowledgeBase.tsx` — when a PDF item has `book_brief`, render `BookBriefCard` in the learnings dialog instead of the generic list. Wire the per-chapter Retry button to the new edge function. Extend the 3s poll to refetch `book_brief` while status ∈ {`mapping`, `extracting`}.
+- `src/components/BookBriefCard.tsx` — chapter counter banner during `extracting`, pulse animation when a chapter resolves to `done`.
 
-**Tests**
-- `src/test/process-knowledge-lib.test.ts` — chapter detection cases + chunking fallback.
-- `src/components/BookBriefCard.test.tsx` — renders title/author/core system, shows per-chapter status pills, fires retry callback.
+**No DB / no migrations / no new secrets.** `OPENAI_API_KEY` and `LOVABLE_API_KEY` already exist.
 
 ---
 
-## Out of scope (V1)
+## Out of scope for this pass
 
-- Famous-books cache (copyright risk).
-- User-selects-chapters UI (kills the magic).
-- YouTube path changes — left exactly as is.
-- Live streaming of partial principles to the dialog (the Brief + per-chapter counter is the live signal).
+- Replacing the YouTube path (untouched).
+- Changing the 3-pass book pipeline structure (Pass 1/2/3 stay as-is — only their input gets faster and more reliable).
+- A "famous books" cache (copyright risk, deferred).
 
 ---
 
 ## Expected result
 
-- Books produce 5–10x more specific principles than today (chapter-aware context + per-chapter calls instead of one giant blob).
-- Scanned PDFs no longer fail silently (OCR fallback).
-- User immediately sees a Book Brief receipt → reinforces upload behaviour.
-- Failed chapters become retryable instead of forcing a full reprocess.
+- Born-digital book PDFs (the common case) extract in seconds; the briefing card appears in ~5–10s; the full 3-pass pipeline finishes inside the existing background-task budget.
+- Scanned PDFs OCR cleanly via vision instead of silently producing the "Could not extract enough content" 400.
+- The 504 IDLE_TIMEOUT class of errors is structurally impossible (we no longer hold a 150s+ network call open against Gemini for the raw read).
+- Regression test prevents anyone from re-introducing the `image_url`-PDF approach without thinking about it.

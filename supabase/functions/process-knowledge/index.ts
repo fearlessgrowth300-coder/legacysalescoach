@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { describeApiKey, getLatestUserApiKey } from "../_shared/api-key-utils.ts";
+import { extractPdfBytes, looksScanned, ocrPdfWithVision } from "./pdf-extract.ts";
 
 const defaultCorsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1072,12 +1073,19 @@ function breakIntoChunks(text: string, targetTokens: number): string[] {
 }
 
 // ===== PDF EXTRACTION =====
-async function extractPdfContent(filePath: string, supabase: any, itemId: string, corsHeaders: any, apiKey: string): Promise<string> {
+async function extractPdfContent(
+  filePath: string,
+  supabase: any,
+  itemId: string,
+  _corsHeaders: any,
+  apiKey: string,
+): Promise<string> {
+  // See pdf-extract.ts for the architectural rationale (unpdf > Gemini-as-PDF-reader > pdf-parse).
   try {
     const { data: fileData, error: fileError } = await supabase.storage
       .from("knowledge-files")
       .download(filePath);
-    
+
     if (fileError || !fileData) {
       console.error("File download error:", fileError);
       await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
@@ -1085,96 +1093,31 @@ async function extractPdfContent(filePath: string, supabase: any, itemId: string
     }
 
     const arrayBuffer = await fileData.arrayBuffer();
-    const fileSizeMB = arrayBuffer.byteLength / 1024 / 1024;
-    console.log(`PDF file size: ${fileSizeMB.toFixed(2)} MB`);
-
-    // No file size limit — let Gemini handle what it can
-
-    // Convert PDF to base64 for Gemini
     const bytes = new Uint8Array(arrayBuffer);
-    const CHUNK_SIZE = 32768;
-    let binary = "";
-    for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-      const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
-      binary += String.fromCharCode(...chunk);
-    }
-    const base64Pdf = btoa(binary);
-    
-    // Try Gemini up to 2 times (large PDFs sometimes timeout the first call)
-    async function callGemini(timeoutMs: number): Promise<string> {
-      const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: "Read this entire PDF document and extract ALL the text content from it. Return the full text content exactly as it appears in the document. Do not summarize - return the complete text.",
-                },
-                {
-                  type: "image_url",
-                  image_url: { url: `data:application/pdf;base64,${base64Pdf}` },
-                },
-              ],
-            },
-          ],
-          temperature: 0.1,
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!resp.ok) {
-        console.warn(`Gemini PDF read failed: ${resp.status}`);
-        return "";
-      }
-      const pdfData = await resp.json();
-      return pdfData.choices?.[0]?.message?.content || "";
+    const fileSizeMB = arrayBuffer.byteLength / 1024 / 1024;
+    console.log(`PDF size: ${fileSizeMB.toFixed(2)} MB`);
+
+    // 1) Primary: local text extraction via unpdf (instant for born-digital PDFs).
+    const t0 = Date.now();
+    const { text, pageCount } = await extractPdfBytes(bytes);
+    console.log(`unpdf extracted ${text.length} chars from ${pageCount} pages in ${Date.now() - t0}ms`);
+
+    let finalText = text;
+
+    // 2) OCR fallback only when the file looks scanned. Born-digital PDFs skip this entirely.
+    if (looksScanned(text.length, arrayBuffer.byteLength)) {
+      console.log(`PDF looks scanned (${text.length} chars / ${fileSizeMB.toFixed(2)} MB) — running vision OCR`);
+      const ocr = await ocrPdfWithVision(bytes, apiKey);
+      if (ocr.length > text.length) finalText = ocr;
     }
 
-    for (const attempt of [1, 2]) {
-      try {
-        console.log(`Sending PDF to Gemini for reading (attempt ${attempt})...`);
-        const text = await callGemini(attempt === 1 ? 180000 : 240000);
-        console.log(`Gemini PDF extraction length (attempt ${attempt}): ${text.length}`);
-        if (text.length > 100) return text.substring(0, 200000);
-      } catch (e) {
-        console.warn(`Gemini attempt ${attempt} failed:`, e instanceof Error ? e.message : e);
-      }
+    if (finalText.length < 100) {
+      // Long enough to clear the downstream "enough content" gate so the user
+      // sees a meaningful brief instead of a generic 400.
+      return `PDF uploaded (${fileSizeMB.toFixed(2)} MB, ${pageCount} pages) but no readable text could be extracted. The file may be image-only without OCR layer, password-protected, or corrupted. Try a different copy or paste the text manually.`.padEnd(260, ' ');
     }
 
-    // Fallback: manual binary text extraction
-    console.log("Falling back to manual PDF text extraction...");
-    const rawText = new TextDecoder("latin1").decode(bytes);
-    const textParts: string[] = [];
-    const tjMatches = rawText.matchAll(/\(([^\\)]*(?:\\.[^\\)]*)*)\)\s*Tj/g);
-    for (const match of tjMatches) {
-      textParts.push(match[1].replace(/\\n/g, '\n').replace(/\\\\/g, '\\'));
-    }
-    const tjArrayMatches = rawText.matchAll(/\[([^\]]*)\]\s*TJ/gi);
-    for (const match of tjArrayMatches) {
-      const parts = match[1].match(/\(([^\\)]*(?:\\.[^\\)]*)*)\)/g) || [];
-      for (const p of parts) {
-        textParts.push(p.slice(1, -1));
-      }
-    }
-    let extractedText = textParts.join(' ').replace(/\s+/g, ' ').trim();
-    if (extractedText.length < 200) {
-      // Broader readable-ascii sweep
-      const readable = rawText.match(/[A-Za-z][A-Za-z0-9\s,.!?;:'"()\-]{10,}/g) || [];
-      extractedText = readable.join(' ').replace(/\s+/g, ' ').trim();
-    }
-    console.log(`Manual PDF extraction length: ${extractedText.length}`);
-    if (extractedText.length > 100) {
-      return extractedText.substring(0, 200000);
-    }
-    // Last resort: return a stub long enough to pass the gate so the user sees a clear message in the brief
-    return `PDF file uploaded but text extraction failed. The PDF (${fileSizeMB.toFixed(2)} MB) may be a scanned image without selectable text, or the AI service timed out. Please try a smaller PDF, a born-digital PDF (not scanned), or paste the text manually.`.padEnd(250, ' ');
+    return finalText.substring(0, 200000);
   } catch (e) {
     console.error("PDF processing error:", e);
     return "";
