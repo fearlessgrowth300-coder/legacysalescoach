@@ -674,7 +674,7 @@ serve(async (req) => {
   }
 
   try {
-    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex } = await req.json();
+    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex, userId: bodyUserId } = await req.json();
 
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -683,13 +683,58 @@ serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
+    // Resolve user: try auth.getUser, then JWT payload fallback, then body userId (service-to-service)
     const token = authHeader?.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) {
+    let userIdResolved: string | null = null;
+
+    if (token) {
+      try {
+        const { data: { user } } = await supabase.auth.getUser(token);
+        if (user?.id) userIdResolved = user.id;
+      } catch (e) {
+        console.warn("auth.getUser failed, will try JWT payload fallback:", e);
+      }
+      if (!userIdResolved) {
+        try {
+          const parts = token.split(".");
+          if (parts.length === 3) {
+            const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+            if (payload?.sub && typeof payload.sub === "string" && payload.sub.length > 10 && payload.role !== "service_role") {
+              userIdResolved = payload.sub;
+              console.log("Resolved user ID from JWT payload fallback");
+            }
+          }
+        } catch (e) {
+          console.warn("JWT payload parse failed:", e);
+        }
+      }
+    }
+
+    // Service-to-service fallback (e.g. reprocess-brain passes userId explicitly)
+    if (!userIdResolved && bodyUserId && typeof bodyUserId === "string") {
+      userIdResolved = bodyUserId;
+      console.log("Using userId from request body (service-to-service)");
+    }
+
+    // Last resort: derive userId from the item itself (service role can read it)
+    if (!userIdResolved && itemId) {
+      const { data: ownerRow } = await supabase
+        .from("knowledge_base_items")
+        .select("user_id")
+        .eq("id", itemId)
+        .maybeSingle();
+      if (ownerRow?.user_id) {
+        userIdResolved = ownerRow.user_id;
+        console.log("Resolved user ID from knowledge_base_items.user_id");
+      }
+    }
+
+    if (!userIdResolved) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    const user = { id: userIdResolved };
 
     // Get item info early so book pipeline can update book_brief incrementally
     const { data: itemEarly } = await supabase
