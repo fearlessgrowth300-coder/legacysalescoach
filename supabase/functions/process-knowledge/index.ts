@@ -847,9 +847,8 @@ serve(async (req) => {
             status: stillPending ? "extracting" : "ready",
           }).eq("id", itemId);
 
-          return new Response(JSON.stringify({
-            success: true, retried: retryChapterIndex, principles_added: storedCount, sourceName,
-          }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+          console.log(`Retry chapter ${retryChapterIndex} done: ${storedCount} principles`);
+          return;
         } catch (retryErr: any) {
           const failChapters = updatedChapters.map((c: any) =>
             c.index === retryChapterIndex ? { ...c, status: "failed", error: retryErr?.message || "Retry failed" } : c,
