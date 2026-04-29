@@ -121,7 +121,7 @@ serve(async (req) => {
       queryEmbedding,
     ] = await Promise.all([
       supabase.from("sales_brain")
-        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score")
+        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score, power_level")
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false, nullsFirst: false }),
@@ -178,7 +178,8 @@ serve(async (req) => {
     const principlesText = topPrinciples.length > 0
       ? topPrinciples.map((p: any) => {
           const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : p.source_name;
-          return `• ${p.principle_name} (${src}): ${p.what_i_learned}\n  Apply: ${p.how_to_apply}`;
+          const power = p.power_level ?? 5;
+          return `• [${p.principle_name}] (Source: ${src}) (Power: ${power}/10): ${p.what_i_learned}\n  Apply: ${p.how_to_apply}`;
         }).join("\n")
       : "No principles uploaded yet.";
 
@@ -313,8 +314,10 @@ VARIANT RULES:
 - Variant 2 (alternative): Same stage, DIFFERENT framework angle, DIFFERENT discovery question
 - Variant 3 (casual): Shortest, most natural, single powerful question + one framework technique
 
+MANDATORY CITATION (NON-NEGOTIABLE): Every variant MUST cite the EXACT principle from SALES_BRAIN_PRINCIPLES that it leans on, plus its source. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES — never invent. Prefer the highest-Power principle that fits.
+
 Return JSON only:
-{ "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "...", "principle_applied": "...", "why_this_works": "References technique from your Brain: [Principle Name] — [Why it applies]. Frameworks used: [list]", "warmth_prediction": <number>, "frameworks_used": ["SPIN-Implication", "PAS", "Voss-Mirroring"] }] }${styleModifierInstruction}`;
+{ "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "...", "principle_applied": "...", "cited_principle_name": "<exact principle_name from SALES_BRAIN_PRINCIPLES>", "cited_source_name": "<exact Source from SALES_BRAIN_PRINCIPLES>", "why_this_works": "References technique from your Brain: [Principle Name] — [Why it applies]. Frameworks used: [list]", "warmth_prediction": <number>, "frameworks_used": ["SPIN-Implication", "PAS", "Voss-Mirroring"] }] }${styleModifierInstruction}`;
 
     const replyUserPrompt = `WORKSPACE_PROFILE:
 ${workspaceProfile}
@@ -473,6 +476,8 @@ ${principlesText.substring(0, 6000)}`;
       whyThisWorks: v.why_this_works || "",
       frameworkUsed: `${v.move_used || ""} | ${v.principle_applied || ""}`,
       warmthPrediction: v.warmth_prediction,
+      citedPrincipleName: v.cited_principle_name || null,
+      citedSourceName: v.cited_source_name || null,
     }));
 
     const sourceTypes = new Set<string>();

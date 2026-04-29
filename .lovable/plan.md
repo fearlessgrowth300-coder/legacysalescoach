@@ -1,64 +1,63 @@
+## Plan: Three-Pass Extraction Pipeline + Visible Citations
 
-## Plan: Fix TranscriptAPI key usage for YouTube extraction
+Rebuild `process-knowledge` to clean → extract → richly embed every transcript chunk, and update the Brain to name the technique + cite the source video on every answer.
 
-### What is actually happening
-- The app is trying to use your saved key first.
-- But your saved key is stored encrypted in `user_api_keys`.
-- `preview-url` and `process-knowledge` are reading that encrypted value and sending it directly to TranscriptAPI.
-- That is why the logs show the “user-provided” key length is `153` and TranscriptAPI returns `401 Invalid API key`.
-- After that, the app falls back to the project-level key, and that account returns `402 no_active_paid_plan`.
+### Phase 1 — The "one thing first" (immediate impact)
 
-So the issue is:
-1. App bug: encrypted user key is not being decrypted before use
-2. Backup key/account issue: the fallback TranscriptAPI account does not have an active paid plan
+In `supabase/functions/process-knowledge/index.ts`:
 
-### Changes to make
-1. **Decrypt saved user keys before using them**
-   - Update `supabase/functions/preview-url/index.ts`
-   - Update `supabase/functions/process-knowledge/index.ts`
-   - Reuse the same AES-GCM decrypt logic already used in `manage-api-keys`
-   - Send only the decrypted key in the `Authorization` header
+1. **Cut chunk size from 35,000 → 10,000** characters (line 176: `const CHUNK_SIZE = 35000` → `10000`).
+2. **Add Pass 1: Transcript Cleaning** — new helper `cleanTranscriptChunk(rawChunk, apiKey)` that calls Gemini with a single-job system prompt:
+   - Fix punctuation
+   - Add paragraph breaks
+   - Remove filler words ("um", "uh", "like", "you know")
+   - Identify speaker segments (label as `Speaker:` when shifts detected)
+   - Output: clean readable text only — no extraction, no JSON
+   - Model: `google/gemini-3-flash-preview`, temp 0.1, 60s timeout
+3. **Wire Pass 1 into the chunk loop** in `extractStructuredLearnings` — for each 10k chunk: clean it first, then pass cleaned text to `extractStructuredLearningsChunk` (Pass 2, existing weapon-grade prompt — already extracts all 12 fields incl. power_level).
+4. **Raise the MAX_CONTENT_LENGTH cap** from 50,000 → 200,000 so longer videos benefit from smaller chunks (proportional extraction).
+5. **Remove the duplicate "Step 1" raw-chunk extraction** (lines 270-346) and the "Step 3" raw embedded chunks loop (lines 398-419). They produce flat insights that bypass the weapon-grade pipeline and are no longer needed — the cleaned 10k chunks go straight into structured `sales_brain` entries. Keep a single small `knowledge_chunks` insert per cleaned chunk for hybrid keyword search fallback.
 
-2. **Keep the existing fallback order**
-   - Try decrypted user key first
-   - If it fails with `401` or `402`, try the project fallback key
-   - Keep the current scraping fallback as last resort
+### Phase 2 — Pass 3: Rich embeddings
 
-3. **Improve logs and error states**
-   - Keep logs safe: source of key only, never raw key
-   - Make it clearer whether failure is:
-     - invalid saved key
-     - no active paid plan
-     - no transcript available for that video
+In `process-knowledge/index.ts`:
 
-4. **Fix misleading Settings copy**
-   - Update `src/pages/Settings.tsx`
-   - Remove wording that implies a free account always works
-   - Clarify that TranscriptAPI may require an active paid plan depending on their account rules
+6. **Replace the no-op `generateEmbedding`** (lines 13-15 currently returns `null`) with a real call to OpenAI `text-embedding-3-small` (768 dims) using the existing `OPENAI_API_KEY` secret. Reuse the helper at `supabase/functions/_shared/embeddings.ts` (already implemented).
+7. **Concatenate ALL fields for embedding text** (line 354 currently uses 4 fields). Update to:
+   ```
+   principle_name + " | " + category + " | " + what_i_learned + " | "
+   + exact_words_to_use + " | " + when_to_use + " | " + the_deep_why
+   + " | " + works_best_for + " | " + trigger_phrases
+   ```
+   Skip null/empty fields. This makes semantic search match the right principle even when the user asks in completely different words.
 
-5. **Retest the exact failing flow**
-   - Paste the YouTube URL again
-   - Confirm preview fetches transcript
-   - Confirm processing stores chunks and structured learnings
-   - Confirm “View All” shows learnings instead of the raw-chunk fallback
+### Phase 3 — Visible technique citations in Brain answers
 
-### Files to update
-- `supabase/functions/preview-url/index.ts`
-- `supabase/functions/process-knowledge/index.ts`
-- `src/pages/Settings.tsx`
+8. **`supabase/functions/brain-chat/index.ts`** — add a hard rule to the system prompt: every answer MUST end with a `Technique Used:` line naming the principle + `Source:` line naming the video/source title. Update the principles-context block (line 287) to include `power_level` so the model can prefer high-impact techniques.
+9. **`supabase/functions/generate-reply/index.ts`** — same citation rule added to the reply system prompt. Format the cited line so the front-end can display it as a small badge under the suggestion: `[Used: <principle_name> · From: <source_name>]`.
+10. **`src/components/SuggestionCard.tsx`** — render the `[Used: ... · From: ...]` line as a subtle pill under the reply text so the user visibly sees the Brain is citing what they uploaded. (No schema changes — parsed from the AI string.)
+
+### Phase 4 — Backward compatibility
+
+11. Existing `sales_brain` rows already have `embedding = null`. Add a one-time helper invocation note: the existing `reprocess-brain` function will regenerate embeddings on next reprocess. No migration needed since the column exists.
+
+### Files to change
+
+- `supabase/functions/process-knowledge/index.ts` — three-pass pipeline, 10k chunks, real embeddings, rich embedding text
+- `supabase/functions/brain-chat/index.ts` — citation rule + power_level in context
+- `supabase/functions/generate-reply/index.ts` — citation rule
+- `src/components/SuggestionCard.tsx` — render citation pill
+
+### Out of scope (not changing)
+
+- DB schema (all needed columns exist)
+- `BrainInsightCard.tsx` UI (separate thread)
+- PDF extraction logic
+- The other extraction edge functions (`reprocess-brain`, etc.)
 
 ### Expected result
-- Your saved TranscriptAPI key will be used correctly instead of the encrypted blob
-- If your TranscriptAPI account is valid, transcript extraction should work again
-- If it still fails after decryption, the remaining problem is with the provider account status, not the app
 
-### Technical details
-- Current evidence:
-  - user key log length: `153` → looks like encrypted `enc:...` data, not a real API key
-  - fallback key log length: `46` → plain fallback key is being sent
-  - provider responses:
-    - user key: `401 Invalid API key`
-    - fallback key: `402 You don’t have an active paid plan yet`
-- Root mismatch in code:
-  - `manage-api-keys` encrypts on save
-  - `preview-url` and `process-knowledge` do not decrypt on read
+- Same video produces 3–5x more specific principles (smaller chunks = AI stops summarising)
+- Cleaner source text → more accurate `exact_words_to_use` capture
+- Semantic search finds the right technique even on rephrased queries (rich embeddings)
+- Every Brain answer visibly names the technique + source video → proof loop that drives more uploads

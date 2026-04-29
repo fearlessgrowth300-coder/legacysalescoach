@@ -24,6 +24,9 @@ export interface Suggestion {
   spinStage?: string;
   frameworksApplied?: string[];
   conversionTrigger?: string;
+  // Visible citation — proof the Brain is using uploaded material
+  citedPrincipleName?: string | null;
+  citedSourceName?: string | null;
 }
 
 interface SuggestionCardProps {
@@ -236,6 +239,16 @@ export default function SuggestionCard({
       {/* Message body */}
       <div className="px-3 py-3">
         <p className="text-sm leading-relaxed whitespace-pre-wrap">{suggestion.text}</p>
+        {(suggestion.citedPrincipleName || suggestion.citedSourceName) && (
+          <div className="mt-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-primary/10 border border-primary/20">
+            <Zap className="h-3 w-3 text-primary" />
+            <span className="text-[10px] text-primary font-medium">
+              {suggestion.citedPrincipleName && <>Used: {suggestion.citedPrincipleName}</>}
+              {suggestion.citedPrincipleName && suggestion.citedSourceName && " · "}
+              {suggestion.citedSourceName && <>From: {suggestion.citedSourceName}</>}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Footer: Why + Prediction + Principle + Frameworks */}

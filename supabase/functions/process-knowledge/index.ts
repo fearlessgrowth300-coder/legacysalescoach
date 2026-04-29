@@ -7,11 +7,68 @@ const defaultCorsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// ===== EMBEDDING GENERATION =====
-// Note: The Lovable AI Gateway does not support embedding models.
-// Embeddings are skipped; retrieval uses text-based search instead.
-async function generateEmbedding(_text: string, _apiKey: string): Promise<null> {
-  return null;
+// ===== EMBEDDING GENERATION (OpenAI text-embedding-3-small, 768 dims) =====
+async function generateEmbedding(text: string, _apiKey: string): Promise<number[] | null> {
+  try {
+    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+    if (!OPENAI_API_KEY) return null;
+    const truncated = (text || "").substring(0, 32000);
+    if (truncated.length < 5) return null;
+    const r = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "text-embedding-3-small", input: truncated, dimensions: 768 }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!r.ok) { await r.text(); return null; }
+    const d = await r.json();
+    return d.data?.[0]?.embedding || null;
+  } catch (e) {
+    console.error("Embedding failed:", e);
+    return null;
+  }
+}
+
+// ===== PASS 1: TRANSCRIPT CLEANING =====
+// One job: fix punctuation, paragraph breaks, strip filler, label speaker shifts.
+// No extraction. No JSON. Plain readable text out.
+async function cleanTranscriptChunk(rawChunk: string, apiKey: string): Promise<string> {
+  try {
+    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          {
+            role: "system",
+            content: `You are a transcript cleaner. ONE JOB: produce a clean, readable version of the transcript below.
+
+RULES:
+1. Fix punctuation (periods, commas, question marks).
+2. Add paragraph breaks at natural topic shifts.
+3. Remove filler words: "um", "uh", "like", "you know", "I mean", "sort of", "kind of", "right?", "okay so".
+4. If you detect a speaker change, prefix the new block with "Speaker:" (or "Host:" / "Guest:" if obvious).
+5. Preserve every idea, technique, story, number, script, and exact quote. DO NOT summarise. DO NOT shorten. DO NOT extract.
+6. Output PLAIN TEXT only. No JSON. No markdown headings. No commentary.`,
+          },
+          { role: "user", content: rawChunk },
+        ],
+        temperature: 0.1,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!r.ok) {
+      console.error("Cleaning pass failed:", r.status);
+      return rawChunk; // fallback to raw
+    }
+    const d = await r.json();
+    const cleaned = d.choices?.[0]?.message?.content || "";
+    return cleaned.length > rawChunk.length * 0.4 ? cleaned : rawChunk;
+  } catch (e) {
+    console.error("Cleaning pass exception:", e);
+    return rawChunk;
+  }
 }
 
 // ===== STRUCTURED LEARNINGS EXTRACTION =====
@@ -172,35 +229,40 @@ Return a JSON array of principle objects. No extra text. No markdown. Just the r
 }
 
 async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
-  // For long content, split into chunks and extract from each
-  const CHUNK_SIZE = 35000;
-  if (content.length <= CHUNK_SIZE) {
-    return extractStructuredLearningsChunk(content, sourceName, apiKey, 0, 1);
-  }
-
-  // Split at sentence boundaries
+  // Pass 2 chunk size: small chunks force the AI to go deep on each idea
+  // instead of summarising. 10k chars ≈ 2.5k tokens of dense source.
+  const CHUNK_SIZE = 10000;
   const chunks: string[] = [];
-  let start = 0;
-  while (start < content.length) {
-    let end = start + CHUNK_SIZE;
-    if (end >= content.length) {
-      chunks.push(content.substring(start));
-      break;
+
+  if (content.length <= CHUNK_SIZE) {
+    chunks.push(content);
+  } else {
+    let start = 0;
+    while (start < content.length) {
+      let end = start + CHUNK_SIZE;
+      if (end >= content.length) {
+        chunks.push(content.substring(start));
+        break;
+      }
+      const lastPeriod = content.lastIndexOf(". ", end);
+      const lastNewline = content.lastIndexOf("\n", end);
+      const breakPoint = Math.max(lastPeriod, lastNewline);
+      if (breakPoint > start + CHUNK_SIZE * 0.5) end = breakPoint + 1;
+      chunks.push(content.substring(start, end));
+      start = end;
     }
-    const lastPeriod = content.lastIndexOf(". ", end);
-    const lastNewline = content.lastIndexOf("\n", end);
-    const breakPoint = Math.max(lastPeriod, lastNewline);
-    if (breakPoint > start + CHUNK_SIZE * 0.5) end = breakPoint + 1;
-    chunks.push(content.substring(start, end));
-    start = end;
   }
 
-  console.log(`Splitting content into ${chunks.length} chunks for learning extraction`);
+  console.log(`Three-pass pipeline: ${chunks.length} chunks of ~${CHUNK_SIZE} chars each`);
   const allLearnings: any[] = [];
   for (let i = 0; i < chunks.length; i++) {
-    const chunkLearnings = await extractStructuredLearningsChunk(chunks[i], sourceName, apiKey, i, chunks.length);
+    // Pass 1: clean
+    const cleaned = await cleanTranscriptChunk(chunks[i], apiKey);
+    console.log(`Chunk ${i + 1}/${chunks.length}: cleaned ${chunks[i].length} → ${cleaned.length} chars`);
+    // Pass 2: extract weapon-grade principles
+    const chunkLearnings = await extractStructuredLearningsChunk(cleaned, sourceName, apiKey, i, chunks.length);
     allLearnings.push(...chunkLearnings);
-    console.log(`Chunk ${i + 1}/${chunks.length}: extracted ${chunkLearnings.length} learnings`);
+    console.log(`Chunk ${i + 1}/${chunks.length}: extracted ${chunkLearnings.length} principles`);
   }
   return allLearnings;
 }
@@ -261,99 +323,34 @@ serve(async (req) => {
       });
     }
 
-    const MAX_CONTENT_LENGTH = 50000;
+    // Raised cap so longer videos benefit from the new 10k-chunk pipeline
+    const MAX_CONTENT_LENGTH = 200000;
     const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
     const sourceName = item.title || "Uploaded Content";
 
-    console.log(`Processing ${contentToProcess.length} chars of content...`);
+    console.log(`Three-pass pipeline starting on ${contentToProcess.length} chars`);
 
-    // ===== STEP 1: Extract raw knowledge chunks (existing behavior) =====
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          {
-            role: "system",
-            content: `You are an expert knowledge extractor. Extract actionable knowledge from the content below.
-
-IMPORTANT: This content may be about ANY topic — sales, leadership, life, motivation, team building, networking, mindset, family, health, or anything else. Detect what it's actually about.
-
-CATEGORY DETECTION:
-- Auto-detect the category for each insight based on its actual content
-- Use existing categories if they fit: Opening Lines, Rapport Building, Objection Handling, Closing Techniques, Trust Building, Prospecting, Team Leading, Life Experiences, Networking Business, Motivation Mindset, Family Balance, Personal Growth, Leadership, Content Creation, Social Media Strategy
-- If none fit, CREATE a new descriptive Title Case category name
-- NEVER force sales categories onto non-sales content
-
-Return JSON array of objects with: { "category": "...", "content": "...", "triggerPhrases": "..." }
-There is NO LIMIT — extract every distinct insight the content contains. Short content = 5-10, medium = 15-30, long/dense content = 30-100+.
-Each chunk should be a standalone, actionable insight. 
-For books, extract specific techniques, frameworks, scripts, and word-for-word phrases when available.
-Make each chunk detailed enough to be useful on its own.`
-          },
-          { role: "user", content: `Extract knowledge from:\n\n${contentToProcess}` }
-        ],
-        temperature: 0.3,
-      }),
-    });
-
-    if (!aiResponse.ok) {
-      console.error("AI error:", aiResponse.status);
-      if (aiResponse.status === 429) {
-        await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-        return new Response(JSON.stringify({ error: "Rate limited. Please try again in a minute." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-      return new Response(JSON.stringify({ error: "AI processing failed" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const aiData = await aiResponse.json();
-    const aiContent = aiData.choices?.[0]?.message?.content || "";
-
-    let chunks: any[] = [];
-    try {
-      const jsonMatch = aiContent.match(/\[[\s\S]*\]/);
-      chunks = JSON.parse(jsonMatch ? jsonMatch[0] : aiContent);
-    } catch {
-      chunks = [{ category: "general", content: aiContent.substring(0, 500), triggerPhrases: "" }];
-    }
-
-    // Store chunks with embeddings
-    for (const chunk of chunks) {
-      const embedding = await generateEmbedding(chunk.content, LOVABLE_API_KEY);
-      await supabase.from("knowledge_chunks").insert({
-        user_id: user.id,
-        source_id: itemId,
-        category: chunk.category || "general",
-        content: chunk.content,
-        brain_type: item.brain_type,
-        trigger_phrases: chunk.triggerPhrases || "",
-        relevance_score: 70,
-        source_type: "core_knowledge",
-        embedding: embedding,
-        workspace_id: null,
-      });
-    }
-
-    console.log(`Stored ${chunks.length} knowledge chunks with embeddings`);
-
-    // ===== STEP 2: Extract STRUCTURED LEARNINGS =====
-    console.log("Extracting structured sales learnings with weapon-grade detail...");
+    // ===== PASSES 1 + 2: Clean each 10k chunk, then extract weapon-grade principles =====
     const learnings = await extractStructuredLearnings(contentToProcess, sourceName, LOVABLE_API_KEY);
+    console.log(`Pass 2 complete: ${learnings.length} principles extracted`);
 
+    // ===== PASS 3: Rich-field embedding + insert into sales_brain =====
     const storedLearnings: any[] = [];
     for (const learning of learnings) {
-      const embeddingText = `${learning.principle_name} ${learning.what_i_learned} ${learning.exact_words_to_use || ""} ${learning.the_deep_why || ""}`;
+      // Concatenate ALL meaningful fields so semantic search finds the right
+      // technique even when the user phrases it completely differently.
+      const embeddingText = [
+        learning.principle_name,
+        learning.category,
+        learning.what_i_learned,
+        learning.exact_words_to_use,
+        learning.when_to_use,
+        learning.the_deep_why,
+        learning.works_best_for,
+        learning.trigger_phrases,
+      ].filter((s) => typeof s === "string" && s.trim().length > 0).join(" | ");
       const embedding = await generateEmbedding(embeddingText, LOVABLE_API_KEY);
-      
+
       const { data: inserted, error: insertErr } = await supabase.from("sales_brain").insert({
         user_id: user.id,
         source_id: itemId,
@@ -364,7 +361,6 @@ Make each chunk detailed enough to be useful on its own.`
         source_type: "sales_principle",
         brain_type: item.brain_type,
         category: learning.category || "general",
-        // New weapon-grade columns
         the_deep_why: learning.the_deep_why || null,
         exact_words_to_use: learning.exact_words_to_use || null,
         words_to_never_use: learning.words_to_never_use || null,
@@ -388,44 +384,35 @@ Make each chunk detailed enough to be useful on its own.`
           how_to_apply: learning.how_to_apply,
           category: learning.category,
         });
+
+        // Also store a compact knowledge_chunks row for keyword/hybrid fallback
+        await supabase.from("knowledge_chunks").insert({
+          user_id: user.id,
+          source_id: itemId,
+          category: learning.category || "general",
+          content: `${learning.principle_name}: ${learning.what_i_learned}\n\nApply: ${learning.how_to_apply}`,
+          brain_type: item.brain_type,
+          trigger_phrases: learning.trigger_phrases || "",
+          relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
+          source_type: "core_knowledge",
+          embedding: embedding,
+          workspace_id: null,
+        });
       } else if (insertErr) {
         console.error("Insert error for principle:", learning.principle_name, insertErr.message);
       }
     }
 
-    console.log(`Stored ${storedLearnings.length} weapon-grade structured learnings in sales_brain`);
-
-    // ===== STEP 3: Break text into vector chunks (500-1000 tokens) =====
-    const textChunks = breakIntoChunks(contentToProcess, 800);
-    let embeddedChunkCount = 0;
-    for (const textChunk of textChunks) {
-      const embedding = await generateEmbedding(textChunk, LOVABLE_API_KEY);
-      if (embedding) {
-        await supabase.from("knowledge_chunks").insert({
-          user_id: user.id,
-          source_id: itemId,
-          category: "general",
-          content: textChunk,
-          brain_type: item.brain_type,
-          trigger_phrases: "",
-          relevance_score: 60,
-          source_type: "core_knowledge",
-          embedding: embedding,
-          workspace_id: null,
-        });
-        embeddedChunkCount++;
-      }
-    }
-    console.log(`Stored ${embeddedChunkCount} raw embedded chunks`);
+    console.log(`Stored ${storedLearnings.length} weapon-grade principles + matching chunks`);
 
     // Update item status
     await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
 
-    return new Response(JSON.stringify({ 
-      success: true, 
-      chunks: chunks.length,
+    return new Response(JSON.stringify({
+      success: true,
+      chunks: storedLearnings.length,
       learnings: storedLearnings,
-      embeddedChunks: embeddedChunkCount,
+      embeddedChunks: storedLearnings.length,
       sourceName,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

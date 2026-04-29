@@ -181,7 +181,7 @@ serve(async (req) => {
       supabase.from("knowledge_base_items").select("id", { count: "exact", head: true }).eq("user_id", user.id),
       supabase.from("knowledge_base_items").select("id, title, url, type").eq("user_id", user.id),
       supabase.from("sales_brain")
-        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, relevance_score, source_id")
+        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, relevance_score, source_id, power_level")
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
@@ -284,7 +284,8 @@ serve(async (req) => {
     // ─── Build brain context with real source titles ───
     const principlesContext = principles.map((p: any) => {
       const realSource = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id].title : p.source_name;
-      return `[Principle: ${p.principle_name}] [Source: ${realSource}] [Category: ${p.category}] [Relevance: ${p.relevance_score ?? 70}]\nWhat I Learned: ${p.what_i_learned}\nHow to Apply: ${p.how_to_apply}`;
+      const power = p.power_level ?? 5;
+      return `[Principle: ${p.principle_name}] [Source: ${realSource}] [Category: ${p.category}] [Power: ${power}/10] [Relevance: ${p.relevance_score ?? 70}]\nWhat I Learned: ${p.what_i_learned}\nHow to Apply: ${p.how_to_apply}`;
     }).join("\n\n");
 
     const chunksContext = chunks.map((c: any) => {
@@ -385,6 +386,15 @@ IMPORTANT RULES FOR THIS FORMAT:
 For GENERAL QUESTIONS (not about a specific conversation), respond naturally and conversationally like a brilliant mentor. Weave source references inline. Use bold for key points. Use bullet points for steps.
 
 === END RESPONSE FORMAT ===
+
+=== MANDATORY VISIBLE CITATION (NON-NEGOTIABLE) ===
+EVERY response — strategy, script, or general answer — MUST end with these two lines exactly:
+
+Technique Used: <exact principle_name from YOUR BRAIN above>
+Source: <exact upload title from YOUR BRAIN above>
+
+Pick the single highest-power principle you actually used. If you blended multiple, pick the dominant one. Never invent a name. Never skip these two lines. This is how the user sees that the Brain is using what they uploaded.
+=== END CITATION ===
 
 FOR EVERY QUESTION:
 1. Think silently, then respond using the format above
