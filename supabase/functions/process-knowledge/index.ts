@@ -7,11 +7,68 @@ const defaultCorsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// ===== EMBEDDING GENERATION =====
-// Note: The Lovable AI Gateway does not support embedding models.
-// Embeddings are skipped; retrieval uses text-based search instead.
-async function generateEmbedding(_text: string, _apiKey: string): Promise<null> {
-  return null;
+// ===== EMBEDDING GENERATION (OpenAI text-embedding-3-small, 768 dims) =====
+async function generateEmbedding(text: string, _apiKey: string): Promise<number[] | null> {
+  try {
+    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+    if (!OPENAI_API_KEY) return null;
+    const truncated = (text || "").substring(0, 32000);
+    if (truncated.length < 5) return null;
+    const r = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "text-embedding-3-small", input: truncated, dimensions: 768 }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!r.ok) { await r.text(); return null; }
+    const d = await r.json();
+    return d.data?.[0]?.embedding || null;
+  } catch (e) {
+    console.error("Embedding failed:", e);
+    return null;
+  }
+}
+
+// ===== PASS 1: TRANSCRIPT CLEANING =====
+// One job: fix punctuation, paragraph breaks, strip filler, label speaker shifts.
+// No extraction. No JSON. Plain readable text out.
+async function cleanTranscriptChunk(rawChunk: string, apiKey: string): Promise<string> {
+  try {
+    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          {
+            role: "system",
+            content: `You are a transcript cleaner. ONE JOB: produce a clean, readable version of the transcript below.
+
+RULES:
+1. Fix punctuation (periods, commas, question marks).
+2. Add paragraph breaks at natural topic shifts.
+3. Remove filler words: "um", "uh", "like", "you know", "I mean", "sort of", "kind of", "right?", "okay so".
+4. If you detect a speaker change, prefix the new block with "Speaker:" (or "Host:" / "Guest:" if obvious).
+5. Preserve every idea, technique, story, number, script, and exact quote. DO NOT summarise. DO NOT shorten. DO NOT extract.
+6. Output PLAIN TEXT only. No JSON. No markdown headings. No commentary.`,
+          },
+          { role: "user", content: rawChunk },
+        ],
+        temperature: 0.1,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!r.ok) {
+      console.error("Cleaning pass failed:", r.status);
+      return rawChunk; // fallback to raw
+    }
+    const d = await r.json();
+    const cleaned = d.choices?.[0]?.message?.content || "";
+    return cleaned.length > rawChunk.length * 0.4 ? cleaned : rawChunk;
+  } catch (e) {
+    console.error("Cleaning pass exception:", e);
+    return rawChunk;
+  }
 }
 
 // ===== STRUCTURED LEARNINGS EXTRACTION =====
