@@ -1007,16 +1007,30 @@ serve(async (req) => {
 
     console.log(`Stored ${storedLearnings.length} weapon-grade principles (deduped) + matching chunks`);
     await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+    };
+
+    // Dispatch the long-running work to the background and respond immediately.
+    // The client polls knowledge_base_items.status / book_brief every 3s.
+    const bgTask = runPipeline().catch(async (error) => {
+      console.error("process-knowledge background error:", error);
+      try {
+        await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+      } catch (_) { /* ignore */ }
+    });
+
+    // @ts-ignore — EdgeRuntime is provided by the Supabase Edge runtime
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+      // @ts-ignore
+      EdgeRuntime.waitUntil(bgTask);
+    }
 
     return new Response(JSON.stringify({
       success: true,
-      chunks: storedLearnings.length,
-      learnings: storedLearnings,
-      embeddedChunks: storedLearnings.length,
-      sourceName,
-      cited_principle_name: storedLearnings[0]?.cited_principle_name || null,
-      cited_source_name: sourceName,
+      status: "processing",
+      message: "Processing started in background. Poll item status for completion.",
+      itemId,
     }), {
+      status: 202,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
