@@ -749,6 +749,11 @@ serve(async (req) => {
       });
     }
 
+    // Mark as processing immediately, then run the heavy pipeline in the background
+    // to avoid the 150s edge function idle timeout. Client already polls status + book_brief.
+    await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", itemId);
+
+    const runPipeline = async () => {
     let content = "";
 
     if (manualTranscript && manualTranscript.trim().length > 10) {
