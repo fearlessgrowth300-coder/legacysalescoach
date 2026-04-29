@@ -180,7 +180,7 @@ EXTRACTION RULES:
 
 ---
 
-Return a JSON array of principle objects. No extra text. No markdown. Just the raw JSON array starting with [ and ending with ].`,
+Return a single JSON object with this exact shape: { "principles": [ ...principle objects... ] }. No extra text. No markdown. No code fences. Always include the "principles" key even if you only extract one item. Extract as many principles as the chunk supports — minimum 5, no upper limit.`,
           },
           {
             role: "user",
