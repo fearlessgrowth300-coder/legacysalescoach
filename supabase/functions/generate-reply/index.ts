@@ -178,7 +178,8 @@ serve(async (req) => {
     const principlesText = topPrinciples.length > 0
       ? topPrinciples.map((p: any) => {
           const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : p.source_name;
-          return `• ${p.principle_name} (${src}): ${p.what_i_learned}\n  Apply: ${p.how_to_apply}`;
+          const power = p.power_level ?? 5;
+          return `• [${p.principle_name}] (Source: ${src}) (Power: ${power}/10): ${p.what_i_learned}\n  Apply: ${p.how_to_apply}`;
         }).join("\n")
       : "No principles uploaded yet.";
 
