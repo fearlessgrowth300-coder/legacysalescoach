@@ -314,8 +314,10 @@ VARIANT RULES:
 - Variant 2 (alternative): Same stage, DIFFERENT framework angle, DIFFERENT discovery question
 - Variant 3 (casual): Shortest, most natural, single powerful question + one framework technique
 
+MANDATORY CITATION (NON-NEGOTIABLE): Every variant MUST cite the EXACT principle from SALES_BRAIN_PRINCIPLES that it leans on, plus its source. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES — never invent. Prefer the highest-Power principle that fits.
+
 Return JSON only:
-{ "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "...", "principle_applied": "...", "why_this_works": "References technique from your Brain: [Principle Name] — [Why it applies]. Frameworks used: [list]", "warmth_prediction": <number>, "frameworks_used": ["SPIN-Implication", "PAS", "Voss-Mirroring"] }] }${styleModifierInstruction}`;
+{ "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "...", "principle_applied": "...", "cited_principle_name": "<exact principle_name from SALES_BRAIN_PRINCIPLES>", "cited_source_name": "<exact Source from SALES_BRAIN_PRINCIPLES>", "why_this_works": "References technique from your Brain: [Principle Name] — [Why it applies]. Frameworks used: [list]", "warmth_prediction": <number>, "frameworks_used": ["SPIN-Implication", "PAS", "Voss-Mirroring"] }] }${styleModifierInstruction}`;
 
     const replyUserPrompt = `WORKSPACE_PROFILE:
 ${workspaceProfile}
