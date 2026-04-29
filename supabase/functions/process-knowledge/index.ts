@@ -616,8 +616,8 @@ serve(async (req) => {
   }
 
   try {
-    const { itemId, url, type, filePath, manualTranscript } = await req.json();
-    
+    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex } = await req.json();
+
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -633,16 +633,27 @@ serve(async (req) => {
       });
     }
 
+    // Get item info early so book pipeline can update book_brief incrementally
+    const { data: itemEarly } = await supabase
+      .from("knowledge_base_items")
+      .select("*")
+      .eq("id", itemId)
+      .single();
+
+    if (!itemEarly) {
+      return new Response(JSON.stringify({ error: "Item not found" }), {
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     let content = "";
 
-    // Use manual transcript if provided
     if (manualTranscript && manualTranscript.trim().length > 10) {
       content = manualTranscript.trim();
-      console.log("Using manual transcript, length:", content.length);
-    } else if (type === "pdf" && filePath) {
-      content = await extractPdfContent(filePath, supabase, itemId, corsHeaders, LOVABLE_API_KEY);
-    } else if (url) {
-      content = await extractUrlContent(url, supabaseUrl, supabaseKey, supabase, user.id);
+    } else if (type === "pdf" && (filePath || itemEarly.file_path)) {
+      content = await extractPdfContent(filePath || itemEarly.file_path, supabase, itemId, corsHeaders, LOVABLE_API_KEY);
+    } else if (url || itemEarly.url) {
+      content = await extractUrlContent(url || itemEarly.url, supabaseUrl, supabaseKey, supabase, user.id);
     }
 
     if (!content || content.length < 20) {
@@ -652,142 +663,244 @@ serve(async (req) => {
       });
     }
 
-    // Get item info
-    const { data: item } = await supabase
-      .from("knowledge_base_items")
-      .select("*")
-      .eq("id", itemId)
-      .single();
-
-    if (!item) {
-      return new Response(JSON.stringify({ error: "Item not found" }), {
-        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Raised cap so longer videos benefit from the new 10k-chunk pipeline
+    const item = itemEarly;
     const MAX_CONTENT_LENGTH = 200000;
     const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
     const sourceName = item.title || "Uploaded Content";
 
-    console.log(`Three-pass pipeline starting on ${contentToProcess.length} chars`);
+    // ============== BOOK PIPELINE (PDF, long enough to benefit) ==============
+    const isBook = type === "pdf" && contentToProcess.length >= 5000;
 
-    // ===== PASSES 1 + 2: Clean each 10k chunk, then extract weapon-grade principles =====
+    if (isBook) {
+      console.log(`Book pipeline starting on ${contentToProcess.length} chars`);
+      const seenChunkContent = new Set<string>();
+      const allStored: any[] = [];
+
+      // === RETRY MODE: re-run a single chapter ===
+      if (typeof retryChapterIndex === "number" && item.book_brief) {
+        const brief = item.book_brief;
+        const chapters: any[] = Array.isArray(brief.chapters) ? brief.chapters : [];
+        const targetMeta = chapters.find((c: any) => c.index === retryChapterIndex);
+        const detected = detectChapters(contentToProcess);
+        const targetDetected = detected.find((c) => c.index === retryChapterIndex) || detected[retryChapterIndex - 1];
+        if (!targetMeta || !targetDetected) {
+          return new Response(JSON.stringify({ error: "Chapter not found for retry" }), {
+            status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        // Mark as extracting in book_brief
+        const updatedChapters = chapters.map((c: any) =>
+          c.index === retryChapterIndex ? { ...c, status: "extracting", error: null } : c,
+        );
+        await supabase.from("knowledge_base_items").update({
+          book_brief: { ...brief, chapters: updatedChapters },
+          status: "extracting",
+        }).eq("id", itemId);
+
+        try {
+          // Wipe previous principles for this chapter so retry is clean
+          await supabase.from("sales_brain")
+            .delete()
+            .eq("user_id", user.id)
+            .eq("source_id", itemId)
+            .filter("metadata->>chapter", "eq", String(retryChapterIndex));
+
+          const principles = await extractChapterPrinciples(
+            targetDetected,
+            {
+              title: brief.title,
+              author: brief.author,
+              core_system: brief.core_system,
+              what_this_book_teaches: brief.what_this_book_teaches,
+            },
+            { title: targetMeta.title, one_line: targetMeta.one_line },
+            sourceName,
+            LOVABLE_API_KEY,
+          );
+
+          let storedCount = 0;
+          for (const p of principles) {
+            const stored = await persistLearning(
+              supabase, user.id, itemId, item.brain_type, sourceName,
+              { ...p, _chapter: retryChapterIndex }, LOVABLE_API_KEY, seenChunkContent,
+            );
+            if (stored) { allStored.push(stored); storedCount++; }
+          }
+
+          const finalChapters = updatedChapters.map((c: any) =>
+            c.index === retryChapterIndex ? { ...c, status: "done", principle_count: storedCount, error: null } : c,
+          );
+          // If any chapter still pending/extracting, keep status; else flip to ready
+          const stillPending = finalChapters.some((c: any) => c.status === "pending" || c.status === "extracting" || c.status === "failed");
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters: finalChapters },
+            status: stillPending ? "extracting" : "ready",
+          }).eq("id", itemId);
+
+          return new Response(JSON.stringify({
+            success: true, retried: retryChapterIndex, principles_added: storedCount, sourceName,
+          }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        } catch (retryErr: any) {
+          const failChapters = updatedChapters.map((c: any) =>
+            c.index === retryChapterIndex ? { ...c, status: "failed", error: retryErr?.message || "Retry failed" } : c,
+          );
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters: failChapters },
+          }).eq("id", itemId);
+          throw retryErr;
+        }
+      }
+
+      // === FRESH RUN ===
+      await supabase.from("knowledge_base_items").update({ status: "mapping" }).eq("id", itemId);
+
+      const detected = detectChapters(contentToProcess);
+      console.log(`Detected ${detected.length} chapter(s) / chunk(s)`);
+
+      // Pass 1 — Book Mapping
+      const firstPages = contentToProcess.substring(0, 12000);
+      const skeleton = await extractBookSkeleton(
+        firstPages,
+        detected.map((c) => c.title),
+        LOVABLE_API_KEY,
+      );
+
+      const bookContext = skeleton ?? {
+        title: sourceName,
+        author: "Unknown",
+        core_system: "",
+        what_this_book_teaches: "",
+        chapters: detected.map((c) => ({ index: c.index, title: c.title, one_line: "" })),
+      };
+
+      // Align skeleton chapters to detected chapters (use detected count as source of truth)
+      const briefChapters = detected.map((c) => {
+        const fromAi = (bookContext.chapters || []).find((x: any) => x.index === c.index);
+        return {
+          index: c.index,
+          title: fromAi?.title || c.title,
+          one_line: fromAi?.one_line || "",
+          status: "pending" as const,
+          principle_count: 0,
+        };
+      });
+
+      const briefToStore = {
+        title: bookContext.title || sourceName,
+        author: bookContext.author || "Unknown",
+        core_system: bookContext.core_system || "",
+        what_this_book_teaches: bookContext.what_this_book_teaches || "",
+        chapters: briefChapters,
+      };
+
+      await supabase.from("knowledge_base_items").update({
+        book_brief: briefToStore,
+        status: "extracting",
+      }).eq("id", itemId);
+
+      // Pass 2 — Chapter-Aware Deep Extraction (per chapter)
+      let workingChapters = [...briefChapters];
+      for (const chap of detected) {
+        // Mark as extracting
+        workingChapters = workingChapters.map((c) =>
+          c.index === chap.index ? { ...c, status: "extracting" as any } : c,
+        );
+        await supabase.from("knowledge_base_items").update({
+          book_brief: { ...briefToStore, chapters: workingChapters },
+        }).eq("id", itemId);
+
+        try {
+          const meta = workingChapters.find((c) => c.index === chap.index)!;
+          const principles = await extractChapterPrinciples(
+            chap,
+            briefToStore,
+            { title: meta.title, one_line: meta.one_line },
+            sourceName,
+            LOVABLE_API_KEY,
+          );
+          let storedCount = 0;
+          for (const p of principles) {
+            const stored = await persistLearning(
+              supabase, user.id, itemId, item.brain_type, sourceName,
+              { ...p, _chapter: chap.index }, LOVABLE_API_KEY, seenChunkContent,
+            );
+            if (stored) { allStored.push(stored); storedCount++; }
+          }
+          workingChapters = workingChapters.map((c) =>
+            c.index === chap.index ? { ...c, status: "done" as any, principle_count: storedCount } : c,
+          );
+        } catch (chapErr: any) {
+          console.error(`Chapter ${chap.index} failed:`, chapErr?.message);
+          workingChapters = workingChapters.map((c) =>
+            c.index === chap.index ? { ...c, status: "failed" as any, error: chapErr?.message || "Failed" } : c,
+          );
+        }
+        await supabase.from("knowledge_base_items").update({
+          book_brief: { ...briefToStore, chapters: workingChapters },
+        }).eq("id", itemId);
+      }
+
+      // Pass 3 — Connection Layer
+      try {
+        const connections = await buildConnectionMap(
+          allStored.map((s) => ({ principle_name: s.principle_name, what_i_learned: s.what_i_learned })),
+          LOVABLE_API_KEY,
+        );
+        for (const principleName of Object.keys(connections)) {
+          const connected = connections[principleName].join(", ");
+          if (!connected) continue;
+          await supabase.from("sales_brain")
+            .update({ connected_principles: connected })
+            .eq("user_id", user.id)
+            .eq("source_id", itemId)
+            .ilike("principle_name", principleName);
+        }
+      } catch (connErr) {
+        console.error("Connection pass failed (non-fatal):", connErr);
+      }
+
+      await supabase.from("knowledge_base_items").update({
+        book_brief: { ...briefToStore, chapters: workingChapters },
+        status: "ready",
+      }).eq("id", itemId);
+
+      return new Response(JSON.stringify({
+        success: true,
+        learnings: allStored,
+        chunks: allStored.length,
+        sourceName,
+        book_brief: { ...briefToStore, chapters: workingChapters },
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // ============== STANDARD PIPELINE (videos / short content) ==============
+    console.log(`Three-pass pipeline starting on ${contentToProcess.length} chars`);
     const learnings = await extractStructuredLearnings(contentToProcess, sourceName, LOVABLE_API_KEY);
     console.log(`Pass 2 complete: ${learnings.length} principles extracted`);
 
-    // ===== PASS 3: Rich-field embedding + UPSERT into sales_brain (dedup-safe) =====
     const storedLearnings: any[] = [];
-    const seenChunkContent = new Set<string>(); // in-memory dedup for knowledge_chunks
+    const seenChunkContent = new Set<string>();
     for (const learning of learnings) {
-      const principleName = (learning.principle_name || "Untitled Principle").trim();
-      // Concatenate ALL meaningful fields so semantic search finds the right
-      // technique even when the user phrases it completely differently.
-      const embeddingText = [
-        principleName,
-        learning.category,
-        learning.what_i_learned,
-        learning.exact_words_to_use,
-        learning.when_to_use,
-        learning.the_deep_why,
-        learning.works_best_for,
-        learning.trigger_phrases,
-      ].filter((s) => typeof s === "string" && s.trim().length > 0).join(" | ");
-      const embedding = await generateEmbedding(embeddingText, LOVABLE_API_KEY);
-
-      const brainRow = {
-        user_id: user.id,
-        source_id: itemId,
-        principle_name: principleName,
-        what_i_learned: learning.what_i_learned || "",
-        how_to_apply: learning.how_to_apply || "",
-        source_name: sourceName,
-        source_type: "sales_principle",
-        brain_type: item.brain_type,
-        category: learning.category || "general",
-        the_deep_why: learning.the_deep_why || null,
-        exact_words_to_use: learning.exact_words_to_use || null,
-        words_to_never_use: learning.words_to_never_use || null,
-        real_example_or_story: learning.real_example_or_story || null,
-        when_to_use: learning.when_to_use || null,
-        when_not_to_use: learning.when_not_to_use || null,
-        common_mistake: learning.common_mistake || null,
-        power_level: learning.power_level ? Number(learning.power_level) : 5,
-        works_best_for: learning.works_best_for || null,
-        connected_principles: learning.connected_principles || null,
-        relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
-        metadata: { source: sourceName },
-        embedding: embedding,
-        workspace_id: null,
-      };
-
-      // Upsert against the new unique index (user_id, source_id, lower(principle_name))
-      // Falls back to manual select+update if the DB rejects (e.g. very old schema).
-      let inserted: any = null;
-      const { data: upserted, error: upsertErr } = await supabase
-        .from("sales_brain")
-        .insert(brainRow)
-        .select()
-        .single();
-
-      if (upserted) {
-        inserted = upserted;
-      } else if (upsertErr && /duplicate key|unique/i.test(upsertErr.message || "")) {
-        // Already exists — update in place
-        const { data: updated } = await supabase
-          .from("sales_brain")
-          .update(brainRow)
-          .eq("user_id", user.id)
-          .eq("source_id", itemId)
-          .ilike("principle_name", principleName)
-          .select()
-          .single();
-        inserted = updated;
-        console.log(`Updated existing principle: ${principleName}`);
-      } else if (upsertErr) {
-        console.error("Insert error for principle:", principleName, upsertErr.message);
-      }
-
-      if (inserted) {
+      const stored = await persistLearning(
+        supabase, user.id, itemId, item.brain_type, sourceName, learning, LOVABLE_API_KEY, seenChunkContent,
+      );
+      if (stored) {
         storedLearnings.push({
-          id: inserted.id,
-          principle_name: inserted.principle_name,
-          what_i_learned: inserted.what_i_learned,
-          how_to_apply: inserted.how_to_apply,
-          category: inserted.category,
-          source_name: inserted.source_name,
-          power_level: inserted.power_level,
-          cited_principle_name: inserted.principle_name,
-          cited_source_name: inserted.source_name,
+          id: stored.id,
+          principle_name: stored.principle_name,
+          what_i_learned: stored.what_i_learned,
+          how_to_apply: stored.how_to_apply,
+          category: stored.category,
+          source_name: stored.source_name,
+          power_level: stored.power_level,
+          cited_principle_name: stored.principle_name,
+          cited_source_name: stored.source_name,
         });
-
-        // Compact chunk for keyword/hybrid fallback — dedup by content
-        const chunkContent = `${principleName}: ${learning.what_i_learned || ""}\n\nApply: ${learning.how_to_apply || ""}`;
-        const chunkKey = chunkContent.trim().toLowerCase();
-        if (!seenChunkContent.has(chunkKey)) {
-          seenChunkContent.add(chunkKey);
-          const { error: chunkErr } = await supabase.from("knowledge_chunks").insert({
-            user_id: user.id,
-            source_id: itemId,
-            category: learning.category || "general",
-            content: chunkContent,
-            brain_type: item.brain_type,
-            trigger_phrases: learning.trigger_phrases || "",
-            relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
-            source_type: "core_knowledge",
-            embedding: embedding,
-            workspace_id: null,
-          });
-          if (chunkErr && !/duplicate key|unique/i.test(chunkErr.message || "")) {
-            console.error("Chunk insert error:", chunkErr.message);
-          }
-        }
       }
     }
 
     console.log(`Stored ${storedLearnings.length} weapon-grade principles (deduped) + matching chunks`);
-
-    // Update item status
     await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
 
     return new Response(JSON.stringify({
