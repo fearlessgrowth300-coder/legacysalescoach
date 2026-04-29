@@ -87,67 +87,89 @@ export function BookBriefCard({
       )}
 
       {/* Chapters */}
-      {brief.chapters && brief.chapters.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-            Chapters ({brief.chapters.length})
-          </p>
-          <ul className="space-y-1.5">
-            {brief.chapters.map((c) => (
-              <li
-                key={c.index}
-                className="flex items-center justify-between gap-2 text-sm rounded-md border bg-card/40 px-3 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <span className="font-medium text-muted-foreground mr-1">{c.index}.</span>
-                  <span className="truncate">{c.title}</span>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {c.status === "done" && (
-                    <Badge variant="secondary" className="text-[11px]">
-                      <CheckCircle2 className="h-3 w-3 mr-1 text-green-500" />
-                      {c.principle_count ?? 0} principles
-                    </Badge>
-                  )}
-                  {c.status === "extracting" && (
-                    <Badge variant="outline" className="text-[11px]">
-                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      extracting…
-                    </Badge>
-                  )}
-                  {c.status === "pending" && (
-                    <Badge variant="outline" className="text-[11px] text-muted-foreground">
-                      pending
-                    </Badge>
-                  )}
-                  {c.status === "failed" && (
-                    <>
-                      <Badge variant="destructive" className="text-[11px]">
-                        <AlertCircle className="h-3 w-3 mr-1" />
-                        failed
-                      </Badge>
-                      {onRetryChapter && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-6 px-2 text-[11px]"
-                          disabled={retryingIndex === c.index}
-                          onClick={() => onRetryChapter(c.index)}
-                        >
-                          {retryingIndex === c.index ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <>
-                              <RotateCcw className="h-3 w-3 mr-1" /> Retry
-                            </>
-                          )}
-                        </Button>
+      {brief.chapters && brief.chapters.length > 0 && (() => {
+        const total = brief.chapters.length;
+        const doneCount = brief.chapters.filter((c) => c.status === "done").length;
+        const extractingCount = brief.chapters.filter((c) => c.status === "extracting").length;
+        const failedCount = brief.chapters.filter((c) => c.status === "failed").length;
+        // Done = 1.0, extracting = 0.5, pending/failed = 0
+        const progressPct = Math.round(
+          ((doneCount + extractingCount * 0.5) / total) * 100,
+        );
+        return (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Chapters ({total})
+              </p>
+              <span className="text-[11px] text-muted-foreground tabular-nums">
+                {doneCount}/{total} done{failedCount > 0 ? ` · ${failedCount} failed` : ""}
+              </span>
+            </div>
+            <Progress value={progressPct} className="h-1.5 mb-3" />
+            <ul className="space-y-1.5">
+              {brief.chapters.map((c) => (
+                <li
+                  key={c.index}
+                  className="rounded-md border bg-card/40 px-3 py-2 text-sm"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <span className="font-medium text-muted-foreground mr-1">{c.index}.</span>
+                      <span className="truncate">{c.title}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {c.status === "done" && (
+                        <Badge variant="secondary" className="text-[11px]">
+                          <CheckCircle2 className="h-3 w-3 mr-1 text-green-500" />
+                          {c.principle_count ?? 0} principles
+                        </Badge>
                       )}
-                    </>
+                      {c.status === "extracting" && (
+                        <Badge variant="outline" className="text-[11px]">
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          extracting…
+                        </Badge>
+                      )}
+                      {c.status === "pending" && (
+                        <Badge variant="outline" className="text-[11px] text-muted-foreground">
+                          pending
+                        </Badge>
+                      )}
+                      {c.status === "failed" && (
+                        <>
+                          <Badge variant="destructive" className="text-[11px]">
+                            <AlertCircle className="h-3 w-3 mr-1" />
+                            failed
+                          </Badge>
+                          {onRetryChapter && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 px-2 text-[11px]"
+                              disabled={retryingIndex === c.index}
+                              onClick={() => onRetryChapter(c.index)}
+                            >
+                              {retryingIndex === c.index ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <>
+                                  <RotateCcw className="h-3 w-3 mr-1" /> Retry
+                                </>
+                              )}
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {c.status === "done" && c.summary && (
+                    <p className="mt-1.5 text-xs text-muted-foreground leading-snug pl-4 border-l-2 border-primary/30">
+                      <span className="font-medium text-foreground/80">What I learned:</span> {c.summary}
+                    </p>
                   )}
-                </div>
-              </li>
-            ))}
+                </li>
+              ))}
           </ul>
         </div>
       )}
