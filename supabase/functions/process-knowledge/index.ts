@@ -766,9 +766,8 @@ serve(async (req) => {
 
     if (!content || content.length < 20) {
       await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-      return new Response(JSON.stringify({ error: "Could not extract enough content. Try pasting the text manually." }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      console.error("Could not extract enough content for item", itemId);
+      return;
     }
 
     const item = itemEarly;
