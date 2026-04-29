@@ -427,8 +427,9 @@ async function extractChapterPrinciples(
   chapterContext: { title: string; one_line?: string },
   sourceName: string,
   apiKey: string,
+  chunkSize = 10000,
 ): Promise<any[]> {
-  const subChunks = chunkText(chapter.text, 10000);
+  const subChunks = chunkText(chapter.text, chunkSize);
   const all: any[] = [];
   for (let i = 0; i < subChunks.length; i++) {
     const wrapped = `=== BOOK CONTEXT ===
@@ -453,6 +454,63 @@ ${subChunks[i]}`;
     all.push(...learnings);
   }
   return dedupePrinciples(all);
+}
+
+// Try chapter at default size; if it returns 0 or throws, retry once with a larger
+// chunk size so the model sees more context per call.
+async function extractChapterWithFallback(
+  chapter: DetectedChapter,
+  bookContext: { title?: string; author?: string; core_system?: string; what_this_book_teaches?: string },
+  chapterContext: { title: string; one_line?: string },
+  sourceName: string,
+  apiKey: string,
+): Promise<any[]> {
+  try {
+    const first = await extractChapterPrinciples(
+      chapter, bookContext, chapterContext, sourceName, apiKey, 10000,
+    );
+    if (first.length > 0) return first;
+    console.warn(`Chapter ${chapter.index} returned 0 principles at 10k — retrying at 20k`);
+  } catch (e: any) {
+    console.warn(`Chapter ${chapter.index} failed at 10k (${e?.message}) — retrying at 20k`);
+  }
+  return await extractChapterPrinciples(
+    chapter, bookContext, chapterContext, sourceName, apiKey, 20000,
+  );
+}
+
+// Generate a 1-2 sentence summary of what the chapter teaches based on the
+// extracted principles. Best-effort; failures return empty string.
+async function summarizeChapter(
+  chapterTitle: string,
+  principles: { principle_name: string; what_i_learned?: string }[],
+  apiKey: string,
+): Promise<string> {
+  if (principles.length === 0) return "";
+  const list = principles
+    .slice(0, 8)
+    .map((p, i) => `${i + 1}. ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 160)}`)
+    .join("\n");
+  try {
+    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: "You write tight 1-2 sentence chapter takeaways for a salesperson. Plain text, no markdown, max 220 chars." },
+          { role: "user", content: `Chapter: ${chapterTitle}\nPrinciples extracted:\n${list}\n\nWrite the takeaway:` },
+        ],
+        temperature: 0.4,
+      }),
+    });
+    if (!r.ok) return "";
+    const j = await r.json();
+    const txt = (j?.choices?.[0]?.message?.content || "").trim();
+    return txt.replace(/^["']|["']$/g, "").substring(0, 240);
+  } catch {
+    return "";
+  }
 }
 
 // ===== BOOK PIPELINE: Pass 3 (connection layer) =====
@@ -706,7 +764,7 @@ serve(async (req) => {
             .eq("source_id", itemId)
             .filter("metadata->>chapter", "eq", String(retryChapterIndex));
 
-          const principles = await extractChapterPrinciples(
+          const principles = await extractChapterWithFallback(
             targetDetected,
             {
               title: brief.title,
@@ -720,16 +778,18 @@ serve(async (req) => {
           );
 
           let storedCount = 0;
+          const storedForChapter: any[] = [];
           for (const p of principles) {
             const stored = await persistLearning(
               supabase, user.id, itemId, item.brain_type, sourceName,
               { ...p, _chapter: retryChapterIndex }, LOVABLE_API_KEY, seenChunkContent,
             );
-            if (stored) { allStored.push(stored); storedCount++; }
+            if (stored) { allStored.push(stored); storedForChapter.push(stored); storedCount++; }
           }
 
+          const summary = await summarizeChapter(targetMeta.title, storedForChapter, LOVABLE_API_KEY);
           const finalChapters = updatedChapters.map((c: any) =>
-            c.index === retryChapterIndex ? { ...c, status: "done", principle_count: storedCount, error: null } : c,
+            c.index === retryChapterIndex ? { ...c, status: "done", principle_count: storedCount, error: null, summary } : c,
           );
           // If any chapter still pending/extracting, keep status; else flip to ready
           const stillPending = finalChapters.some((c: any) => c.status === "pending" || c.status === "extracting" || c.status === "failed");
@@ -812,7 +872,7 @@ serve(async (req) => {
 
         try {
           const meta = workingChapters.find((c) => c.index === chap.index)!;
-          const principles = await extractChapterPrinciples(
+          const principles = await extractChapterWithFallback(
             chap,
             briefToStore,
             { title: meta.title, one_line: meta.one_line },
@@ -820,15 +880,17 @@ serve(async (req) => {
             LOVABLE_API_KEY,
           );
           let storedCount = 0;
+          const storedForChapter: any[] = [];
           for (const p of principles) {
             const stored = await persistLearning(
               supabase, user.id, itemId, item.brain_type, sourceName,
               { ...p, _chapter: chap.index }, LOVABLE_API_KEY, seenChunkContent,
             );
-            if (stored) { allStored.push(stored); storedCount++; }
+            if (stored) { allStored.push(stored); storedForChapter.push(stored); storedCount++; }
           }
+          const summary = await summarizeChapter(meta.title, storedForChapter, LOVABLE_API_KEY);
           workingChapters = workingChapters.map((c) =>
-            c.index === chap.index ? { ...c, status: "done" as any, principle_count: storedCount } : c,
+            c.index === chap.index ? { ...c, status: "done" as any, principle_count: storedCount, summary } : c,
           );
         } catch (chapErr: any) {
           console.error(`Chapter ${chap.index} failed:`, chapErr?.message);
