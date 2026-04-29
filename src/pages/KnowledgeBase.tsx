@@ -561,6 +561,40 @@ export default function KnowledgeBase() {
           <Button variant="outline" size="sm" className="text-xs sm:text-sm" onClick={() => setViewAllLearningsOpen(true)}>
             <BookOpen className="h-4 w-4 mr-1 sm:mr-2" />Brain Learnings
           </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="text-xs sm:text-sm"
+                disabled={deleteAll.isPending || !items || items.length === 0}
+              >
+                {deleteAll.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-1 sm:mr-2 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4 mr-1 sm:mr-2" />
+                )}
+                Delete All
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete everything from scratch?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently removes all uploaded videos and PDFs, plus every principle and chunk the Brain learned from them. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteAll.mutate()}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  Yes, delete everything
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           {/* Batch Import Dialog */}
           <Dialog open={batchDialogOpen} onOpenChange={setBatchDialogOpen}>
             <DialogTrigger asChild>
