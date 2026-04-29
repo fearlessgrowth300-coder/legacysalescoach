@@ -229,35 +229,40 @@ Return a JSON array of principle objects. No extra text. No markdown. Just the r
 }
 
 async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
-  // For long content, split into chunks and extract from each
-  const CHUNK_SIZE = 35000;
-  if (content.length <= CHUNK_SIZE) {
-    return extractStructuredLearningsChunk(content, sourceName, apiKey, 0, 1);
-  }
-
-  // Split at sentence boundaries
+  // Pass 2 chunk size: small chunks force the AI to go deep on each idea
+  // instead of summarising. 10k chars ≈ 2.5k tokens of dense source.
+  const CHUNK_SIZE = 10000;
   const chunks: string[] = [];
-  let start = 0;
-  while (start < content.length) {
-    let end = start + CHUNK_SIZE;
-    if (end >= content.length) {
-      chunks.push(content.substring(start));
-      break;
+
+  if (content.length <= CHUNK_SIZE) {
+    chunks.push(content);
+  } else {
+    let start = 0;
+    while (start < content.length) {
+      let end = start + CHUNK_SIZE;
+      if (end >= content.length) {
+        chunks.push(content.substring(start));
+        break;
+      }
+      const lastPeriod = content.lastIndexOf(". ", end);
+      const lastNewline = content.lastIndexOf("\n", end);
+      const breakPoint = Math.max(lastPeriod, lastNewline);
+      if (breakPoint > start + CHUNK_SIZE * 0.5) end = breakPoint + 1;
+      chunks.push(content.substring(start, end));
+      start = end;
     }
-    const lastPeriod = content.lastIndexOf(". ", end);
-    const lastNewline = content.lastIndexOf("\n", end);
-    const breakPoint = Math.max(lastPeriod, lastNewline);
-    if (breakPoint > start + CHUNK_SIZE * 0.5) end = breakPoint + 1;
-    chunks.push(content.substring(start, end));
-    start = end;
   }
 
-  console.log(`Splitting content into ${chunks.length} chunks for learning extraction`);
+  console.log(`Three-pass pipeline: ${chunks.length} chunks of ~${CHUNK_SIZE} chars each`);
   const allLearnings: any[] = [];
   for (let i = 0; i < chunks.length; i++) {
-    const chunkLearnings = await extractStructuredLearningsChunk(chunks[i], sourceName, apiKey, i, chunks.length);
+    // Pass 1: clean
+    const cleaned = await cleanTranscriptChunk(chunks[i], apiKey);
+    console.log(`Chunk ${i + 1}/${chunks.length}: cleaned ${chunks[i].length} → ${cleaned.length} chars`);
+    // Pass 2: extract weapon-grade principles
+    const chunkLearnings = await extractStructuredLearningsChunk(cleaned, sourceName, apiKey, i, chunks.length);
     allLearnings.push(...chunkLearnings);
-    console.log(`Chunk ${i + 1}/${chunks.length}: extracted ${chunkLearnings.length} learnings`);
+    console.log(`Chunk ${i + 1}/${chunks.length}: extracted ${chunkLearnings.length} principles`);
   }
   return allLearnings;
 }
