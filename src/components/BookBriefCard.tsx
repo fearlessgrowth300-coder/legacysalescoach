@@ -170,9 +170,10 @@ export function BookBriefCard({
                   )}
                 </li>
               ))}
-          </ul>
-        </div>
-      )}
+            </ul>
+          </div>
+        );
+      })()}
 
       {/* The receipt */}
       {isReady && totalPrinciples > 0 && (
