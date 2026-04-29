@@ -413,15 +413,6 @@ serve(async (req) => {
       chunks: storedLearnings.length,
       learnings: storedLearnings,
       embeddedChunks: storedLearnings.length,
-
-    // Update item status
-    await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
-
-    return new Response(JSON.stringify({ 
-      success: true, 
-      chunks: chunks.length,
-      learnings: storedLearnings,
-      embeddedChunks: embeddedChunkCount,
       sourceName,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
