@@ -530,7 +530,7 @@ export default function KnowledgeBase() {
                 const cats = new Set((processedLearnings || []).map((l: any) => l.category).filter(Boolean));
                 return (
                   <BookBriefCard
-                    brief={briefItem.book_brief}
+                    brief={briefItem.book_brief as any}
                     status={briefItem.status}
                     totalPrinciples={processedLearnings?.length || 0}
                     topTechniques={top}
