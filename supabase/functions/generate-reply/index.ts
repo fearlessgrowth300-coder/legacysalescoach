@@ -121,7 +121,7 @@ serve(async (req) => {
       queryEmbedding,
     ] = await Promise.all([
       supabase.from("sales_brain")
-        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score")
+        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score, power_level")
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false, nullsFirst: false }),
