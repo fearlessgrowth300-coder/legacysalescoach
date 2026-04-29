@@ -228,43 +228,85 @@ Return a JSON array of principle objects. No extra text. No markdown. Just the r
   }
 }
 
-async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
-  // Pass 2 chunk size: small chunks force the AI to go deep on each idea
-  // instead of summarising. 10k chars ≈ 2.5k tokens of dense source.
-  const CHUNK_SIZE = 10000;
+// True 10k-char chunker that breaks on sentence/paragraph boundaries.
+export function chunkText(content: string, chunkSize = 10000): string[] {
   const chunks: string[] = [];
+  if (!content) return chunks;
+  if (content.length <= chunkSize) return [content];
+  let start = 0;
+  while (start < content.length) {
+    let end = start + chunkSize;
+    if (end >= content.length) {
+      const tail = content.substring(start).trim();
+      if (tail.length > 0) chunks.push(tail);
+      break;
+    }
+    const lastPeriod = content.lastIndexOf(". ", end);
+    const lastNewline = content.lastIndexOf("\n", end);
+    const breakPoint = Math.max(lastPeriod, lastNewline);
+    if (breakPoint > start + chunkSize * 0.5) end = breakPoint + 1;
+    const piece = content.substring(start, end).trim();
+    if (piece.length > 0) chunks.push(piece);
+    start = end;
+  }
+  return chunks;
+}
 
-  if (content.length <= CHUNK_SIZE) {
-    chunks.push(content);
-  } else {
-    let start = 0;
-    while (start < content.length) {
-      let end = start + CHUNK_SIZE;
-      if (end >= content.length) {
-        chunks.push(content.substring(start));
-        break;
-      }
-      const lastPeriod = content.lastIndexOf(". ", end);
-      const lastNewline = content.lastIndexOf("\n", end);
-      const breakPoint = Math.max(lastPeriod, lastNewline);
-      if (breakPoint > start + CHUNK_SIZE * 0.5) end = breakPoint + 1;
-      chunks.push(content.substring(start, end));
-      start = end;
+// Dedupe principles by lowercased principle_name, keeping the richest version.
+export function dedupePrinciples(items: any[]): any[] {
+  const seen = new Map<string, any>();
+  for (const it of items) {
+    const name = (it?.principle_name || "").trim().toLowerCase();
+    if (!name) continue;
+    const existing = seen.get(name);
+    if (!existing) {
+      seen.set(name, it);
+    } else {
+      // Keep the entry with more total content captured.
+      const score = (x: any) =>
+        (x?.what_i_learned?.length || 0) +
+        (x?.how_to_apply?.length || 0) +
+        (x?.exact_words_to_use?.length || 0);
+      if (score(it) > score(existing)) seen.set(name, it);
     }
   }
+  return Array.from(seen.values());
+}
 
-  console.log(`Three-pass pipeline: ${chunks.length} chunks of ~${CHUNK_SIZE} chars each`);
-  const allLearnings: any[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    // Pass 1: clean
-    const cleaned = await cleanTranscriptChunk(chunks[i], apiKey);
-    console.log(`Chunk ${i + 1}/${chunks.length}: cleaned ${chunks[i].length} → ${cleaned.length} chars`);
-    // Pass 2: extract weapon-grade principles
-    const chunkLearnings = await extractStructuredLearningsChunk(cleaned, sourceName, apiKey, i, chunks.length);
-    allLearnings.push(...chunkLearnings);
-    console.log(`Chunk ${i + 1}/${chunks.length}: extracted ${chunkLearnings.length} principles`);
+async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
+  // ===== PASS 1: Clean each 10k chunk independently, then concatenate =====
+  const rawChunks = chunkText(content, 10000);
+  console.log(`Pass 1: cleaning ${rawChunks.length} raw chunks of ~10k chars each`);
+
+  const cleanedParts: string[] = [];
+  for (let i = 0; i < rawChunks.length; i++) {
+    const cleaned = await cleanTranscriptChunk(rawChunks[i], apiKey);
+    console.log(`Pass 1 chunk ${i + 1}/${rawChunks.length}: ${rawChunks[i].length} → ${cleaned.length} chars`);
+    cleanedParts.push(cleaned);
   }
-  return allLearnings;
+  const cleanedFull = cleanedParts.join("\n\n");
+  console.log(`Pass 1 done. Concatenated cleaned text: ${cleanedFull.length} chars`);
+
+  // ===== PASS 2: Re-chunk the cleaned text at 10k and extract from each =====
+  const extractionChunks = chunkText(cleanedFull, 10000);
+  console.log(`Pass 2: extracting from ${extractionChunks.length} cleaned chunks`);
+
+  const allLearnings: any[] = [];
+  for (let i = 0; i < extractionChunks.length; i++) {
+    const chunkLearnings = await extractStructuredLearningsChunk(
+      extractionChunks[i],
+      sourceName,
+      apiKey,
+      i,
+      extractionChunks.length,
+    );
+    allLearnings.push(...chunkLearnings);
+    console.log(`Pass 2 chunk ${i + 1}/${extractionChunks.length}: extracted ${chunkLearnings.length} principles`);
+  }
+
+  const deduped = dedupePrinciples(allLearnings);
+  console.log(`Pass 2 done. ${allLearnings.length} raw → ${deduped.length} unique principles`);
+  return deduped;
 }
 
 serve(async (req) => {
