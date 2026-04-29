@@ -181,7 +181,7 @@ serve(async (req) => {
       supabase.from("knowledge_base_items").select("id", { count: "exact", head: true }).eq("user_id", user.id),
       supabase.from("knowledge_base_items").select("id, title, url, type").eq("user_id", user.id),
       supabase.from("sales_brain")
-        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, relevance_score, source_id")
+        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, relevance_score, source_id, power_level")
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
