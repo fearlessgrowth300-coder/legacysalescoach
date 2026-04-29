@@ -643,6 +643,13 @@ async function persistLearning(
       .single();
     inserted = updated;
   } else if (upsertErr) {
+    // FK violation = parent knowledge_base_items row was deleted (e.g. user removed
+    // the upload while a previous background pipeline was still running). Throw a
+    // sentinel so callers can abort the chapter/pipeline cleanly instead of logging
+    // hundreds of identical FK errors.
+    if (/foreign key constraint|sales_brain_source_id_fkey/i.test(upsertErr.message || "")) {
+      throw new Error("PARENT_ITEM_DELETED");
+    }
     console.error("Insert error for principle:", principleName, upsertErr.message);
   }
 
@@ -755,6 +762,15 @@ serve(async (req) => {
     await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", itemId);
 
     const runPipeline = async () => {
+    // Pre-flight: confirm the parent item still exists. The user may have deleted it
+    // between request acceptance and background execution, in which case all writes
+    // would FK-fail.
+    const { data: stillThere } = await supabase
+      .from("knowledge_base_items").select("id").eq("id", itemId).maybeSingle();
+    if (!stillThere) {
+      console.log(`Item ${itemId} was deleted before processing — aborting pipeline.`);
+      return;
+    }
     let content = "";
 
     if (manualTranscript && manualTranscript.trim().length > 10) {
@@ -851,6 +867,10 @@ serve(async (req) => {
           console.log(`Retry chapter ${retryChapterIndex} done: ${storedCount} principles`);
           return;
         } catch (retryErr: any) {
+          if (retryErr?.message === "PARENT_ITEM_DELETED") {
+            console.log(`Item ${itemId} deleted during retry of chapter ${retryChapterIndex} — aborting.`);
+            return;
+          }
           const failChapters = updatedChapters.map((c: any) =>
             c.index === retryChapterIndex ? { ...c, status: "failed", error: retryErr?.message || "Retry failed" } : c,
           );
@@ -942,6 +962,10 @@ serve(async (req) => {
             c.index === chap.index ? { ...c, status: "done" as any, principle_count: storedCount, summary } : c,
           );
         } catch (chapErr: any) {
+          if (chapErr?.message === "PARENT_ITEM_DELETED") {
+            console.log(`Item ${itemId} deleted mid-pipeline at chapter ${chap.index} — aborting.`);
+            return;
+          }
           console.error(`Chapter ${chap.index} failed:`, chapErr?.message);
           workingChapters = workingChapters.map((c) =>
             c.index === chap.index ? { ...c, status: "failed" as any, error: chapErr?.message || "Failed" } : c,
@@ -987,23 +1011,31 @@ serve(async (req) => {
 
     const storedLearnings: any[] = [];
     const seenChunkContent = new Set<string>();
-    for (const learning of learnings) {
-      const stored = await persistLearning(
-        supabase, user.id, itemId, item.brain_type, sourceName, learning, LOVABLE_API_KEY, seenChunkContent,
-      );
-      if (stored) {
-        storedLearnings.push({
-          id: stored.id,
-          principle_name: stored.principle_name,
-          what_i_learned: stored.what_i_learned,
-          how_to_apply: stored.how_to_apply,
-          category: stored.category,
-          source_name: stored.source_name,
-          power_level: stored.power_level,
-          cited_principle_name: stored.principle_name,
-          cited_source_name: stored.source_name,
-        });
+    try {
+      for (const learning of learnings) {
+        const stored = await persistLearning(
+          supabase, user.id, itemId, item.brain_type, sourceName, learning, LOVABLE_API_KEY, seenChunkContent,
+        );
+        if (stored) {
+          storedLearnings.push({
+            id: stored.id,
+            principle_name: stored.principle_name,
+            what_i_learned: stored.what_i_learned,
+            how_to_apply: stored.how_to_apply,
+            category: stored.category,
+            source_name: stored.source_name,
+            power_level: stored.power_level,
+            cited_principle_name: stored.principle_name,
+            cited_source_name: stored.source_name,
+          });
+        }
       }
+    } catch (persistErr: any) {
+      if (persistErr?.message === "PARENT_ITEM_DELETED") {
+        console.log(`Item ${itemId} deleted mid-pipeline (standard) — aborting.`);
+        return;
+      }
+      throw persistErr;
     }
 
     console.log(`Stored ${storedLearnings.length} weapon-grade principles (deduped) + matching chunks`);
