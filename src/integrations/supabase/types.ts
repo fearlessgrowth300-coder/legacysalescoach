@@ -316,6 +316,7 @@ export type Database = {
       }
       knowledge_base_items: {
         Row: {
+          book_brief: Json | null
           brain_type: string
           created_at: string
           file_path: string | null
@@ -328,6 +329,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          book_brief?: Json | null
           brain_type?: string
           created_at?: string
           file_path?: string | null
@@ -340,6 +342,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          book_brief?: Json | null
           brain_type?: string
           created_at?: string
           file_path?: string | null
