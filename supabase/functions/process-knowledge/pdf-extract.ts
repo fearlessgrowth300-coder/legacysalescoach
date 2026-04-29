@@ -13,7 +13,7 @@
 // budget). Do not regress to `image_url` PDFs unless you also add chunked,
 // page-by-page Gemini calls with a real timeout budget per page.
 
-import { extractText, getDocumentProxy } from "npm:unpdf@0.12.1";
+import { extractText, getDocumentProxy } from "https://esm.sh/unpdf@0.12.1";
 
 // Pure-bytes-in / text-out so this is unit-testable without Storage.
 // Returns text with `=== Page N ===` separators preserved so downstream
@@ -61,7 +61,7 @@ export async function ocrPdfWithVision(
 
   let renderPageAsImage: any;
   try {
-    const mod = await import("npm:unpdf@0.12.1");
+    const mod = await import("https://esm.sh/unpdf@0.12.1");
     renderPageAsImage = (mod as any).renderPageAsImage;
   } catch (e) {
     console.warn("unpdf renderPageAsImage import failed:", e);
