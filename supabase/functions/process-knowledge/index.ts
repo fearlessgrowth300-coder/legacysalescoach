@@ -867,6 +867,10 @@ serve(async (req) => {
           console.log(`Retry chapter ${retryChapterIndex} done: ${storedCount} principles`);
           return;
         } catch (retryErr: any) {
+          if (retryErr?.message === "PARENT_ITEM_DELETED") {
+            console.log(`Item ${itemId} deleted during retry of chapter ${retryChapterIndex} — aborting.`);
+            return;
+          }
           const failChapters = updatedChapters.map((c: any) =>
             c.index === retryChapterIndex ? { ...c, status: "failed", error: retryErr?.message || "Retry failed" } : c,
           );
