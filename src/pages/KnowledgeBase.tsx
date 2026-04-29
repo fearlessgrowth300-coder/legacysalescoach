@@ -19,6 +19,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { BrainInsightCard } from "@/components/BrainInsightCard";
+import { BookBriefCard } from "@/components/BookBriefCard";
 
 type UrlPreview = {
   type: "youtube" | "instagram" | "webpage";
@@ -279,7 +280,7 @@ export default function KnowledgeBase() {
   const [processingCounts, setProcessingCounts] = useState<Record<string, { learnings: number; chunks: number }>>({});
 
   useEffect(() => {
-    const processingItems = items?.filter(i => i.status === "processing") || [];
+    const processingItems = items?.filter(i => ["processing", "mapping", "extracting"].includes(i.status)) || [];
     if (processingItems.length === 0) {
       if (Object.keys(processingCounts).length > 0) setProcessingCounts({});
       return;
@@ -299,12 +300,33 @@ export default function KnowledgeBase() {
         };
       }
       setProcessingCounts(counts);
+      // Refresh items so book_brief / chapter status update live
+      queryClient.invalidateQueries({ queryKey: ["kb-items"] });
     };
 
     poll();
     const interval = setInterval(poll, 3000);
     return () => clearInterval(interval);
-  }, [items]);
+  }, [items, queryClient]);
+
+  // Per-chapter retry for the BookBriefCard
+  const [retryingChapter, setRetryingChapter] = useState<{ itemId: string; index: number } | null>(null);
+  const handleRetryChapter = async (itemId: string, chapterIndex: number) => {
+    setRetryingChapter({ itemId, index: chapterIndex });
+    try {
+      const { error } = await supabase.functions.invoke("retry-book-chapter", {
+        body: { itemId, chapterIndex },
+      });
+      if (error) throw error;
+      toast.success(`Retrying chapter ${chapterIndex}…`);
+      queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+      queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
+    } catch (e: any) {
+      toast.error(e.message || "Retry failed");
+    } finally {
+      setRetryingChapter(null);
+    }
+  };
 
   const startPolling = () => {
     const interval = setInterval(() => {
@@ -495,7 +517,31 @@ export default function KnowledgeBase() {
               Here's what I learned from <strong>{learningsSourceName}</strong>:
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1 py-2">
+          <div className="space-y-3 py-2">
+            {(() => {
+              const briefItem = items?.find(
+                (i: any) => i.type === "pdf" && i.book_brief && (i.title === learningsSourceName || processedLearnings?.some((l: any) => l.source_id === i.id))
+              );
+              if (briefItem?.book_brief) {
+                const top = (processedLearnings || [])
+                  .slice()
+                  .sort((a: any, b: any) => (b.power_level || 0) - (a.power_level || 0))
+                  .slice(0, 3);
+                const cats = new Set((processedLearnings || []).map((l: any) => l.category).filter(Boolean));
+                return (
+                  <BookBriefCard
+                    brief={briefItem.book_brief as any}
+                    status={briefItem.status}
+                    totalPrinciples={processedLearnings?.length || 0}
+                    topTechniques={top}
+                    categoriesCount={cats.size}
+                    onRetryChapter={(idx) => handleRetryChapter(briefItem.id, idx)}
+                    retryingIndex={retryingChapter?.itemId === briefItem.id ? retryingChapter.index : null}
+                  />
+                );
+              }
+              return null;
+            })()}
             {processedLearnings?.map((learning: any, idx: number) => {
               if (learning.principle_name) {
                 return <BrainInsightCard key={learning.id || idx} principle={learning} />;

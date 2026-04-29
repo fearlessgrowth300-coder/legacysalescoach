@@ -74,3 +74,6 @@ verify_jwt = false
 
 [functions.generate-reply]
 verify_jwt = false
+
+[functions.retry-book-chapter]
+verify_jwt = false

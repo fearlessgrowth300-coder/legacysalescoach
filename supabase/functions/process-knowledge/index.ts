@@ -319,7 +319,7 @@ function parsePrinciplesJson(raw: string): any[] {
   return objects;
 }
 
-import { chunkText, dedupePrinciples } from "./lib.ts";
+import { chunkText, dedupePrinciples, detectChapters, type DetectedChapter } from "./lib.ts";
 
 async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
   // ===== PASS 1: Clean each 10k chunk independently, then concatenate =====
@@ -357,6 +357,258 @@ async function extractStructuredLearnings(content: string, sourceName: string, a
   return deduped;
 }
 
+// ===== BOOK PIPELINE: Pass 1 (mapping) =====
+async function extractBookSkeleton(
+  firstPages: string,
+  chapterTitles: string[],
+  apiKey: string,
+): Promise<{ title: string; author: string; core_system: string; what_this_book_teaches: string; chapters: { index: number; title: string; one_line: string }[] } | null> {
+  try {
+    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `You are a book mapper. From the first pages and the detected chapter headings, output a JSON skeleton of the book.
+
+Return EXACTLY this shape:
+{
+  "title": "...",
+  "author": "...",
+  "core_system": "one line description of the system the author teaches",
+  "what_this_book_teaches": "200-word briefing in plain English aimed at a salesperson — what they will learn and why it matters",
+  "chapters": [{ "index": 1, "title": "...", "one_line": "this chapter's role in the book's argument" }]
+}
+
+Rules:
+- Always include a "chapters" array. If chapter titles are provided, use them. If not, infer 5–10 logical chapters from the content.
+- "what_this_book_teaches" must be ~200 words, no bullet lists, no headings.
+- No prose outside the JSON.`,
+          },
+          {
+            role: "user",
+            content: `FIRST PAGES OF THE BOOK:\n${firstPages.substring(0, 12000)}\n\nDETECTED CHAPTER HEADINGS (in order):\n${chapterTitles.join("\n") || "(none detected — infer from content)"}`,
+          },
+        ],
+        temperature: 0.2,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!r.ok) {
+      console.error("Book skeleton API error:", r.status);
+      return null;
+    }
+    const d = await r.json();
+    const raw = d.choices?.[0]?.message?.content || "";
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && Array.isArray(parsed.chapters)) {
+        return parsed;
+      }
+    } catch (e) {
+      console.error("Book skeleton JSON parse failed:", e);
+    }
+    return null;
+  } catch (e) {
+    console.error("extractBookSkeleton failed:", e);
+    return null;
+  }
+}
+
+// ===== BOOK PIPELINE: Pass 2 (chapter-aware extraction for one chapter) =====
+async function extractChapterPrinciples(
+  chapter: DetectedChapter,
+  bookContext: { title?: string; author?: string; core_system?: string; what_this_book_teaches?: string },
+  chapterContext: { title: string; one_line?: string },
+  sourceName: string,
+  apiKey: string,
+): Promise<any[]> {
+  const subChunks = chunkText(chapter.text, 10000);
+  const all: any[] = [];
+  for (let i = 0; i < subChunks.length; i++) {
+    const wrapped = `=== BOOK CONTEXT ===
+Title: ${bookContext.title || "Unknown"}
+Author: ${bookContext.author || "Unknown"}
+Core system: ${bookContext.core_system || "n/a"}
+What this book teaches: ${bookContext.what_this_book_teaches || "n/a"}
+
+=== CHAPTER CONTEXT ===
+Chapter ${chapter.index}: ${chapterContext.title}
+Role in system: ${chapterContext.one_line || "n/a"}
+
+=== CHAPTER TEXT ===
+${subChunks[i]}`;
+    const learnings = await extractStructuredLearningsChunk(
+      wrapped,
+      `${sourceName} — ${chapterContext.title}`,
+      apiKey,
+      i,
+      subChunks.length,
+    );
+    all.push(...learnings);
+  }
+  return dedupePrinciples(all);
+}
+
+// ===== BOOK PIPELINE: Pass 3 (connection layer) =====
+async function buildConnectionMap(
+  principles: { principle_name: string; what_i_learned?: string }[],
+  apiKey: string,
+): Promise<Record<string, string[]>> {
+  if (principles.length === 0) return {};
+  const list = principles
+    .map((p, i) => `${i + 1}. ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`)
+    .join("\n");
+  try {
+    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `You map connections between sales principles.
+
+Input: a numbered list of principles with their core idea.
+Output: { "connections": { "<principle_name>": ["<connected_name_1>", "<connected_name_2>"] } }
+
+Rules:
+- Only connect principles that genuinely reinforce, sequence with, or contrast meaningfully against each other.
+- Prefer 1–4 connections per principle. Some may have zero — omit them.
+- Use the EXACT principle names as keys/values. No invented names.
+- No prose outside the JSON.`,
+          },
+          { role: "user", content: list.substring(0, 14000) },
+        ],
+        temperature: 0.2,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!r.ok) return {};
+    const d = await r.json();
+    const raw = d.choices?.[0]?.message?.content || "";
+    try {
+      const parsed = JSON.parse(raw);
+      const connections = parsed?.connections;
+      if (connections && typeof connections === "object") {
+        const out: Record<string, string[]> = {};
+        for (const k of Object.keys(connections)) {
+          if (Array.isArray(connections[k])) {
+            out[k] = connections[k].filter((v: any) => typeof v === "string").slice(0, 6);
+          }
+        }
+        return out;
+      }
+    } catch { /* ignore */ }
+    return {};
+  } catch (e) {
+    console.error("buildConnectionMap failed:", e);
+    return {};
+  }
+}
+
+// ===== Persist a single learning row + companion chunk (used by both pipelines) =====
+async function persistLearning(
+  supabase: any,
+  userId: string,
+  itemId: string,
+  brainType: string,
+  sourceName: string,
+  learning: any,
+  apiKey: string,
+  seenChunkContent: Set<string>,
+): Promise<any | null> {
+  const principleName = (learning.principle_name || "Untitled Principle").trim();
+  const embeddingText = [
+    principleName,
+    learning.category,
+    learning.what_i_learned,
+    learning.exact_words_to_use,
+    learning.when_to_use,
+    learning.the_deep_why,
+    learning.works_best_for,
+    learning.trigger_phrases,
+  ].filter((s) => typeof s === "string" && s.trim().length > 0).join(" | ");
+  const embedding = await generateEmbedding(embeddingText, apiKey);
+
+  const brainRow = {
+    user_id: userId,
+    source_id: itemId,
+    principle_name: principleName,
+    what_i_learned: learning.what_i_learned || "",
+    how_to_apply: learning.how_to_apply || "",
+    source_name: sourceName,
+    source_type: "sales_principle",
+    brain_type: brainType,
+    category: learning.category || "general",
+    the_deep_why: learning.the_deep_why || null,
+    exact_words_to_use: learning.exact_words_to_use || null,
+    words_to_never_use: learning.words_to_never_use || null,
+    real_example_or_story: learning.real_example_or_story || null,
+    when_to_use: learning.when_to_use || null,
+    when_not_to_use: learning.when_not_to_use || null,
+    common_mistake: learning.common_mistake || null,
+    power_level: learning.power_level ? Number(learning.power_level) : 5,
+    works_best_for: learning.works_best_for || null,
+    connected_principles: learning.connected_principles || null,
+    relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
+    metadata: { source: sourceName, chapter: learning._chapter || null },
+    embedding,
+    workspace_id: null,
+  };
+
+  let inserted: any = null;
+  const { data: upserted, error: upsertErr } = await supabase
+    .from("sales_brain")
+    .insert(brainRow)
+    .select()
+    .single();
+
+  if (upserted) {
+    inserted = upserted;
+  } else if (upsertErr && /duplicate key|unique/i.test(upsertErr.message || "")) {
+    const { data: updated } = await supabase
+      .from("sales_brain")
+      .update(brainRow)
+      .eq("user_id", userId)
+      .eq("source_id", itemId)
+      .ilike("principle_name", principleName)
+      .select()
+      .single();
+    inserted = updated;
+  } else if (upsertErr) {
+    console.error("Insert error for principle:", principleName, upsertErr.message);
+  }
+
+  if (inserted) {
+    const chunkContent = `${principleName}: ${learning.what_i_learned || ""}\n\nApply: ${learning.how_to_apply || ""}`;
+    const chunkKey = chunkContent.trim().toLowerCase();
+    if (!seenChunkContent.has(chunkKey)) {
+      seenChunkContent.add(chunkKey);
+      await supabase.from("knowledge_chunks").insert({
+        user_id: userId,
+        source_id: itemId,
+        category: learning.category || "general",
+        content: chunkContent,
+        brain_type: brainType,
+        trigger_phrases: learning.trigger_phrases || "",
+        relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
+        source_type: "core_knowledge",
+        embedding,
+        workspace_id: null,
+      });
+    }
+  }
+  return inserted;
+}
+
 serve(async (req) => {
   const corsHeaders = defaultCorsHeaders;
   if (req.method === "OPTIONS") {
@@ -364,8 +616,8 @@ serve(async (req) => {
   }
 
   try {
-    const { itemId, url, type, filePath, manualTranscript } = await req.json();
-    
+    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex } = await req.json();
+
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -381,16 +633,27 @@ serve(async (req) => {
       });
     }
 
+    // Get item info early so book pipeline can update book_brief incrementally
+    const { data: itemEarly } = await supabase
+      .from("knowledge_base_items")
+      .select("*")
+      .eq("id", itemId)
+      .single();
+
+    if (!itemEarly) {
+      return new Response(JSON.stringify({ error: "Item not found" }), {
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     let content = "";
 
-    // Use manual transcript if provided
     if (manualTranscript && manualTranscript.trim().length > 10) {
       content = manualTranscript.trim();
-      console.log("Using manual transcript, length:", content.length);
-    } else if (type === "pdf" && filePath) {
-      content = await extractPdfContent(filePath, supabase, itemId, corsHeaders, LOVABLE_API_KEY);
-    } else if (url) {
-      content = await extractUrlContent(url, supabaseUrl, supabaseKey, supabase, user.id);
+    } else if (type === "pdf" && (filePath || itemEarly.file_path)) {
+      content = await extractPdfContent(filePath || itemEarly.file_path, supabase, itemId, corsHeaders, LOVABLE_API_KEY);
+    } else if (url || itemEarly.url) {
+      content = await extractUrlContent(url || itemEarly.url, supabaseUrl, supabaseKey, supabase, user.id);
     }
 
     if (!content || content.length < 20) {
@@ -400,142 +663,244 @@ serve(async (req) => {
       });
     }
 
-    // Get item info
-    const { data: item } = await supabase
-      .from("knowledge_base_items")
-      .select("*")
-      .eq("id", itemId)
-      .single();
-
-    if (!item) {
-      return new Response(JSON.stringify({ error: "Item not found" }), {
-        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Raised cap so longer videos benefit from the new 10k-chunk pipeline
+    const item = itemEarly;
     const MAX_CONTENT_LENGTH = 200000;
     const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
     const sourceName = item.title || "Uploaded Content";
 
-    console.log(`Three-pass pipeline starting on ${contentToProcess.length} chars`);
+    // ============== BOOK PIPELINE (PDF, long enough to benefit) ==============
+    const isBook = type === "pdf" && contentToProcess.length >= 5000;
 
-    // ===== PASSES 1 + 2: Clean each 10k chunk, then extract weapon-grade principles =====
+    if (isBook) {
+      console.log(`Book pipeline starting on ${contentToProcess.length} chars`);
+      const seenChunkContent = new Set<string>();
+      const allStored: any[] = [];
+
+      // === RETRY MODE: re-run a single chapter ===
+      if (typeof retryChapterIndex === "number" && item.book_brief) {
+        const brief = item.book_brief;
+        const chapters: any[] = Array.isArray(brief.chapters) ? brief.chapters : [];
+        const targetMeta = chapters.find((c: any) => c.index === retryChapterIndex);
+        const detected = detectChapters(contentToProcess);
+        const targetDetected = detected.find((c) => c.index === retryChapterIndex) || detected[retryChapterIndex - 1];
+        if (!targetMeta || !targetDetected) {
+          return new Response(JSON.stringify({ error: "Chapter not found for retry" }), {
+            status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        // Mark as extracting in book_brief
+        const updatedChapters = chapters.map((c: any) =>
+          c.index === retryChapterIndex ? { ...c, status: "extracting", error: null } : c,
+        );
+        await supabase.from("knowledge_base_items").update({
+          book_brief: { ...brief, chapters: updatedChapters },
+          status: "extracting",
+        }).eq("id", itemId);
+
+        try {
+          // Wipe previous principles for this chapter so retry is clean
+          await supabase.from("sales_brain")
+            .delete()
+            .eq("user_id", user.id)
+            .eq("source_id", itemId)
+            .filter("metadata->>chapter", "eq", String(retryChapterIndex));
+
+          const principles = await extractChapterPrinciples(
+            targetDetected,
+            {
+              title: brief.title,
+              author: brief.author,
+              core_system: brief.core_system,
+              what_this_book_teaches: brief.what_this_book_teaches,
+            },
+            { title: targetMeta.title, one_line: targetMeta.one_line },
+            sourceName,
+            LOVABLE_API_KEY,
+          );
+
+          let storedCount = 0;
+          for (const p of principles) {
+            const stored = await persistLearning(
+              supabase, user.id, itemId, item.brain_type, sourceName,
+              { ...p, _chapter: retryChapterIndex }, LOVABLE_API_KEY, seenChunkContent,
+            );
+            if (stored) { allStored.push(stored); storedCount++; }
+          }
+
+          const finalChapters = updatedChapters.map((c: any) =>
+            c.index === retryChapterIndex ? { ...c, status: "done", principle_count: storedCount, error: null } : c,
+          );
+          // If any chapter still pending/extracting, keep status; else flip to ready
+          const stillPending = finalChapters.some((c: any) => c.status === "pending" || c.status === "extracting" || c.status === "failed");
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters: finalChapters },
+            status: stillPending ? "extracting" : "ready",
+          }).eq("id", itemId);
+
+          return new Response(JSON.stringify({
+            success: true, retried: retryChapterIndex, principles_added: storedCount, sourceName,
+          }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        } catch (retryErr: any) {
+          const failChapters = updatedChapters.map((c: any) =>
+            c.index === retryChapterIndex ? { ...c, status: "failed", error: retryErr?.message || "Retry failed" } : c,
+          );
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters: failChapters },
+          }).eq("id", itemId);
+          throw retryErr;
+        }
+      }
+
+      // === FRESH RUN ===
+      await supabase.from("knowledge_base_items").update({ status: "mapping" }).eq("id", itemId);
+
+      const detected = detectChapters(contentToProcess);
+      console.log(`Detected ${detected.length} chapter(s) / chunk(s)`);
+
+      // Pass 1 — Book Mapping
+      const firstPages = contentToProcess.substring(0, 12000);
+      const skeleton = await extractBookSkeleton(
+        firstPages,
+        detected.map((c) => c.title),
+        LOVABLE_API_KEY,
+      );
+
+      const bookContext = skeleton ?? {
+        title: sourceName,
+        author: "Unknown",
+        core_system: "",
+        what_this_book_teaches: "",
+        chapters: detected.map((c) => ({ index: c.index, title: c.title, one_line: "" })),
+      };
+
+      // Align skeleton chapters to detected chapters (use detected count as source of truth)
+      const briefChapters = detected.map((c) => {
+        const fromAi = (bookContext.chapters || []).find((x: any) => x.index === c.index);
+        return {
+          index: c.index,
+          title: fromAi?.title || c.title,
+          one_line: fromAi?.one_line || "",
+          status: "pending" as const,
+          principle_count: 0,
+        };
+      });
+
+      const briefToStore = {
+        title: bookContext.title || sourceName,
+        author: bookContext.author || "Unknown",
+        core_system: bookContext.core_system || "",
+        what_this_book_teaches: bookContext.what_this_book_teaches || "",
+        chapters: briefChapters,
+      };
+
+      await supabase.from("knowledge_base_items").update({
+        book_brief: briefToStore,
+        status: "extracting",
+      }).eq("id", itemId);
+
+      // Pass 2 — Chapter-Aware Deep Extraction (per chapter)
+      let workingChapters = [...briefChapters];
+      for (const chap of detected) {
+        // Mark as extracting
+        workingChapters = workingChapters.map((c) =>
+          c.index === chap.index ? { ...c, status: "extracting" as any } : c,
+        );
+        await supabase.from("knowledge_base_items").update({
+          book_brief: { ...briefToStore, chapters: workingChapters },
+        }).eq("id", itemId);
+
+        try {
+          const meta = workingChapters.find((c) => c.index === chap.index)!;
+          const principles = await extractChapterPrinciples(
+            chap,
+            briefToStore,
+            { title: meta.title, one_line: meta.one_line },
+            sourceName,
+            LOVABLE_API_KEY,
+          );
+          let storedCount = 0;
+          for (const p of principles) {
+            const stored = await persistLearning(
+              supabase, user.id, itemId, item.brain_type, sourceName,
+              { ...p, _chapter: chap.index }, LOVABLE_API_KEY, seenChunkContent,
+            );
+            if (stored) { allStored.push(stored); storedCount++; }
+          }
+          workingChapters = workingChapters.map((c) =>
+            c.index === chap.index ? { ...c, status: "done" as any, principle_count: storedCount } : c,
+          );
+        } catch (chapErr: any) {
+          console.error(`Chapter ${chap.index} failed:`, chapErr?.message);
+          workingChapters = workingChapters.map((c) =>
+            c.index === chap.index ? { ...c, status: "failed" as any, error: chapErr?.message || "Failed" } : c,
+          );
+        }
+        await supabase.from("knowledge_base_items").update({
+          book_brief: { ...briefToStore, chapters: workingChapters },
+        }).eq("id", itemId);
+      }
+
+      // Pass 3 — Connection Layer
+      try {
+        const connections = await buildConnectionMap(
+          allStored.map((s) => ({ principle_name: s.principle_name, what_i_learned: s.what_i_learned })),
+          LOVABLE_API_KEY,
+        );
+        for (const principleName of Object.keys(connections)) {
+          const connected = connections[principleName].join(", ");
+          if (!connected) continue;
+          await supabase.from("sales_brain")
+            .update({ connected_principles: connected })
+            .eq("user_id", user.id)
+            .eq("source_id", itemId)
+            .ilike("principle_name", principleName);
+        }
+      } catch (connErr) {
+        console.error("Connection pass failed (non-fatal):", connErr);
+      }
+
+      await supabase.from("knowledge_base_items").update({
+        book_brief: { ...briefToStore, chapters: workingChapters },
+        status: "ready",
+      }).eq("id", itemId);
+
+      return new Response(JSON.stringify({
+        success: true,
+        learnings: allStored,
+        chunks: allStored.length,
+        sourceName,
+        book_brief: { ...briefToStore, chapters: workingChapters },
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // ============== STANDARD PIPELINE (videos / short content) ==============
+    console.log(`Three-pass pipeline starting on ${contentToProcess.length} chars`);
     const learnings = await extractStructuredLearnings(contentToProcess, sourceName, LOVABLE_API_KEY);
     console.log(`Pass 2 complete: ${learnings.length} principles extracted`);
 
-    // ===== PASS 3: Rich-field embedding + UPSERT into sales_brain (dedup-safe) =====
     const storedLearnings: any[] = [];
-    const seenChunkContent = new Set<string>(); // in-memory dedup for knowledge_chunks
+    const seenChunkContent = new Set<string>();
     for (const learning of learnings) {
-      const principleName = (learning.principle_name || "Untitled Principle").trim();
-      // Concatenate ALL meaningful fields so semantic search finds the right
-      // technique even when the user phrases it completely differently.
-      const embeddingText = [
-        principleName,
-        learning.category,
-        learning.what_i_learned,
-        learning.exact_words_to_use,
-        learning.when_to_use,
-        learning.the_deep_why,
-        learning.works_best_for,
-        learning.trigger_phrases,
-      ].filter((s) => typeof s === "string" && s.trim().length > 0).join(" | ");
-      const embedding = await generateEmbedding(embeddingText, LOVABLE_API_KEY);
-
-      const brainRow = {
-        user_id: user.id,
-        source_id: itemId,
-        principle_name: principleName,
-        what_i_learned: learning.what_i_learned || "",
-        how_to_apply: learning.how_to_apply || "",
-        source_name: sourceName,
-        source_type: "sales_principle",
-        brain_type: item.brain_type,
-        category: learning.category || "general",
-        the_deep_why: learning.the_deep_why || null,
-        exact_words_to_use: learning.exact_words_to_use || null,
-        words_to_never_use: learning.words_to_never_use || null,
-        real_example_or_story: learning.real_example_or_story || null,
-        when_to_use: learning.when_to_use || null,
-        when_not_to_use: learning.when_not_to_use || null,
-        common_mistake: learning.common_mistake || null,
-        power_level: learning.power_level ? Number(learning.power_level) : 5,
-        works_best_for: learning.works_best_for || null,
-        connected_principles: learning.connected_principles || null,
-        relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
-        metadata: { source: sourceName },
-        embedding: embedding,
-        workspace_id: null,
-      };
-
-      // Upsert against the new unique index (user_id, source_id, lower(principle_name))
-      // Falls back to manual select+update if the DB rejects (e.g. very old schema).
-      let inserted: any = null;
-      const { data: upserted, error: upsertErr } = await supabase
-        .from("sales_brain")
-        .insert(brainRow)
-        .select()
-        .single();
-
-      if (upserted) {
-        inserted = upserted;
-      } else if (upsertErr && /duplicate key|unique/i.test(upsertErr.message || "")) {
-        // Already exists — update in place
-        const { data: updated } = await supabase
-          .from("sales_brain")
-          .update(brainRow)
-          .eq("user_id", user.id)
-          .eq("source_id", itemId)
-          .ilike("principle_name", principleName)
-          .select()
-          .single();
-        inserted = updated;
-        console.log(`Updated existing principle: ${principleName}`);
-      } else if (upsertErr) {
-        console.error("Insert error for principle:", principleName, upsertErr.message);
-      }
-
-      if (inserted) {
+      const stored = await persistLearning(
+        supabase, user.id, itemId, item.brain_type, sourceName, learning, LOVABLE_API_KEY, seenChunkContent,
+      );
+      if (stored) {
         storedLearnings.push({
-          id: inserted.id,
-          principle_name: inserted.principle_name,
-          what_i_learned: inserted.what_i_learned,
-          how_to_apply: inserted.how_to_apply,
-          category: inserted.category,
-          source_name: inserted.source_name,
-          power_level: inserted.power_level,
-          cited_principle_name: inserted.principle_name,
-          cited_source_name: inserted.source_name,
+          id: stored.id,
+          principle_name: stored.principle_name,
+          what_i_learned: stored.what_i_learned,
+          how_to_apply: stored.how_to_apply,
+          category: stored.category,
+          source_name: stored.source_name,
+          power_level: stored.power_level,
+          cited_principle_name: stored.principle_name,
+          cited_source_name: stored.source_name,
         });
-
-        // Compact chunk for keyword/hybrid fallback — dedup by content
-        const chunkContent = `${principleName}: ${learning.what_i_learned || ""}\n\nApply: ${learning.how_to_apply || ""}`;
-        const chunkKey = chunkContent.trim().toLowerCase();
-        if (!seenChunkContent.has(chunkKey)) {
-          seenChunkContent.add(chunkKey);
-          const { error: chunkErr } = await supabase.from("knowledge_chunks").insert({
-            user_id: user.id,
-            source_id: itemId,
-            category: learning.category || "general",
-            content: chunkContent,
-            brain_type: item.brain_type,
-            trigger_phrases: learning.trigger_phrases || "",
-            relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
-            source_type: "core_knowledge",
-            embedding: embedding,
-            workspace_id: null,
-          });
-          if (chunkErr && !/duplicate key|unique/i.test(chunkErr.message || "")) {
-            console.error("Chunk insert error:", chunkErr.message);
-          }
-        }
       }
     }
 
     console.log(`Stored ${storedLearnings.length} weapon-grade principles (deduped) + matching chunks`);
-
-    // Update item status
     await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
 
     return new Response(JSON.stringify({
@@ -652,7 +1017,7 @@ async function extractPdfContent(filePath: string, supabase: any, itemId: string
         const extractedText = pdfData.choices?.[0]?.message?.content || "";
         console.log("Gemini PDF extraction length:", extractedText.length);
         if (extractedText.length > 100) {
-          return extractedText.substring(0, 50000);
+          return extractedText.substring(0, 200000);
         }
       } catch (jsonErr) {
         console.error("Gemini response JSON parse failed:", jsonErr);
@@ -677,10 +1042,10 @@ async function extractPdfContent(filePath: string, supabase: any, itemId: string
     let extractedText = textParts.join(' ').replace(/\s+/g, ' ').trim();
     if (extractedText.length < 200) {
       const readable = rawText.match(/[A-Za-z0-9\s,.!?;:'"()\-]{15,}/g) || [];
-      extractedText = readable.join(' ').substring(0, 50000);
+      extractedText = readable.join(' ').substring(0, 200000);
     }
     if (extractedText.length > 100) {
-      return extractedText.substring(0, 50000);
+      return extractedText.substring(0, 200000);
     }
     return `PDF file uploaded: ${filePath}. The text could not be extracted automatically.`;
   } catch (e) {
