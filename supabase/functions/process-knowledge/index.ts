@@ -749,6 +749,11 @@ serve(async (req) => {
       });
     }
 
+    // Mark as processing immediately, then run the heavy pipeline in the background
+    // to avoid the 150s edge function idle timeout. Client already polls status + book_brief.
+    await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", itemId);
+
+    const runPipeline = async () => {
     let content = "";
 
     if (manualTranscript && manualTranscript.trim().length > 10) {
@@ -761,9 +766,8 @@ serve(async (req) => {
 
     if (!content || content.length < 20) {
       await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
-      return new Response(JSON.stringify({ error: "Could not extract enough content. Try pasting the text manually." }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      console.error("Could not extract enough content for item", itemId);
+      return;
     }
 
     const item = itemEarly;
@@ -843,9 +847,8 @@ serve(async (req) => {
             status: stillPending ? "extracting" : "ready",
           }).eq("id", itemId);
 
-          return new Response(JSON.stringify({
-            success: true, retried: retryChapterIndex, principles_added: storedCount, sourceName,
-          }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+          console.log(`Retry chapter ${retryChapterIndex} done: ${storedCount} principles`);
+          return;
         } catch (retryErr: any) {
           const failChapters = updatedChapters.map((c: any) =>
             c.index === retryChapterIndex ? { ...c, status: "failed", error: retryErr?.message || "Retry failed" } : c,
@@ -972,13 +975,8 @@ serve(async (req) => {
         status: "ready",
       }).eq("id", itemId);
 
-      return new Response(JSON.stringify({
-        success: true,
-        learnings: allStored,
-        chunks: allStored.length,
-        sourceName,
-        book_brief: { ...briefToStore, chapters: workingChapters },
-      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      console.log(`Book pipeline complete: ${allStored.length} principles`);
+      return;
     }
 
     // ============== STANDARD PIPELINE (videos / short content) ==============
@@ -1009,16 +1007,30 @@ serve(async (req) => {
 
     console.log(`Stored ${storedLearnings.length} weapon-grade principles (deduped) + matching chunks`);
     await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+    };
+
+    // Dispatch the long-running work to the background and respond immediately.
+    // The client polls knowledge_base_items.status / book_brief every 3s.
+    const bgTask = runPipeline().catch(async (error) => {
+      console.error("process-knowledge background error:", error);
+      try {
+        await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+      } catch (_) { /* ignore */ }
+    });
+
+    // @ts-ignore — EdgeRuntime is provided by the Supabase Edge runtime
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+      // @ts-ignore
+      EdgeRuntime.waitUntil(bgTask);
+    }
 
     return new Response(JSON.stringify({
       success: true,
-      chunks: storedLearnings.length,
-      learnings: storedLearnings,
-      embeddedChunks: storedLearnings.length,
-      sourceName,
-      cited_principle_name: storedLearnings[0]?.cited_principle_name || null,
-      cited_source_name: sourceName,
+      status: "processing",
+      message: "Processing started in background. Poll item status for completion.",
+      itemId,
     }), {
+      status: 202,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
