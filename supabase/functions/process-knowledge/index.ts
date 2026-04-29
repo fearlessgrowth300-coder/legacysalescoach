@@ -1017,7 +1017,7 @@ async function extractPdfContent(filePath: string, supabase: any, itemId: string
         const extractedText = pdfData.choices?.[0]?.message?.content || "";
         console.log("Gemini PDF extraction length:", extractedText.length);
         if (extractedText.length > 100) {
-          return extractedText.substring(0, 50000);
+          return extractedText.substring(0, 200000);
         }
       } catch (jsonErr) {
         console.error("Gemini response JSON parse failed:", jsonErr);
@@ -1042,10 +1042,10 @@ async function extractPdfContent(filePath: string, supabase: any, itemId: string
     let extractedText = textParts.join(' ').replace(/\s+/g, ' ').trim();
     if (extractedText.length < 200) {
       const readable = rawText.match(/[A-Za-z0-9\s,.!?;:'"()\-]{15,}/g) || [];
-      extractedText = readable.join(' ').substring(0, 50000);
+      extractedText = readable.join(' ').substring(0, 200000);
     }
     if (extractedText.length > 100) {
-      return extractedText.substring(0, 50000);
+      return extractedText.substring(0, 200000);
     }
     return `PDF file uploaded: ${filePath}. The text could not be extracted automatically.`;
   } catch (e) {
