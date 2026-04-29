@@ -24,6 +24,9 @@ export interface Suggestion {
   spinStage?: string;
   frameworksApplied?: string[];
   conversionTrigger?: string;
+  // Visible citation — proof the Brain is using uploaded material
+  citedPrincipleName?: string | null;
+  citedSourceName?: string | null;
 }
 
 interface SuggestionCardProps {
