@@ -870,7 +870,7 @@ serve(async (req) => {
 
         try {
           const meta = workingChapters.find((c) => c.index === chap.index)!;
-          const principles = await extractChapterPrinciples(
+          const principles = await extractChapterWithFallback(
             chap,
             briefToStore,
             { title: meta.title, one_line: meta.one_line },
@@ -878,15 +878,17 @@ serve(async (req) => {
             LOVABLE_API_KEY,
           );
           let storedCount = 0;
+          const storedForChapter: any[] = [];
           for (const p of principles) {
             const stored = await persistLearning(
               supabase, user.id, itemId, item.brain_type, sourceName,
               { ...p, _chapter: chap.index }, LOVABLE_API_KEY, seenChunkContent,
             );
-            if (stored) { allStored.push(stored); storedCount++; }
+            if (stored) { allStored.push(stored); storedForChapter.push(stored); storedCount++; }
           }
+          const summary = await summarizeChapter(meta.title, storedForChapter, LOVABLE_API_KEY);
           workingChapters = workingChapters.map((c) =>
-            c.index === chap.index ? { ...c, status: "done" as any, principle_count: storedCount } : c,
+            c.index === chap.index ? { ...c, status: "done" as any, principle_count: storedCount, summary } : c,
           );
         } catch (chapErr: any) {
           console.error(`Chapter ${chap.index} failed:`, chapErr?.message);
