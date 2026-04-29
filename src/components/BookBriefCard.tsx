@@ -10,6 +10,7 @@ export interface ChapterStatus {
   one_line?: string;
   status: "pending" | "extracting" | "done" | "failed";
   principle_count?: number;
+  summary?: string;
   error?: string;
 }
 
