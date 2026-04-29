@@ -228,50 +228,7 @@ Return a JSON array of principle objects. No extra text. No markdown. Just the r
   }
 }
 
-// True 10k-char chunker that breaks on sentence/paragraph boundaries.
-export function chunkText(content: string, chunkSize = 10000): string[] {
-  const chunks: string[] = [];
-  if (!content) return chunks;
-  if (content.length <= chunkSize) return [content];
-  let start = 0;
-  while (start < content.length) {
-    let end = start + chunkSize;
-    if (end >= content.length) {
-      const tail = content.substring(start).trim();
-      if (tail.length > 0) chunks.push(tail);
-      break;
-    }
-    const lastPeriod = content.lastIndexOf(". ", end);
-    const lastNewline = content.lastIndexOf("\n", end);
-    const breakPoint = Math.max(lastPeriod, lastNewline);
-    if (breakPoint > start + chunkSize * 0.5) end = breakPoint + 1;
-    const piece = content.substring(start, end).trim();
-    if (piece.length > 0) chunks.push(piece);
-    start = end;
-  }
-  return chunks;
-}
-
-// Dedupe principles by lowercased principle_name, keeping the richest version.
-export function dedupePrinciples(items: any[]): any[] {
-  const seen = new Map<string, any>();
-  for (const it of items) {
-    const name = (it?.principle_name || "").trim().toLowerCase();
-    if (!name) continue;
-    const existing = seen.get(name);
-    if (!existing) {
-      seen.set(name, it);
-    } else {
-      // Keep the entry with more total content captured.
-      const score = (x: any) =>
-        (x?.what_i_learned?.length || 0) +
-        (x?.how_to_apply?.length || 0) +
-        (x?.exact_words_to_use?.length || 0);
-      if (score(it) > score(existing)) seen.set(name, it);
-    }
-  }
-  return Array.from(seen.values());
-}
+import { chunkText, dedupePrinciples } from "./lib.ts";
 
 async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
   // ===== PASS 1: Clean each 10k chunk independently, then concatenate =====
