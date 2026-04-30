@@ -322,16 +322,39 @@ deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
 
   const result = await callTool(
     apiKey,
-    FAST_MODEL,
-    `You are an elite sales coach selecting the few principles that should drive a coaching reply. Pick the 3 (or fewer if only 1-2 fit) MOST applicable principles. Explain why each in one sentence. If two principles contradict each other (e.g. push hard vs pull back), pick a winner and reject the loser — never average them. Name the dominant framework.${sessionLine}\n\nIf NO principle is genuinely applicable to the question, return selected: [] — do not stretch.`,
+    REASONING_MODEL,
+    `You are an elite sales coach choosing principles to drive a coaching reply.
+
+Pick TWO TIERS:
+  • PRIMARY (1-3): the principles that MUST drive the answer. These define the strategy.
+  • SUPPORTING (0-2): principles that reinforce, contrast, or add a tactical layer to the primaries. They should NOT lead the answer but are great to cite alongside a primary.
+
+Rules:
+  - Explain why each in one short sentence.
+  - If two principles contradict (push hard vs pull back, etc.), pick a winner; the loser goes to neither tier.
+  - Name the dominant framework.
+  - If NO principle genuinely fits, return primary: [] — do not stretch.${sessionLine}`,
     `User question: "${question}"\n\nCandidates:\n${candidateBlock}`,
     "select_principles",
     {
       type: "object",
       properties: {
-        selected: {
+        primary: {
           type: "array",
           maxItems: 3,
+          items: {
+            type: "object",
+            properties: {
+              principle_id: { type: "string" },
+              why_relevant: { type: "string" },
+            },
+            required: ["principle_id", "why_relevant"],
+            additionalProperties: false,
+          },
+        },
+        supporting: {
+          type: "array",
+          maxItems: 2,
           items: {
             type: "object",
             properties: {
@@ -357,29 +380,37 @@ deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
         },
         framework_name: { type: "string" },
       },
-      required: ["selected", "contradictions", "framework_name"],
+      required: ["primary", "contradictions", "framework_name"],
       additionalProperties: false,
     },
+    { reasoning: { effort: "low" } },
   );
 
-  if (!result || !Array.isArray(result.selected)) return empty;
+  if (!result || !Array.isArray(result.primary)) return empty;
 
   const byId = new Map(candidates.map((p) => [p.id, p]));
+  const seen = new Set<string>();
   const selected: SelectedPrinciple[] = [];
-  for (const s of result.selected) {
-    const full = byId.get(s.principle_id);
-    if (!full) continue;
-    selected.push({
-      id: full.id,
-      principle_name: full.principle_name,
-      source_id: full.source_id,
-      source_title: full.source_name,
-      source_url: null,
-      source_type: full.source_type,
-      why_relevant: typeof s.why_relevant === "string" ? s.why_relevant : "",
-      full,
-    });
-  }
+  const pushTier = (arr: any[], tier: "primary" | "supporting") => {
+    for (const s of arr || []) {
+      const full = byId.get(s.principle_id);
+      if (!full || seen.has(full.id)) continue;
+      seen.add(full.id);
+      selected.push({
+        id: full.id,
+        principle_name: full.principle_name,
+        source_id: full.source_id,
+        source_title: full.source_name,
+        source_url: null,
+        source_type: full.source_type,
+        why_relevant: typeof s.why_relevant === "string" ? s.why_relevant : "",
+        tier,
+        full,
+      });
+    }
+  };
+  pushTier(result.primary, "primary");
+  pushTier(result.supporting || [], "supporting");
 
   return {
     selected,
