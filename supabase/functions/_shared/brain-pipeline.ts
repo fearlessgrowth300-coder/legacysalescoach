@@ -12,6 +12,7 @@ import { deduplicatePrinciples, deduplicateChunks, mergeByIdPriority } from "./d
 
 const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 const FAST_MODEL = "google/gemini-2.5-flash-lite";
+const REASONING_MODEL = "google/gemini-3-flash-preview";
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 
