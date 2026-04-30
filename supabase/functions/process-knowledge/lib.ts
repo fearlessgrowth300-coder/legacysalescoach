@@ -144,5 +144,22 @@ export function detectChapters(content: string, fallbackChunkSize = 12000): Dete
   if (chapters.length < 2) {
     return detectChapters(content, fallbackChunkSize).slice(0); // recursion-safe: marker count < 2 path
   }
+
+  // If marker extraction still produces many tiny sections, it is almost
+  // certainly reading a table of contents or outline bullets as headings.
+  // Processing those one-by-one is slow and fragile, so prefer stable chunks.
+  const tinySections = chapters.filter((c) => c.text.length < 2500).length;
+  if (chapters.length > 20 && tinySections / chapters.length > 0.35) {
+    const fallback = chunkText(content, fallbackChunkSize);
+    let cursor = 0;
+    return fallback.map((text, i) => {
+      const startOffset = content.indexOf(text, cursor);
+      const safeStart = startOffset === -1 ? cursor : startOffset;
+      const endOffset = safeStart + text.length;
+      cursor = endOffset;
+      return { index: i + 1, title: `Section ${i + 1}`, startOffset: safeStart, endOffset, text };
+    });
+  }
+
   return chapters;
 }
