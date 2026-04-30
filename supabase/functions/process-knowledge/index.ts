@@ -297,12 +297,16 @@ function parsePrinciplesJson(raw: string): any[] {
     }
   }
 
-  // 4. Salvage individual top-level JSON objects (depth-aware)
+  // 4. Salvage principle objects from anywhere in the buffer (depth-aware).
+  // CRITICAL: when the model returns `{ "principles": [ {...}, {...}, ...truncated` the
+  // outer wrapper `{` never closes, so depth-0-only salvage finds nothing. We track
+  // the start of EVERY balanced `{...}` regardless of nesting depth, then keep the
+  // ones that look like principles. Works for both wrapper-truncated and
+  // wrapper-less responses.
   const objects: any[] = [];
-  let depth = 0;
+  const starts: number[] = []; // stack of `{` positions
   let inStr = false;
   let escape = false;
-  let objStart = -1;
   for (let i = 0; i < cleaned.length; i++) {
     const ch = cleaned[i];
     if (escape) { escape = false; continue; }
@@ -310,20 +314,17 @@ function parsePrinciplesJson(raw: string): any[] {
     if (ch === '"') { inStr = !inStr; continue; }
     if (inStr) continue;
     if (ch === "{") {
-      if (depth === 0) objStart = i;
-      depth++;
+      starts.push(i);
     } else if (ch === "}") {
-      depth--;
-      if (depth === 0 && objStart !== -1) {
-        const candidate = cleaned.substring(objStart, i + 1);
-        try {
-          const v = JSON.parse(candidate);
-          if (v && typeof v === "object" && (v.principle_name || v.what_i_learned)) {
-            objects.push(v);
-          }
-        } catch { /* skip */ }
-        objStart = -1;
-      }
+      const start = starts.pop();
+      if (start === undefined) continue;
+      const candidate = cleaned.substring(start, i + 1);
+      try {
+        const v = JSON.parse(candidate);
+        if (v && typeof v === "object" && !Array.isArray(v) && (v.principle_name || v.what_i_learned)) {
+          objects.push(v);
+        }
+      } catch { /* skip */ }
     }
   }
   if (objects.length > 0) {
