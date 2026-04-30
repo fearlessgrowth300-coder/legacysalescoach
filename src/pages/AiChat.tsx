@@ -16,13 +16,14 @@ import {
 } from "lucide-react";
 import VoiceCallAssistant from "@/components/VoiceCallAssistant";
 import SwipeToDelete from "@/components/SwipeToDelete";
+import BrainCitations, { type SelectedPrinciple } from "@/components/BrainCitations";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "@/integrations/supabase/client";
 
-type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url?: string | null; image_urls?: string[]; is_edited?: boolean; is_pinned?: boolean; status?: "sending" | "sent" | "delivered" | "read" };
+type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url?: string | null; image_urls?: string[]; is_edited?: boolean; is_pinned?: boolean; status?: "sending" | "sent" | "delivered" | "read"; selected_principles?: SelectedPrinciple[]; framework_name?: string };
 type Conversation = { id: string; title: string; created_at: string; updated_at: string };
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/brain-chat`;
