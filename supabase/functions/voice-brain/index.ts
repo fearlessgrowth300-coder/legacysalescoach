@@ -1,239 +1,131 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
-import { generateEmbedding } from "../_shared/embeddings.ts";
-import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
+import {
+  runPipeline, buildSessionContext, buildPrinciplesBlock,
+} from "../_shared/brain-pipeline.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
-
-function diversityRerank(items: any[], sourceKey: string, maxPerSource: number) {
-  const bySource: Record<string, any[]> = {};
-  for (const item of items) {
-    const key = item[sourceKey] || "unknown";
-    if (!bySource[key]) bySource[key] = [];
-    bySource[key].push(item);
-  }
-  const result: any[] = [];
-  let round = 0;
-  let added = true;
-  while (added) {
-    added = false;
-    for (const key of Object.keys(bySource)) {
-      const startIdx = round * maxPerSource;
-      const batch = bySource[key].slice(startIdx, startIdx + maxPerSource);
-      if (batch.length > 0) { result.push(...batch); added = true; }
-    }
-    round++;
-  }
-  return result;
-}
+const EMPTY_VOICE_RESPONSE = (topic: string) =>
+  `Your vault doesn't cover ${topic} yet. Upload a video or PDF on ${topic} to unlock coaching here.`;
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { question, mode, voiceId: customVoiceId, frame } = await req.json();
-    
+    const { question, mode, voiceId: customVoiceId, frame, conversation_id } = await req.json();
+
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (!authHeader) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceRoleKey);
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const ELEVENLABS_API_KEY = Deno.env.get("ELEVENLABS_API_KEY");
-    
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
     if (!ELEVENLABS_API_KEY) throw new Error("ELEVENLABS_API_KEY is not configured");
 
     const token = authHeader.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    if (authError || !user) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+    const session = await buildSessionContext(supabase, conversation_id || null, [{ role: "user", content: question }]);
+
+    // ─── Layers 1+2 (shared with brain-chat) ───
+    const pipeline = await runPipeline({
+      apiKey: LOVABLE_API_KEY,
+      supabaseAdmin: supabase,
+      userId: user.id,
+      question: String(question || ""),
+      session,
+    });
+
+    // ─── Empty vault — same fixed response, voice-styled ───
+    let textReply: string;
+    if (pipeline.debug.empty_vault || pipeline.selected.length === 0) {
+      textReply = EMPTY_VOICE_RESPONSE(pipeline.empty_vault_topic || "this topic");
+    } else {
+      // ─── Step 5: VOICE-SPECIFIC response prompt ───
+      const isBlast = mode === "blast";
+      const visionDirective = frame
+        ? "\nIMAGE CONTEXT: A frame from the user's camera/screen is attached. Briefly mention what you see in 1 short clause before the advice."
+        : "";
+
+      const systemPrompt = `You are "The Brain" speaking out loud as a sales coach. You speak ONLY from the 3 selected principles below — never general knowledge.
+
+DOMINANT FRAMEWORK: ${pipeline.framework_name || "(unspecified)"}
+
+SELECTED PRINCIPLES (your only allowed sources):
+${buildPrinciplesBlock(pipeline.selected)}
+
+VOICE RULES — NON-NEGOTIABLE:
+- Answer in ${isBlast ? "1-2" : "2-3"} sentences. Spoken English. No markdown. No bullet points. No headings.
+- DO NOT include citation tokens like [[cite:...]] — those are for text mode.
+- You MAY name a source naturally once if it adds weight: "From ${pipeline.selected[0]?.source_title || "your vault"}, ..."
+- Be direct, confident, specific. Give one concrete tactic or one exact line they can say.
+- Optimized for ElevenLabs TTS — natural rhythm, no abbreviations.${visionDirective}`;
+
+      const userContent: any = frame
+        ? [{ type: "text", text: question }, { type: "image_url", image_url: { url: frame } }]
+        : question;
+
+      const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userContent }],
+          temperature: 0.6,
+        }),
       });
+      if (!aiResp.ok) throw new Error(`AI error: ${aiResp.status}`);
+      const aiData = await aiResp.json();
+      textReply = aiData.choices?.[0]?.message?.content || EMPTY_VOICE_RESPONSE(pipeline.empty_vault_topic || "this topic");
     }
 
-    // Generate embedding + fetch data in parallel
-    const embeddingPromise = generateEmbedding(question.substring(0, 1000));
-
-    const [
-      { data: kbItems },
-      { count: totalUploads },
-      { data: allPrinciples },
-      { data: allChunks },
-      queryEmbedding,
-    ] = await Promise.all([
-      supabase.from("knowledge_base_items").select("id, title, type").eq("user_id", user.id),
-      supabase.from("knowledge_base_items").select("id", { count: "exact", head: true }).eq("user_id", user.id),
-      supabase.from("sales_brain")
-        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_id, relevance_score")
-        .eq("user_id", user.id).is("workspace_id", null)
-        .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false, nullsFirst: false }),
-      supabase.from("knowledge_chunks")
-        .select("id, content, category, source_id, relevance_score")
-        .eq("user_id", user.id).is("workspace_id", null)
-        .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false }),
-      embeddingPromise,
-    ]);
-
-    // Semantic RPC calls if embedding succeeded
-    let semanticPrinciples: any[] = [];
-    let semanticChunks: any[] = [];
-    if (queryEmbedding) {
-      const embeddingStr = JSON.stringify(queryEmbedding);
-      const [semP, semC] = await Promise.all([
-        supabase.rpc("match_sales_brain", {
-          query_embedding: embeddingStr, match_count: 40, match_threshold: 0.3, p_user_id: user.id,
-        }),
-        supabase.rpc("match_knowledge_chunks", {
-          query_embedding: embeddingStr, match_count: 40, match_threshold: 0.3, p_user_id: user.id,
-        }),
-      ]);
-      semanticPrinciples = (semP.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-      semanticChunks = (semC.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
-    }
-
-    // Merge, deduplicate, diversity re-rank
-    const mergedPrinciples = mergeByIdPriority(semanticPrinciples, allPrinciples || []);
-    const mergedChunks = mergeByIdPriority(semanticChunks, allChunks || []);
-    const dedupedPrinciples = deduplicatePrinciples(mergedPrinciples, "relevance_score");
-    const dedupedChunks = deduplicateChunks(mergedChunks, "relevance_score");
-    const diversePrinciples = diversityRerank(dedupedPrinciples, "source_id", 5);
-    const diverseChunks = diversityRerank(dedupedChunks, "source_id", 4);
-
-    // Title-match boost
-    let titleBoostPrinciples: any[] = [];
-    if (question.length > 3) {
-      const matchedSourceIds = new Set(
-        (kbItems || []).filter((k: any) => question.toLowerCase().includes(k.title.toLowerCase())).map((k: any) => k.id)
-      );
-      if (matchedSourceIds.size > 0) {
-        titleBoostPrinciples = diversePrinciples.filter((p: any) => matchedSourceIds.has(p.source_id));
-      }
-    }
-    const seenIds = new Set(titleBoostPrinciples.map((p: any) => p.id));
-    const finalPrinciples = [...titleBoostPrinciples];
-    for (const p of diversePrinciples) {
-      if (!seenIds.has(p.id)) { finalPrinciples.push(p); seenIds.add(p.id); }
-    }
-
-    // Dynamic caps scaling with library size
-    const uploadCount = totalUploads || 0;
-    const principlesCap = Math.min(Math.max(60, uploadCount * 15), 300);
-    const chunksCap = Math.min(Math.max(40, uploadCount * 10), 250);
-    const principles = finalPrinciples.slice(0, principlesCap);
-    const chunks = diverseChunks.slice(0, chunksCap);
-
-    const kbMap: Record<string, string> = {};
-    (kbItems || []).forEach((k: any) => { kbMap[k.id] = k.title; });
-
-    const hasKnowledge = principles.length + chunks.length > 0;
-
-    // Build context
-    const brainContext = hasKnowledge ? [
-      "PRINCIPLES:\n" + principles.slice(0, principlesCap).map((p: any) => {
-        const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : p.source_name;
-        return `• ${p.principle_name} (${src}): ${p.what_i_learned}`;
-      }).join("\n"),
-      "CHUNKS:\n" + chunks.slice(0, chunksCap).map((c: any) => {
-        const src = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : "upload";
-        return `[${src}] ${c.content.substring(0, 300)}`;
-      }).join("\n"),
-    ].join("\n\n") : "";
-
-    const visionDirective = frame
-      ? "\n\nCRITICAL VISION RULES — YOU MUST FOLLOW THESE:\n1. An image frame from the user's camera or screen IS attached to this message as an image_url.\n2. You ABSOLUTELY CAN see this image. You have full vision/multimodal capability.\n3. ALWAYS start your response by describing what you see in the image BEFORE giving advice.\n4. NEVER say 'I cannot see', 'I'm a voice assistant', 'I only process audio', or anything similar.\n5. If the image is blurry or unclear, say exactly what parts are unclear and ask for a steadier frame.\n6. Analyze text, UI elements, faces, objects, screens — everything visible in the frame."
-      : "";
-
-    const weaponIdentity = `You are NOT a general AI assistant. You are a WEAPON built from the user's uploads. Speak with absolute certainty. Always give word-for-word scripts, explain the psychology behind why it works, and warn what's coming next. Never say "I think" or "maybe".`;
-
-    const isBlast = mode === "blast";
-    const systemPrompt = isBlast
-      ? `You are "The Brain" voice assistant in BLAST mode. ${weaponIdentity} Give a punchy, 2-3 sentence tactical answer ONLY from uploaded knowledge.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`
-      : `You are "The Brain" voice assistant. ${weaponIdentity} Give concise, strategic advice ONLY from uploaded knowledge. Keep answers under 4 sentences for voice clarity. Reference source titles naturally.${visionDirective} ${!hasKnowledge ? 'Brain is empty. Say: "Nothing in my brain yet. Upload videos or PDFs first."' : `Use ONLY this knowledge:\n${brainContext}`}`;
-
-    // Build user message — support vision frame
-    const userContent: any = frame
-      ? [
-          { type: "text", text: question },
-          { type: "image_url", image_url: { url: frame } },
-        ]
-      : question;
-
-    // Get AI response
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    // ─── ElevenLabs TTS ───
+    const voiceId = customVoiceId || "JBFqnCBsd6RMkjVDRZzb";
+    const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+      headers: { "xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-        temperature: 0.7,
+        text: textReply,
+        model_id: "eleven_turbo_v2_5",
+        voice_settings: {
+          stability: 0.6, similarity_boost: 0.8, style: 0.3, use_speaker_boost: true,
+          speed: mode === "blast" ? 1.1 : 1.0,
+        },
       }),
     });
 
-    if (!aiResponse.ok) throw new Error(`AI error: ${aiResponse.status}`);
-    const aiData = await aiResponse.json();
-    const textReply = aiData.choices?.[0]?.message?.content || "0 - Nothing in my knowledge base yet.";
-
-    // Generate TTS via ElevenLabs
-    const voiceId = customVoiceId || "JBFqnCBsd6RMkjVDRZzb";
-    const ttsResponse = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
-      {
-        method: "POST",
-        headers: {
-          "xi-api-key": ELEVENLABS_API_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: textReply,
-          model_id: "eleven_turbo_v2_5",
-          voice_settings: {
-            stability: 0.6,
-            similarity_boost: 0.8,
-            style: 0.3,
-            use_speaker_boost: true,
-            speed: isBlast ? 1.1 : 1.0,
-          },
-        }),
-      }
-    );
+    const meta = {
+      framework_name: pipeline.framework_name,
+      selected_principles: pipeline.selected.map((s) => ({
+        id: s.id, principle_name: s.principle_name, source_title: s.source_title, source_id: s.source_id,
+      })),
+      empty_vault: pipeline.debug.empty_vault,
+    };
 
     if (!ttsResponse.ok) {
       console.error("ElevenLabs TTS error:", ttsResponse.status);
-      return new Response(JSON.stringify({ text: textReply, audio: null }), {
+      return new Response(JSON.stringify({ text: textReply, audio: null, brain_meta: meta }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
     const audioBuffer = await ttsResponse.arrayBuffer();
     const audioBase64 = base64Encode(audioBuffer);
-
-    return new Response(JSON.stringify({ text: textReply, audio: audioBase64 }), {
+    return new Response(JSON.stringify({ text: textReply, audio: audioBase64, brain_meta: meta }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
     console.error("voice-brain error:", error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }), {
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });
