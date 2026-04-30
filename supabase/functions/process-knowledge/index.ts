@@ -333,7 +333,7 @@ function parsePrinciplesJson(raw: string): any[] {
   return objects;
 }
 
-import { chunkText, dedupePrinciples, detectChapters, type DetectedChapter } from "./lib.ts";
+import { chunkText, dedupePrinciples, prepareBookSections, type DetectedChapter } from "./lib.ts";
 
 async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
   // ===== PASS 1: Clean each 10k chunk independently, then concatenate =====
@@ -770,9 +770,12 @@ serve(async (req) => {
       });
     }
 
-    // Mark as processing immediately, then run the heavy pipeline in the background
-    // to avoid the 150s edge function idle timeout. Client already polls status + book_brief.
-    await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", itemId);
+    // Mark only fresh jobs as processing. Continuation/retry calls must not touch
+    // updated_at before they inspect book_brief, otherwise overlapping resumes can
+    // hide a legitimately active section and overwrite each other.
+    if (!continueBook && typeof retryChapterIndex !== "number") {
+      await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", itemId);
+    }
 
     const runPipeline = async () => {
     // Pre-flight: confirm the parent item still exists. The user may have deleted it
@@ -800,8 +803,17 @@ serve(async (req) => {
       return;
     }
 
-    const item = itemEarly;
-    const MAX_CONTENT_LENGTH = 200000;
+    const { data: itemCurrent } = await supabase
+      .from("knowledge_base_items")
+      .select("*")
+      .eq("id", itemId)
+      .maybeSingle();
+    if (!itemCurrent) {
+      console.log(`Item ${itemId} was deleted before processing state read — aborting pipeline.`);
+      return;
+    }
+    const item = itemCurrent;
+    const MAX_CONTENT_LENGTH = 600000;
     const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
     const sourceName = item.title || "Uploaded Content";
 
@@ -810,6 +822,16 @@ serve(async (req) => {
 
     if (isBook) {
       console.log(`Book pipeline starting on ${contentToProcess.length} chars`);
+      const finishBookIfComplete = async (brief: any, chapters: any[]) => {
+        const hasOpenWork = chapters.some((c: any) => c.status === "pending" || c.status === "extracting");
+        if (!hasOpenWork) {
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters },
+            status: "ready",
+          }).eq("id", itemId);
+          console.log(`Book pipeline marked ready for ${itemId}.`);
+        }
+      };
       const seenChunkContent = new Set<string>();
       const allStored: any[] = [];
 
@@ -818,7 +840,7 @@ serve(async (req) => {
         const brief = item.book_brief;
         const chapters: any[] = Array.isArray(brief.chapters) ? brief.chapters : [];
         const targetMeta = chapters.find((c: any) => c.index === retryChapterIndex);
-        const detected = detectChapters(contentToProcess);
+        const detected = prepareBookSections(contentToProcess);
         const targetDetected = detected.find((c) => c.index === retryChapterIndex) || detected[retryChapterIndex - 1];
         if (!targetMeta || !targetDetected) {
           return new Response(JSON.stringify({ error: "Chapter not found for retry" }), {
@@ -871,7 +893,7 @@ serve(async (req) => {
             c.index === retryChapterIndex ? { ...c, status: "done", principle_count: storedCount, error: null, summary } : c,
           );
           // If any chapter still pending/extracting, keep status; else flip to ready
-          const stillPending = finalChapters.some((c: any) => c.status === "pending" || c.status === "extracting" || c.status === "failed");
+          const stillPending = finalChapters.some((c: any) => c.status === "pending" || c.status === "extracting");
           await supabase.from("knowledge_base_items").update({
             book_brief: { ...brief, chapters: finalChapters },
             status: stillPending ? "extracting" : "ready",
@@ -925,7 +947,7 @@ serve(async (req) => {
       if (continueBook && item.book_brief) {
         const brief: any = item.book_brief;
         const chapters: any[] = Array.isArray(brief.chapters) ? brief.chapters : [];
-        const detectedAll = detectChapters(contentToProcess);
+        const detectedAll = prepareBookSections(contentToProcess);
 
         // Repair older/stalled mappings produced by the previous detector, which
         // counted numbered bullets as chapters (for example 35 fake sections).
@@ -944,6 +966,28 @@ serve(async (req) => {
             status: "extracting",
           }).eq("id", itemId);
           console.log(`Continue: remapped stale section list from ${chapters.length} to ${remapped.length}`);
+          await scheduleContinue();
+          return;
+        }
+
+        // Newer pipeline splits oversized parts into smaller safe sections. If an
+        // older book is mid-process with fewer giant sections, migrate its brief
+        // forward and preserve already-completed headings by title prefix.
+        if (detectedAll.length > chapters.length && chapters.length > 0) {
+          const doneOld = chapters.filter((c: any) => c.status === "done");
+          const remapped = detectedAll.map((section) => {
+            const doneMatch = doneOld.find((old: any) =>
+              section.title.toLowerCase().startsWith(String(old.title || "").toLowerCase()),
+            );
+            return doneMatch
+              ? { ...doneMatch, index: section.index, title: section.title, status: "done" as const }
+              : { index: section.index, title: section.title, one_line: "", status: "pending" as const, principle_count: 0 };
+          });
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters: remapped },
+            status: "extracting",
+          }).eq("id", itemId);
+          console.log(`Continue: migrated oversized legacy sections from ${chapters.length} to ${remapped.length}`);
           await scheduleContinue();
           return;
         }
@@ -1088,6 +1132,7 @@ serve(async (req) => {
               book_brief: { ...brief, chapters: failChapters },
             }).eq("id", itemId);
             console.warn(`Continue: chapter ${nextMeta.index} extracted 0 principles — marked failed`);
+            await finishBookIfComplete(brief, failChapters);
           } else {
             const summary = await summarizeChapter(nextMeta.title, storedForChapter, LOVABLE_API_KEY);
             const doneChapters = extractingChapters.map((c: any) =>
@@ -1099,6 +1144,7 @@ serve(async (req) => {
               book_brief: { ...brief, chapters: doneChapters },
             }).eq("id", itemId);
             console.log(`Continue: chapter ${nextMeta.index} done (${storedCount} principles)`);
+            await finishBookIfComplete(brief, doneChapters);
           }
         } catch (chapErr: any) {
           if (chapErr?.message === "PARENT_ITEM_DELETED") {
@@ -1114,6 +1160,7 @@ serve(async (req) => {
           await supabase.from("knowledge_base_items").update({
             book_brief: { ...brief, chapters: failChapters },
           }).eq("id", itemId);
+          await finishBookIfComplete(brief, failChapters);
         }
 
         // Schedule next chapter (or finalize) in a fresh invocation.
@@ -1124,7 +1171,7 @@ serve(async (req) => {
       // === FRESH RUN: map the book, then hand off to per-chapter invocations ===
       await supabase.from("knowledge_base_items").update({ status: "mapping" }).eq("id", itemId);
 
-      const detected = detectChapters(contentToProcess);
+      const detected = prepareBookSections(contentToProcess);
       console.log(`Detected ${detected.length} chapter(s) / chunk(s)`);
 
       // Pass 1 — Book Mapping
@@ -1216,7 +1263,25 @@ serve(async (req) => {
     const bgTask = runPipeline().catch(async (error) => {
       console.error("process-knowledge background error:", error);
       try {
-        await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+        const { data: current } = await supabase
+          .from("knowledge_base_items")
+          .select("status, book_brief")
+          .eq("id", itemId)
+          .maybeSingle();
+        const chapters = Array.isArray(current?.book_brief?.chapters) ? current.book_brief.chapters : [];
+        if (current?.status === "extracting" && chapters.length > 0) {
+          const recovered = chapters.map((c: any) =>
+            c.status === "extracting"
+              ? { ...c, status: "pending", error: "Previous attempt stopped — queued to retry" }
+              : c,
+          );
+          await supabase.from("knowledge_base_items").update({
+            status: "extracting",
+            book_brief: { ...current.book_brief, chapters: recovered },
+          }).eq("id", itemId);
+        } else {
+          await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+        }
       } catch (_) { /* ignore */ }
     });
 
@@ -1318,7 +1383,7 @@ async function extractPdfContent(
       return `PDF uploaded (${fileSizeMB.toFixed(2)} MB, ${pageCount} pages) but no readable text could be extracted. The file may be image-only without OCR layer, password-protected, or corrupted. Try a different copy or paste the text manually.`.padEnd(260, ' ');
     }
 
-    return finalText.substring(0, 200000);
+    return finalText.substring(0, 600000);
   } catch (e) {
     console.error("PDF processing error:", e);
     return "";

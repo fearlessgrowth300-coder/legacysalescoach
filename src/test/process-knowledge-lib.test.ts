@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chunkText, dedupePrinciples, detectChapters, mapVariantToSuggestion } from "../../supabase/functions/process-knowledge/lib";
+import { chunkText, dedupePrinciples, detectChapters, mapVariantToSuggestion, prepareBookSections } from "../../supabase/functions/process-knowledge/lib";
 
 describe("chunkText (true 10k chunking)", () => {
   it("returns the whole string when shorter than chunk size", () => {
@@ -90,5 +90,15 @@ describe("detectChapters", () => {
     ].join("\n\n");
     const out = detectChapters(content, 12000);
     expect(out.map((c) => c.title)).toEqual(["CHAPTER 1: MONEY OBJECTIONS", "CHAPTER 2: TRUST OBJECTIONS"]);
+  });
+
+  it("splits oversized detected parts into safe processing sections", () => {
+    const content = [
+      "PART 1: THE FOUNDATION\n" + "Foundation sentence. ".repeat(1800),
+      "PART 2: THE METHOD\n" + "Method sentence. ".repeat(1800),
+    ].join("\n\n");
+    const out = prepareBookSections(content, 12000);
+    expect(out.length).toBeGreaterThan(2);
+    expect(Math.max(...out.map((c) => c.text.length))).toBeLessThanOrEqual(13000);
   });
 });
