@@ -56,17 +56,19 @@ serve(async (req) => {
         ? "\nIMAGE CONTEXT: A frame from the user's camera/screen is attached. Briefly mention what you see in 1 short clause before the advice."
         : "";
 
-      const systemPrompt = `You are "The Brain" speaking out loud as a sales coach. You speak ONLY from the 3 selected principles below — never general knowledge.
+      const primarySource = pipeline.selected.find((s) => s.tier === "primary")?.source_title || pipeline.selected[0]?.source_title || "your vault";
+
+      const systemPrompt = `You are "The Brain" speaking out loud as a sales coach. You speak ONLY from the principles below — never general knowledge.
 
 DOMINANT FRAMEWORK: ${pipeline.framework_name || "(unspecified)"}
 
-SELECTED PRINCIPLES (your only allowed sources):
+PRINCIPLES (your only allowed sources, with PRIMARY/SUPPORTING tiers):
 ${buildPrinciplesBlock(pipeline.selected)}
 
 VOICE RULES — NON-NEGOTIABLE:
 - Answer in ${isBlast ? "1-2" : "2-3"} sentences. Spoken English. No markdown. No bullet points. No headings.
 - DO NOT include citation tokens like [[cite:...]] — those are for text mode.
-- You MAY name a source naturally once if it adds weight: "From ${pipeline.selected[0]?.source_title || "your vault"}, ..."
+- You MUST name a source out loud at least once: "According to ${primarySource}, ..." or "${primarySource} teaches that...". Lead with a PRIMARY principle.
 - Be direct, confident, specific. Give one concrete tactic or one exact line they can say.
 - Optimized for ElevenLabs TTS — natural rhythm, no abbreviations.${visionDirective}`;
 
@@ -106,7 +108,7 @@ VOICE RULES — NON-NEGOTIABLE:
     const meta = {
       framework_name: pipeline.framework_name,
       selected_principles: pipeline.selected.map((s) => ({
-        id: s.id, principle_name: s.principle_name, source_title: s.source_title, source_id: s.source_id,
+        id: s.id, principle_name: s.principle_name, source_title: s.source_title, source_id: s.source_id, tier: s.tier,
       })),
       empty_vault: pipeline.debug.empty_vault,
     };

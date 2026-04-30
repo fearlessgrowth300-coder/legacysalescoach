@@ -12,6 +12,7 @@ import { deduplicatePrinciples, deduplicateChunks, mergeByIdPriority } from "./d
 
 const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 const FAST_MODEL = "google/gemini-2.5-flash-lite";
+const REASONING_MODEL = "google/gemini-3-flash-preview";
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 
@@ -61,6 +62,7 @@ export type SelectedPrinciple = {
   source_url: string | null;
   source_type: string;
   why_relevant: string;
+  tier: "primary" | "supporting";
   full: Principle;
 };
 
@@ -97,20 +99,23 @@ async function callTool(
   userPrompt: string,
   toolName: string,
   toolSchema: Record<string, unknown>,
+  opts?: { reasoning?: { effort: "minimal" | "low" | "medium" | "high" } },
 ): Promise<any> {
+  const body: any = {
+    model,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    tools: [{ type: "function", function: { name: toolName, description: "Structured output", parameters: toolSchema } }],
+    tool_choice: { type: "function", function: { name: toolName } },
+    temperature: 0.2,
+  };
+  if (opts?.reasoning) body.reasoning = opts.reasoning;
   const res = await fetch(GATEWAY, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      tools: [{ type: "function", function: { name: toolName, description: "Structured output", parameters: toolSchema } }],
-      tool_choice: { type: "function", function: { name: toolName } },
-      temperature: 0.2,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
@@ -317,16 +322,39 @@ deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
 
   const result = await callTool(
     apiKey,
-    FAST_MODEL,
-    `You are an elite sales coach selecting the few principles that should drive a coaching reply. Pick the 3 (or fewer if only 1-2 fit) MOST applicable principles. Explain why each in one sentence. If two principles contradict each other (e.g. push hard vs pull back), pick a winner and reject the loser — never average them. Name the dominant framework.${sessionLine}\n\nIf NO principle is genuinely applicable to the question, return selected: [] — do not stretch.`,
+    REASONING_MODEL,
+    `You are an elite sales coach choosing principles to drive a coaching reply.
+
+Pick TWO TIERS:
+  • PRIMARY (1-3): the principles that MUST drive the answer. These define the strategy.
+  • SUPPORTING (0-2): principles that reinforce, contrast, or add a tactical layer to the primaries. They should NOT lead the answer but are great to cite alongside a primary.
+
+Rules:
+  - Explain why each in one short sentence.
+  - If two principles contradict (push hard vs pull back, etc.), pick a winner; the loser goes to neither tier.
+  - Name the dominant framework.
+  - If NO principle genuinely fits, return primary: [] — do not stretch.${sessionLine}`,
     `User question: "${question}"\n\nCandidates:\n${candidateBlock}`,
     "select_principles",
     {
       type: "object",
       properties: {
-        selected: {
+        primary: {
           type: "array",
           maxItems: 3,
+          items: {
+            type: "object",
+            properties: {
+              principle_id: { type: "string" },
+              why_relevant: { type: "string" },
+            },
+            required: ["principle_id", "why_relevant"],
+            additionalProperties: false,
+          },
+        },
+        supporting: {
+          type: "array",
+          maxItems: 2,
           items: {
             type: "object",
             properties: {
@@ -352,29 +380,37 @@ deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
         },
         framework_name: { type: "string" },
       },
-      required: ["selected", "contradictions", "framework_name"],
+      required: ["primary", "contradictions", "framework_name"],
       additionalProperties: false,
     },
+    { reasoning: { effort: "low" } },
   );
 
-  if (!result || !Array.isArray(result.selected)) return empty;
+  if (!result || !Array.isArray(result.primary)) return empty;
 
   const byId = new Map(candidates.map((p) => [p.id, p]));
+  const seen = new Set<string>();
   const selected: SelectedPrinciple[] = [];
-  for (const s of result.selected) {
-    const full = byId.get(s.principle_id);
-    if (!full) continue;
-    selected.push({
-      id: full.id,
-      principle_name: full.principle_name,
-      source_id: full.source_id,
-      source_title: full.source_name,
-      source_url: null,
-      source_type: full.source_type,
-      why_relevant: typeof s.why_relevant === "string" ? s.why_relevant : "",
-      full,
-    });
-  }
+  const pushTier = (arr: any[], tier: "primary" | "supporting") => {
+    for (const s of arr || []) {
+      const full = byId.get(s.principle_id);
+      if (!full || seen.has(full.id)) continue;
+      seen.add(full.id);
+      selected.push({
+        id: full.id,
+        principle_name: full.principle_name,
+        source_id: full.source_id,
+        source_title: full.source_name,
+        source_url: null,
+        source_type: full.source_type,
+        why_relevant: typeof s.why_relevant === "string" ? s.why_relevant : "",
+        tier,
+        full,
+      });
+    }
+  };
+  pushTier(result.primary, "primary");
+  pushTier(result.supporting || [], "supporting");
 
   return {
     selected,
@@ -535,7 +571,8 @@ export async function buildSessionContext(
 export function buildPrinciplesBlock(selected: SelectedPrinciple[]): string {
   return selected.map((s, i) => {
     const p = s.full;
-    return `### Principle ${i + 1} — ${p.principle_name}  [id: ${p.id}]
+    const tierLabel = s.tier === "primary" ? "PRIMARY" : "SUPPORTING";
+    return `### Principle ${i + 1} [${tierLabel}] — ${p.principle_name}  [id: ${p.id}]
 Source: "${s.source_title}" (${s.source_type})
 Why selected: ${s.why_relevant}
 What it teaches: ${p.what_i_learned || ""}

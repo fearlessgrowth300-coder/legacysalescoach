@@ -1,147 +1,121 @@
-# V1: Three-Layer Brain Pipeline with Citations
+# Make the Brain Think Hard and Cite Visibly
 
-Refactor the current single-pass `brain-chat` into a disciplined 3-layer pipeline (Retrieve → Reason → Respond), implemented as 6 ordered steps. Add inline citations linked to source uploads. Same retrieval+reasoning powers voice; only the response prompt branches. Empty-vault behavior is hard-locked to "no fallback to general knowledge."
+## The Problem
 
-Note on models: the project uses the Lovable AI Gateway (Gemini family). We will use `google/gemini-2.5-flash-lite` where the brief said "GPT-4o-mini" (fast/cheap reasoning) and `google/gemini-3-flash-preview` where it said "GPT-4o" (final response). The architecture is identical to the spec.
+Two real issues, both confirmed in the code:
 
-## Step 0 — Validate the reasoning prompt manually (do this first)
+1. **The AI doesn't think hard enough.** `brain-chat` calls `google/gemini-3-flash-preview` with no `reasoning` config. Flash answers fast and shallow. Layer 2 selection also runs on `gemini-2.5-flash-lite` — too weak for decisive contradiction-resolution.
 
-Before touching the pipeline, ship a tiny dev-only edge function `reasoning-eval` that:
-- Accepts `{ question, candidatePrincipleIds[] }`.
-- Loads those principles from `sales_brain` for the caller.
-- Runs the Layer-2 selection prompt (see Step 4) and returns the JSON output.
+2. **Citations are invisible & feel one-source.** Three things hide the sourcing:
+   - The system prompt tells the model to use `[[cite:<id>]]` tokens, but **never tells it to name the source in prose** ("According to *Cardone — 10X Rule*, ..."). So the user sees tiny superscript chips and assumes one source.
+   - The chip itself is a 16×16 number with no source title visible until you scroll to the footer.
+   - The prompt allows multi-cite ("[[cite:ID1]][[cite:ID2]]") but **doesn't require it** — the model defaults to one chip per sentence.
+   - `BrainCitations` strips orphan tokens silently if the id isn't in the selected list, so any "blended" citations get lost.
 
-Use it from the browser console with 3 real questions × 20 hand-picked principles each. Read the JSON. If the picks and contradiction detection look right, proceed. If not, iterate the prompt only — no other code changes yet.
+Plus a structural one:
+3. **Only 3 principles fed into Step 5.** With the rule "blend two principles" but only 3 selected, the model rarely has a real reason to multi-cite. We should let the response layer see all 3 *plus* a 4th–5th "supporting principle" tier it cannot lead with but can corroborate from.
 
-This stays in the repo as a permanent debugging surface.
+---
 
-## The 6-Step Pipeline (replaces current `brain-chat` body)
+## The Fix (V1.1)
 
-```text
-                     ┌──────────────────────────────────────────┐
-LAYER 1: RETRIEVAL   │ 1. Query expansion → 3-5 sub-queries     │
-(cast wide)          │ 2. Hybrid retrieval per sub-query        │
-                     │ 3. Cross-encoder re-rank → top 8         │
-                     └──────────────────────────────────────────┘
-                                        │
-                     ┌──────────────────▼──────────────────────┐
-LAYER 2: REASONING   │ 4. Selection prompt → top 3 + reasons   │
-(select decisively)  │    + contradiction → winning framework  │
-                     └──────────────────┬──────────────────────┘
-                                        │
-                     ┌──────────────────▼──────────────────────┐
-LAYER 3: RESPONSE    │ 5. Generate answer (text OR voice)       │
-(generate w/ cites)  │ 6. Inline citations → source upload      │
-                     └──────────────────────────────────────────┘
-```
+### 1. Reasoning model, not flash, for the response
 
-### Step 1 — Query expansion
-- Single call to `google/gemini-2.5-flash-lite`.
-- Tool-call output: `{ subqueries: string[3..5] }`.
-- Always include the original question as sub-query 0 (insurance against bad expansions).
-- Cap total latency budget: 400ms; on failure, fall back to `[originalQuestion]`.
+In `supabase/functions/brain-chat/index.ts`, switch the response generation to a reasoning-capable model:
 
-### Step 2 — Hybrid retrieval per sub-query
-- For each sub-query: generate embedding, call `match_sales_brain` and `match_knowledge_chunks` (top 8 each), plus the existing static fallback ordered by `relevance_score`.
-- Pool everything, dedupe by `id`, then by Jaccard similarity on `principle_name + what_i_learned` (reuse `_shared/dedup.ts`).
-- Apply diversity rerank by `source_id` so no single upload dominates.
-- Target pool size: 20–25 unique principles + a parallel pool of chunks (chunks are context only, not citation targets).
-
-### Step 3 — Cross-encoder re-rank → top 8
-- Lightweight reranker call to `google/gemini-2.5-flash-lite` with tool calling: input is the original question and the 20–25 candidates (id + principle_name + 1-line summary). Output: `{ ranked: [{id, score}] }` sorted desc.
-- Keep top 8 principles. Carry over the top ~6 chunks (by semantic similarity) as supporting context — these don't get cited but ground the writer.
-
-### Step 4 — Selection prompt → top 3 + winning framework
-- Call `google/gemini-2.5-flash-lite` (or `gemini-3-flash-preview` if eval shows it's needed) with full rich fields for the 8 candidates.
-- Tool-call schema:
-  ```json
-  {
-    "selected": [{ "principle_id": "uuid", "why_relevant": "one sentence" }],
-    "contradictions": [{ "between": ["uuid","uuid"], "winner": "uuid", "reason": "one sentence" }],
-    "framework_name": "string"
-  }
-  ```
-- Hard rule in the prompt: never average conflicting frameworks; pick one and explain why the others were rejected.
-- If `selected.length === 0`, treat as empty-vault (see below).
-
-### Step 5 — Response generation (text path)
-- Call `google/gemini-3-flash-preview` with `stream: true`.
-- Inputs: the 3 selected principles in full (`exact_words_to_use`, `the_deep_why`, `when_to_use`, `when_not_to_use`, `common_mistake`, `real_example_or_story`), the 6 supporting chunks, the workspace profile (`company_profiles` + active `workspaces` row), and the last 3 exchanges from session memory.
-- Prompt requires every claim to end with an inline citation token: `[[cite:<principle_id>]]`. The model is told a citation is mandatory after each tactical claim; never invent IDs — only the 3 provided.
-- Stream is forwarded through the existing SSE relay in `brain-chat`.
-
-### Step 6 — Citation rendering
-- Server emits a one-time `data: {"brain_meta": {...}}` SSE frame *before* the stream starts containing:
-  ```json
-  {
-    "selected_principles": [
-      { "id": "...", "principle_name": "...", "source_id": "...", "source_title": "...", "source_url": "...", "source_type": "pdf|video|...", "why_relevant": "..." }
-    ],
-    "framework_name": "...",
-    "contradictions": [...],
-    "subqueries": [...],
-    "candidate_count": 23
-  }
-  ```
-- Client (`AiChat.tsx`) already handles `brain_meta`. Extend it to:
-  - Store `selected_principles` per assistant message.
-  - In `ReactMarkdown`, post-process the text: replace `[[cite:<uuid>]]` with a numbered superscript chip `¹ ² ³` keyed to the principle order.
-  - Render a "Sources" footer under each assistant message: numbered list of principles, each linking to its source upload (deep-link to `/knowledge?item=<source_id>` — already a route).
-  - Tapping a citation chip scrolls the footer source into view and highlights it (no new modal needed for V1).
-
-### Voice path branch (Step 5 only)
-- `voice-brain` is rewired to call the new shared pipeline up through Step 4, then runs a voice-specific Step 5:
-  - Prompt: "Answer in 2–3 sentences, spoken English, no markdown, no citation tokens, no lists."
-  - Same 3 selected principles in the prompt; the model can name a source naturally ("From [source_title]…") but won't emit `[[cite:]]`.
-  - Output goes straight to ElevenLabs as today.
-- Result: voice and text are guaranteed to recommend the same framework for the same question.
-
-## Empty-vault behavior (contextual jail)
-- Triggered when: Step 4 returns `selected.length === 0`, OR Step 3 top-8 max score < threshold (`0.35` cosine equivalent).
-- Bypass Step 5 entirely. Server emits a single fixed-form SSE message:
-  > "Your vault doesn't cover **[topic]** yet. Upload a [video/PDF/article] on **[topic]** to unlock coaching here."
-- `[topic]` is filled from a 1-line `gemini-2.5-flash-lite` extraction of the user's question (no general-knowledge answer is ever generated). `[video/PDF/article]` is hard-coded by question shape (heuristic; default "video or PDF").
-- No fallback to general knowledge. Ever. This rule lives at the top of every Step-5 prompt as well.
-
-## Conversation memory (session context)
-New ephemeral object built per request, not persisted as a separate table:
 ```ts
-type SessionContext = {
-  recent_exchanges: { role: "user"|"assistant"; content: string }[]; // last 3 pairs
-  active_principle_ids: string[];                                    // from previous turn's Step 4
-  active_framework_name: string | null;
-};
-```
-- Built server-side by reading the last 6 messages of the conversation + the previous assistant message's `brain_meta` (re-stored on `ai_chat_messages.metadata`, see schema change below).
-- Fed into Step 1 (query expansion sees recent context) and Step 3 (rerank applies a `+0.05` bias to principles in `active_principle_ids`).
-- Same vault retrieval — only the ranking is tilted toward consistency.
-
-## Schema change
-One migration: add `metadata jsonb` to `ai_chat_messages` (nullable, default `'{}'`). Stores `brain_meta` for assistant messages so the next turn can reconstruct session context and the UI can re-render citations on history reload. RLS already covers it.
-
-## File-level changes
-
-```text
-supabase/functions/
-  brain-chat/index.ts              ← gut and rebuild around the 6 steps
-  brain-chat/pipeline.ts           ← new: pure functions for steps 1-4
-  brain-chat/prompts.ts            ← new: all prompt strings + tool schemas
-  brain-chat/citations.ts          ← new: validates [[cite:]] tokens against allowed IDs
-  voice-brain/index.ts             ← refactor: import pipeline.ts, only Step-5 prompt differs
-  reasoning-eval/index.ts          ← new dev tool for Step 0
-src/pages/AiChat.tsx               ← citation rendering + sources footer + brain_meta persistence
-src/components/BrainInsightCard.tsx← (optional) reuse for the sources footer
+model: "google/gemini-3.1-pro-preview",   // was gemini-3-flash-preview
+reasoning: { effort: "medium" },          // new
+max_tokens: 16000,
 ```
 
-## What is explicitly NOT in V1
-- Proactive Brain / push insights → V2, separate surface.
-- New citation modal, multi-source side panel, or graph view → footer + chips only.
-- No re-extraction of existing `sales_brain` rows; pipeline reads what's there.
-- No changes to ingestion (`process-knowledge`).
+Keep flash-lite for query expansion (Step 1) and rerank (Step 3) — those are classification, not reasoning. **Upgrade Step 4 (selection)** to `gemini-3-flash-preview` with `reasoning: { effort: "low" }` so contradiction-resolution actually reasons instead of pattern-matching.
 
-## Acceptance checks
-1. Ask 3 questions covered by the vault → assistant reply has 3+ inline citation chips, footer lists exactly the principles cited, each links to the right `knowledge_base_items` row.
-2. Ask a question outside the vault → fixed-form "Your vault doesn't cover…" message; no general-knowledge content; voice path says the same thing in spoken form.
-3. Ask a follow-up that references "that framework" → server logs show `active_principle_ids` carried in, and the new answer either reuses or explicitly switches frameworks (never silently drifts).
-4. Voice and text answers to the same question recommend the same `framework_name` (visible in `brain_meta`).
-5. Reload an old conversation → citation chips and sources footer re-render from stored `metadata`.
+### 2. Force visible "According to" attribution
+
+Rewrite the citation rules in `buildSystemPrompt` so the model both narrates the source and emits the token:
+
+```
+=== ATTRIBUTION (MANDATORY) ===
+You speak THROUGH your sources, not over them. Every tactical paragraph must:
+  (a) Name the source out loud at least once — "According to <Source Title>...", 
+      "<Author>'s <Framework> says...", "From <Source Title>: ..."
+  (b) End the claim sentence with the [[cite:<id>]] token.
+  (c) When TWO principles reinforce or contrast, cite BOTH in the same sentence:
+      "...handles the price hit [[cite:ID1]][[cite:ID2]]."
+
+You have 3 principles. Across your full response you MUST cite ALL 3 at least once
+(unless one is genuinely irrelevant to what the user asked, in which case explain why
+in one sentence and skip it). At least ONE sentence must double-cite two principles
+to show how they combine.
+```
+
+Also remove the line that forbids "(Source: ...)" — we now want prose attribution.
+
+### 3. Expand the selection from 3 → 3 primary + 2 supporting
+
+In `_shared/brain-pipeline.ts` `selectPrinciples`, change the schema to allow up to 3 `primary` and up to 2 `supporting`:
+
+```jsonc
+{
+  "primary":    [{ "principle_id": "...", "why_relevant": "..." }],   // max 3
+  "supporting": [{ "principle_id": "...", "why_relevant": "..." }],   // max 2
+  "contradictions": [...],
+  "framework_name": "..."
+}
+```
+
+`SelectedPrinciple` gets a `tier: "primary" | "supporting"` field. `buildPrinciplesBlock` labels them so the response model knows the hierarchy. Both tiers' IDs go into `allowedIds` (model can cite either), but the prompt instructs: "Lead with the primaries; cite a supporting only when it directly reinforces or contrasts a primary."
+
+This gives the model 5 real principles to weave together → multi-source feel becomes natural, not forced.
+
+### 4. Make the citation chip readable, not a tiny number
+
+In `src/components/BrainCitations.tsx`:
+- Replace the 16×16 number bubble with a small pill showing the **source title** (truncated): `[1] Cardone — 10X Rule`
+- Tap behavior unchanged (scroll to footer entry & flash).
+- Footer gets a "Primary / Supporting" label per item.
+
+```tsx
+<button className="inline-flex items-center gap-1 align-baseline text-[10px] 
+                   px-1.5 py-0.5 rounded bg-primary/10 text-primary 
+                   hover:bg-primary/20 mx-0.5">
+  <span className="font-bold">{n}</span>
+  <span className="truncate max-w-[120px]">{principle.source_title}</span>
+</button>
+```
+
+### 5. Stop silently dropping orphan tokens
+
+If the model emits a `[[cite:UNKNOWN_ID]]`, currently it disappears. Change `BrainCitations` to render it as a greyed `[?]` chip with a tooltip "Citation lost — see Sources below". This makes citation bugs visible during dev instead of silently degrading the UX.
+
+### 6. Voice branch unchanged
+
+`voice-brain` continues to use spoken-language phrasing without tokens — but should also receive primaries+supporting and verbally attribute ("Cardone says..."). Same prompt edit applied to its Step 5 system prompt.
+
+---
+
+## Files Changed
+
+- **Edit** `supabase/functions/_shared/brain-pipeline.ts`
+  - `selectPrinciples`: schema → primary + supporting; tag each `SelectedPrinciple` with `tier`.
+  - `selectPrinciples`: switch model to `google/gemini-3-flash-preview`, add `reasoning: { effort: "low" }`.
+  - `runPipeline`: pass both tiers through; resolve source titles for both.
+- **Edit** `supabase/functions/brain-chat/index.ts`
+  - Switch response model to `google/gemini-3.1-pro-preview` + `reasoning: { effort: "medium" }`.
+  - Rewrite `buildSystemPrompt` ATTRIBUTION block (multi-cite required, "According to..." required, all primaries must be used).
+  - Include `tier` info in `buildPrinciplesBlock` output.
+- **Edit** `supabase/functions/voice-brain/index.ts`
+  - Mirror prompt: spoken attribution ("Cardone says...") + use both tiers.
+- **Edit** `src/components/BrainCitations.tsx`
+  - Pill chip showing source title; render unknown ids as greyed `[?]`; show Primary/Supporting in footer.
+- **Edit** `src/pages/AiChat.tsx`
+  - No structural change; just pass the new tier metadata through (already JSONB).
+
+No DB migration needed — `metadata` is JSONB and already stores `selected_principles`. We just add `tier` on each entry.
+
+## Risk / Cost
+
+- Pro-preview is ~3× slower than flash. Expected response time goes from ~3s to ~6–8s on the streaming first token. Acceptable for a "thinks hard" Brain. If too slow we fall back to `gemini-2.5-pro` which is comparable quality, faster.
+- Step 4 reasoning adds ~400ms.
+- Net: deeper answers, visible multi-source attribution, ~+3s latency.
