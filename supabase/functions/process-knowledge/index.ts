@@ -927,6 +927,27 @@ serve(async (req) => {
         const chapters: any[] = Array.isArray(brief.chapters) ? brief.chapters : [];
         const detectedAll = detectChapters(contentToProcess);
 
+        // Repair older/stalled mappings produced by the previous detector, which
+        // counted numbered bullets as chapters (for example 35 fake sections).
+        // Only do this before any section has successfully stored principles.
+        const noStoredProgress = chapters.every((c: any) => (c.principle_count || 0) === 0 && c.status !== "done");
+        if (noStoredProgress && detectedAll.length > 0 && chapters.length > detectedAll.length) {
+          const remapped = detectedAll.map((c) => ({
+            index: c.index,
+            title: c.title,
+            one_line: "",
+            status: "pending" as const,
+            principle_count: 0,
+          }));
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters: remapped },
+            status: "extracting",
+          }).eq("id", itemId);
+          console.log(`Continue: remapped stale section list from ${chapters.length} to ${remapped.length}`);
+          await scheduleContinue();
+          return;
+        }
+
         // Recover stale "extracting" chapters: if a chapter has been sitting in
         // extracting state but the parent item hasn't been updated for >90s,
         // treat it as stuck (likely the previous invocation was killed mid-run)
