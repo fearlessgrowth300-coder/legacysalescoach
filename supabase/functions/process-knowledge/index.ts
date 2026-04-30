@@ -960,12 +960,18 @@ serve(async (req) => {
           }
         }
 
-        // Find next chapter that still needs work — prefer pending, then any
-        // remaining extracting (in-flight from a sibling invocation, very rare).
-        const nextMeta = workingChapters.find((c: any) => c.status === "pending")
-          || workingChapters.find((c: any) => c.status === "extracting");
+        // Find next chapter that still needs work. Do not pick a fresh
+        // `extracting` chapter unless it has gone stale and was reset above;
+        // otherwise manual resume / duplicate invocations can process the same
+        // section twice and fight over status updates.
+        const nextMeta = workingChapters.find((c: any) => c.status === "pending");
 
         if (!nextMeta) {
+          const active = workingChapters.find((c: any) => c.status === "extracting");
+          if (active) {
+            console.log(`Continue: chapter ${active.index} is already extracting; not starting a duplicate.`);
+            return;
+          }
           // All chapters done (or done+failed). Run connection pass and finalize.
           try {
             const { data: stored } = await supabase
