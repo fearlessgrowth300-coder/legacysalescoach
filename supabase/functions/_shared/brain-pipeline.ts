@@ -571,7 +571,8 @@ export async function buildSessionContext(
 export function buildPrinciplesBlock(selected: SelectedPrinciple[]): string {
   return selected.map((s, i) => {
     const p = s.full;
-    return `### Principle ${i + 1} — ${p.principle_name}  [id: ${p.id}]
+    const tierLabel = s.tier === "primary" ? "PRIMARY" : "SUPPORTING";
+    return `### Principle ${i + 1} [${tierLabel}] — ${p.principle_name}  [id: ${p.id}]
 Source: "${s.source_title}" (${s.source_type})
 Why selected: ${s.why_relevant}
 What it teaches: ${p.what_i_learned || ""}
