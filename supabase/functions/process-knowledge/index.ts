@@ -333,7 +333,7 @@ function parsePrinciplesJson(raw: string): any[] {
   return objects;
 }
 
-import { chunkText, dedupePrinciples, detectChapters, type DetectedChapter } from "./lib.ts";
+import { chunkText, dedupePrinciples, prepareBookSections, type DetectedChapter } from "./lib.ts";
 
 async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
   // ===== PASS 1: Clean each 10k chunk independently, then concatenate =====
@@ -801,7 +801,7 @@ serve(async (req) => {
     }
 
     const item = itemEarly;
-    const MAX_CONTENT_LENGTH = 200000;
+    const MAX_CONTENT_LENGTH = 600000;
     const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
     const sourceName = item.title || "Uploaded Content";
 
@@ -818,7 +818,7 @@ serve(async (req) => {
         const brief = item.book_brief;
         const chapters: any[] = Array.isArray(brief.chapters) ? brief.chapters : [];
         const targetMeta = chapters.find((c: any) => c.index === retryChapterIndex);
-        const detected = detectChapters(contentToProcess);
+        const detected = prepareBookSections(contentToProcess);
         const targetDetected = detected.find((c) => c.index === retryChapterIndex) || detected[retryChapterIndex - 1];
         if (!targetMeta || !targetDetected) {
           return new Response(JSON.stringify({ error: "Chapter not found for retry" }), {
@@ -925,7 +925,7 @@ serve(async (req) => {
       if (continueBook && item.book_brief) {
         const brief: any = item.book_brief;
         const chapters: any[] = Array.isArray(brief.chapters) ? brief.chapters : [];
-        const detectedAll = detectChapters(contentToProcess);
+        const detectedAll = prepareBookSections(contentToProcess);
 
         // Repair older/stalled mappings produced by the previous detector, which
         // counted numbered bullets as chapters (for example 35 fake sections).
@@ -1124,7 +1124,7 @@ serve(async (req) => {
       // === FRESH RUN: map the book, then hand off to per-chapter invocations ===
       await supabase.from("knowledge_base_items").update({ status: "mapping" }).eq("id", itemId);
 
-      const detected = detectChapters(contentToProcess);
+      const detected = prepareBookSections(contentToProcess);
       console.log(`Detected ${detected.length} chapter(s) / chunk(s)`);
 
       // Pass 1 — Book Mapping
