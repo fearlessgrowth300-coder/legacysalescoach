@@ -32,15 +32,43 @@ serve(async (req) => {
       });
     }
 
-    // Re-invoke the main pipeline in "retry chapter" mode.
-    // process-knowledge accepts retryChapterIndex to re-run only that chapter.
-    const { data, error } = await supabase.functions.invoke("process-knowledge", {
-      body: { itemId, type: "pdf", retryChapterIndex: chapterIndex },
-      headers: authHeader ? { Authorization: authHeader } : undefined,
+    const { data: item } = await supabase
+      .from("knowledge_base_items")
+      .select("user_id, book_brief")
+      .eq("id", itemId)
+      .eq("user_id", user.id)
+      .single();
+
+    if (!item?.book_brief) {
+      return new Response(JSON.stringify({ error: "Book not found" }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const chapters = Array.isArray(item.book_brief.chapters) ? item.book_brief.chapters : [];
+    const updatedChapters = chapters.map((c: any) =>
+      c.index === chapterIndex ? { ...c, status: "pending", principle_count: 0, error: "Queued for retry" } : c,
+    );
+
+    await supabase.from("knowledge_base_items").update({
+      status: "extracting",
+      book_brief: { ...item.book_brief, chapters: updatedChapters },
+    }).eq("id", itemId).eq("user_id", user.id);
+
+    const invokePromise = supabase.functions.invoke("process-knowledge", {
+      body: { itemId, type: "pdf", continueBook: true, userId: user.id },
+      headers: { Authorization: `Bearer ${supabaseKey}` },
     });
 
-    if (error) throw error;
-    return new Response(JSON.stringify({ success: true, result: data }), {
+    // @ts-ignore — EdgeRuntime is provided by the Supabase Edge runtime
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+      // @ts-ignore
+      EdgeRuntime.waitUntil(invokePromise.catch((err: any) => console.error("retry handoff failed", err)));
+    }
+
+    return new Response(JSON.stringify({ success: true, status: "queued" }), {
+      status: 202,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
