@@ -1023,12 +1023,14 @@ export default function KnowledgeBase() {
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
                   </div>
-                  {item.status === "processing" && (
+                  {(item.status === "processing" || item.status === "mapping" || item.status === "extracting") && (
                     <div className="mt-3 pt-3 border-t">
                       <div className="flex items-center gap-2 mb-2">
                         <Loader2 className="h-3 w-3 animate-spin text-primary" />
                         <p className="text-xs font-medium text-muted-foreground">
-                          Processing content — extracting knowledge...
+                          {item.status === "mapping" ? "Mapping the book…" :
+                           item.status === "extracting" ? "Extracting principles chapter by chapter…" :
+                           "Processing content — extracting knowledge..."}
                         </p>
                       </div>
                       {processingCounts[item.id] && (processingCounts[item.id].learnings > 0 || processingCounts[item.id].chunks > 0) && (
@@ -1047,6 +1049,16 @@ export default function KnowledgeBase() {
                         </div>
                       )}
                       <Progress value={undefined} className="h-1.5 animate-pulse" />
+                      {item.type === "pdf" && (item as any).book_brief && (
+                        <div className="mt-3">
+                          <BookBriefCard
+                            brief={(item as any).book_brief}
+                            status={item.status}
+                            onRetryChapter={(idx) => handleRetryChapter(item.id, idx)}
+                            retryingIndex={retryingChapter?.itemId === item.id ? retryingChapter.index : null}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                   {item.status === "ready" && itemChunks.length > 0 && (
