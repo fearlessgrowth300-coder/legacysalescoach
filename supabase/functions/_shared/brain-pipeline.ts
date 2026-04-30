@@ -99,20 +99,23 @@ async function callTool(
   userPrompt: string,
   toolName: string,
   toolSchema: Record<string, unknown>,
+  opts?: { reasoning?: { effort: "minimal" | "low" | "medium" | "high" } },
 ): Promise<any> {
+  const body: any = {
+    model,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    tools: [{ type: "function", function: { name: toolName, description: "Structured output", parameters: toolSchema } }],
+    tool_choice: { type: "function", function: { name: toolName } },
+    temperature: 0.2,
+  };
+  if (opts?.reasoning) body.reasoning = opts.reasoning;
   const res = await fetch(GATEWAY, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      tools: [{ type: "function", function: { name: toolName, description: "Structured output", parameters: toolSchema } }],
-      tool_choice: { type: "function", function: { name: toolName } },
-      temperature: 0.2,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
