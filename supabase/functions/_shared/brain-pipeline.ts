@@ -61,6 +61,7 @@ export type SelectedPrinciple = {
   source_url: string | null;
   source_type: string;
   why_relevant: string;
+  tier: "primary" | "supporting";
   full: Principle;
 };
 
