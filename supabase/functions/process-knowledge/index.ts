@@ -695,7 +695,7 @@ serve(async (req) => {
   }
 
   try {
-    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex, userId: bodyUserId } = await req.json();
+    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex, continueBook, userId: bodyUserId } = await req.json();
 
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -894,7 +894,149 @@ serve(async (req) => {
         }
       }
 
-      // === FRESH RUN ===
+      // Helper: schedule next pending chapter (or finalize) in a fresh invocation,
+      // so each call stays well within the edge function wall-clock limit.
+      const scheduleContinue = async () => {
+        try {
+          const fnUrl = `${supabaseUrl}/functions/v1/process-knowledge`;
+          // Fire-and-forget — do NOT await the response, otherwise we re-enter
+          // the same wall-clock budget we are trying to escape.
+          fetch(fnUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${supabaseKey}`,
+            },
+            body: JSON.stringify({ itemId, type: "pdf", continueBook: true, userId: user.id }),
+          }).catch((e) => console.error("scheduleContinue fetch failed:", e));
+        } catch (e) {
+          console.error("scheduleContinue threw:", e);
+        }
+      };
+
+      // === CONTINUE MODE: process the next pending chapter only ===
+      if (continueBook && item.book_brief) {
+        const brief: any = item.book_brief;
+        const chapters: any[] = Array.isArray(brief.chapters) ? brief.chapters : [];
+        const detectedAll = detectChapters(contentToProcess);
+
+        // Find next chapter that still needs work (pending OR a stale extracting).
+        const nextMeta = chapters.find((c: any) => c.status === "pending")
+          || chapters.find((c: any) => c.status === "extracting");
+
+        if (!nextMeta) {
+          // All chapters done (or done+failed). Run connection pass and finalize.
+          try {
+            const { data: stored } = await supabase
+              .from("sales_brain")
+              .select("principle_name, what_i_learned")
+              .eq("user_id", user.id)
+              .eq("source_id", itemId);
+            if (stored && stored.length > 0) {
+              const connections = await buildConnectionMap(stored, LOVABLE_API_KEY);
+              for (const principleName of Object.keys(connections)) {
+                const connected = connections[principleName].join(", ");
+                if (!connected) continue;
+                await supabase.from("sales_brain")
+                  .update({ connected_principles: connected })
+                  .eq("user_id", user.id)
+                  .eq("source_id", itemId)
+                  .ilike("principle_name", principleName);
+              }
+            }
+          } catch (connErr) {
+            console.error("Connection pass failed (non-fatal):", connErr);
+          }
+
+          const anyFailed = chapters.some((c: any) => c.status === "failed");
+          await supabase.from("knowledge_base_items").update({
+            status: anyFailed ? "ready" : "ready",
+          }).eq("id", itemId);
+          console.log(`Book pipeline finalized for ${itemId}.`);
+          return;
+        }
+
+        const targetDetected = detectedAll.find((c) => c.index === nextMeta.index)
+          || detectedAll[nextMeta.index - 1];
+        if (!targetDetected) {
+          console.error(`Continue: detected chapter not found for index ${nextMeta.index}`);
+          // Mark this chapter failed so we don't loop forever.
+          const updated = chapters.map((c: any) =>
+            c.index === nextMeta.index ? { ...c, status: "failed", error: "Chapter text not found" } : c,
+          );
+          await supabase.from("knowledge_base_items")
+            .update({ book_brief: { ...brief, chapters: updated } })
+            .eq("id", itemId);
+          await scheduleContinue();
+          return;
+        }
+
+        // Mark extracting
+        const extractingChapters = chapters.map((c: any) =>
+          c.index === nextMeta.index ? { ...c, status: "extracting", error: null } : c,
+        );
+        await supabase.from("knowledge_base_items").update({
+          book_brief: { ...brief, chapters: extractingChapters },
+          status: "extracting",
+        }).eq("id", itemId);
+
+        try {
+          const principles = await extractChapterWithFallback(
+            targetDetected,
+            {
+              title: brief.title,
+              author: brief.author,
+              core_system: brief.core_system,
+              what_this_book_teaches: brief.what_this_book_teaches,
+            },
+            { title: nextMeta.title, one_line: nextMeta.one_line },
+            sourceName,
+            LOVABLE_API_KEY,
+          );
+
+          const seen = new Set<string>();
+          let storedCount = 0;
+          const storedForChapter: any[] = [];
+          for (const p of principles) {
+            const stored = await persistLearning(
+              supabase, user.id, itemId, item.brain_type, sourceName,
+              { ...p, _chapter: nextMeta.index }, LOVABLE_API_KEY, seen,
+            );
+            if (stored) { storedForChapter.push(stored); storedCount++; }
+          }
+          const summary = await summarizeChapter(nextMeta.title, storedForChapter, LOVABLE_API_KEY);
+
+          const doneChapters = extractingChapters.map((c: any) =>
+            c.index === nextMeta.index
+              ? { ...c, status: "done", principle_count: storedCount, summary, error: null }
+              : c,
+          );
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters: doneChapters },
+          }).eq("id", itemId);
+          console.log(`Continue: chapter ${nextMeta.index} done (${storedCount} principles)`);
+        } catch (chapErr: any) {
+          if (chapErr?.message === "PARENT_ITEM_DELETED") {
+            console.log(`Item ${itemId} deleted during continue at chapter ${nextMeta.index}.`);
+            return;
+          }
+          console.error(`Continue chapter ${nextMeta.index} failed:`, chapErr?.message);
+          const failChapters = extractingChapters.map((c: any) =>
+            c.index === nextMeta.index
+              ? { ...c, status: "failed", error: chapErr?.message || "Failed" }
+              : c,
+          );
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters: failChapters },
+          }).eq("id", itemId);
+        }
+
+        // Schedule next chapter (or finalize) in a fresh invocation.
+        await scheduleContinue();
+        return;
+      }
+
+      // === FRESH RUN: map the book, then hand off to per-chapter invocations ===
       await supabase.from("knowledge_base_items").update({ status: "mapping" }).eq("id", itemId);
 
       const detected = detectChapters(contentToProcess);
@@ -916,7 +1058,6 @@ serve(async (req) => {
         chapters: detected.map((c) => ({ index: c.index, title: c.title, one_line: "" })),
       };
 
-      // Align skeleton chapters to detected chapters (use detected count as source of truth)
       const briefChapters = detected.map((c) => {
         const fromAi = (bookContext.chapters || []).find((x: any) => x.index === c.index);
         return {
@@ -941,79 +1082,9 @@ serve(async (req) => {
         status: "extracting",
       }).eq("id", itemId);
 
-      // Pass 2 — Chapter-Aware Deep Extraction (per chapter)
-      let workingChapters = [...briefChapters];
-      for (const chap of detected) {
-        // Mark as extracting
-        workingChapters = workingChapters.map((c) =>
-          c.index === chap.index ? { ...c, status: "extracting" as any } : c,
-        );
-        await supabase.from("knowledge_base_items").update({
-          book_brief: { ...briefToStore, chapters: workingChapters },
-        }).eq("id", itemId);
-
-        try {
-          const meta = workingChapters.find((c) => c.index === chap.index)!;
-          const principles = await extractChapterWithFallback(
-            chap,
-            briefToStore,
-            { title: meta.title, one_line: meta.one_line },
-            sourceName,
-            LOVABLE_API_KEY,
-          );
-          let storedCount = 0;
-          const storedForChapter: any[] = [];
-          for (const p of principles) {
-            const stored = await persistLearning(
-              supabase, user.id, itemId, item.brain_type, sourceName,
-              { ...p, _chapter: chap.index }, LOVABLE_API_KEY, seenChunkContent,
-            );
-            if (stored) { allStored.push(stored); storedForChapter.push(stored); storedCount++; }
-          }
-          const summary = await summarizeChapter(meta.title, storedForChapter, LOVABLE_API_KEY);
-          workingChapters = workingChapters.map((c) =>
-            c.index === chap.index ? { ...c, status: "done" as any, principle_count: storedCount, summary } : c,
-          );
-        } catch (chapErr: any) {
-          if (chapErr?.message === "PARENT_ITEM_DELETED") {
-            console.log(`Item ${itemId} deleted mid-pipeline at chapter ${chap.index} — aborting.`);
-            return;
-          }
-          console.error(`Chapter ${chap.index} failed:`, chapErr?.message);
-          workingChapters = workingChapters.map((c) =>
-            c.index === chap.index ? { ...c, status: "failed" as any, error: chapErr?.message || "Failed" } : c,
-          );
-        }
-        await supabase.from("knowledge_base_items").update({
-          book_brief: { ...briefToStore, chapters: workingChapters },
-        }).eq("id", itemId);
-      }
-
-      // Pass 3 — Connection Layer
-      try {
-        const connections = await buildConnectionMap(
-          allStored.map((s) => ({ principle_name: s.principle_name, what_i_learned: s.what_i_learned })),
-          LOVABLE_API_KEY,
-        );
-        for (const principleName of Object.keys(connections)) {
-          const connected = connections[principleName].join(", ");
-          if (!connected) continue;
-          await supabase.from("sales_brain")
-            .update({ connected_principles: connected })
-            .eq("user_id", user.id)
-            .eq("source_id", itemId)
-            .ilike("principle_name", principleName);
-        }
-      } catch (connErr) {
-        console.error("Connection pass failed (non-fatal):", connErr);
-      }
-
-      await supabase.from("knowledge_base_items").update({
-        book_brief: { ...briefToStore, chapters: workingChapters },
-        status: "ready",
-      }).eq("id", itemId);
-
-      console.log(`Book pipeline complete: ${allStored.length} principles`);
+      // Hand off to per-chapter invocations (each call processes 1 chapter, then chains).
+      await scheduleContinue();
+      console.log(`Book pipeline mapped (${detected.length} chapters). Handed off to chained invocations.`);
       return;
     }
 
