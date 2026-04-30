@@ -455,7 +455,9 @@ export default function KnowledgeBase() {
 
   const getStatusIcon = (status: string) => {
     if (status === "ready") return <CheckCircle2 className="h-4 w-4 text-green-500" />;
-    if (status === "processing") return <Loader2 className="h-4 w-4 text-amber-500 animate-spin" />;
+    if (status === "processing" || status === "mapping" || status === "extracting") {
+      return <Loader2 className="h-4 w-4 text-amber-500 animate-spin" />;
+    }
     return <AlertCircle className="h-4 w-4 text-destructive" />;
   };
 
