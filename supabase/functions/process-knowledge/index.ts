@@ -770,9 +770,12 @@ serve(async (req) => {
       });
     }
 
-    // Mark as processing immediately, then run the heavy pipeline in the background
-    // to avoid the 150s edge function idle timeout. Client already polls status + book_brief.
-    await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", itemId);
+    // Mark only fresh jobs as processing. Continuation/retry calls must not touch
+    // updated_at before they inspect book_brief, otherwise overlapping resumes can
+    // hide a legitimately active section and overwrite each other.
+    if (!continueBook && typeof retryChapterIndex !== "number") {
+      await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", itemId);
+    }
 
     const runPipeline = async () => {
     // Pre-flight: confirm the parent item still exists. The user may have deleted it
@@ -800,7 +803,16 @@ serve(async (req) => {
       return;
     }
 
-    const item = itemEarly;
+    const { data: itemCurrent } = await supabase
+      .from("knowledge_base_items")
+      .select("*")
+      .eq("id", itemId)
+      .maybeSingle();
+    if (!itemCurrent) {
+      console.log(`Item ${itemId} was deleted before processing state read — aborting pipeline.`);
+      return;
+    }
+    const item = itemCurrent;
     const MAX_CONTENT_LENGTH = 600000;
     const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
     const sourceName = item.title || "Uploaded Content";
