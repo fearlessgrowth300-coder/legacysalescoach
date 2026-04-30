@@ -30,12 +30,14 @@ const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/brain-chat`;
 
 async function streamChat({
   messages,
+  conversationId,
   onDelta,
   onDone,
   onError,
   onBrainMeta,
 }: {
   messages: { role: string; content: string | any[] }[];
+  conversationId?: string | null;
   onDelta: (text: string) => void;
   onDone: (wasTruncated: boolean) => void;
   onError: (err: string) => void;
@@ -57,7 +59,7 @@ async function streamChat({
           Authorization: `Bearer ${token}`,
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
         },
-        body: JSON.stringify({ messages }),
+        body: JSON.stringify({ messages, conversation_id: conversationId || null }),
       });
       break; // success
     } catch (networkErr) {
