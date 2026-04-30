@@ -958,6 +958,28 @@ serve(async (req) => {
           return;
         }
 
+        // Newer pipeline splits oversized parts into smaller safe sections. If an
+        // older book is mid-process with fewer giant sections, migrate its brief
+        // forward and preserve already-completed headings by title prefix.
+        if (detectedAll.length > chapters.length && chapters.length > 0) {
+          const doneOld = chapters.filter((c: any) => c.status === "done");
+          const remapped = detectedAll.map((section) => {
+            const doneMatch = doneOld.find((old: any) =>
+              section.title.toLowerCase().startsWith(String(old.title || "").toLowerCase()),
+            );
+            return doneMatch
+              ? { ...doneMatch, index: section.index, title: section.title, status: "done" as const }
+              : { index: section.index, title: section.title, one_line: "", status: "pending" as const, principle_count: 0 };
+          });
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters: remapped },
+            status: "extracting",
+          }).eq("id", itemId);
+          console.log(`Continue: migrated oversized legacy sections from ${chapters.length} to ${remapped.length}`);
+          await scheduleContinue();
+          return;
+        }
+
         // Recover stale "extracting" chapters: if a chapter has been sitting in
         // extracting state but the parent item hasn't been updated for >90s,
         // treat it as stuck (likely the previous invocation was killed mid-run)
