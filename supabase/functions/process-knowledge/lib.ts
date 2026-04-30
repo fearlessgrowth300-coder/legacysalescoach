@@ -71,6 +71,48 @@ export interface DetectedChapter {
   text: string;
 }
 
+function chunkWithOffsets(source: string, absoluteStart: number, chunkSize: number): DetectedChapter[] {
+  const chunks = chunkText(source, chunkSize);
+  const out: DetectedChapter[] = [];
+  let cursor = 0;
+  for (const text of chunks) {
+    const localStart = source.indexOf(text, cursor);
+    const safeLocalStart = localStart === -1 ? cursor : localStart;
+    const startOffset = absoluteStart + safeLocalStart;
+    const endOffset = startOffset + text.length;
+    cursor = safeLocalStart + text.length;
+    out.push({ index: out.length + 1, title: "", startOffset, endOffset, text });
+  }
+  return out;
+}
+
+export function splitLargeDetectedChapters(
+  chapters: DetectedChapter[],
+  maxSectionSize = 12000,
+): DetectedChapter[] {
+  const normalized: DetectedChapter[] = [];
+  for (const chapter of chapters) {
+    if (chapter.text.length <= maxSectionSize * 1.35) {
+      normalized.push({ ...chapter, index: normalized.length + 1 });
+      continue;
+    }
+
+    const parts = chunkWithOffsets(chapter.text, chapter.startOffset, maxSectionSize);
+    parts.forEach((part, i) => {
+      normalized.push({
+        ...part,
+        index: normalized.length + 1,
+        title: `${chapter.title} · section ${i + 1}/${parts.length}`,
+      });
+    });
+  }
+  return normalized;
+}
+
+export function prepareBookSections(content: string, fallbackChunkSize = 12000): DetectedChapter[] {
+  return splitLargeDetectedChapters(detectChapters(content, fallbackChunkSize), fallbackChunkSize);
+}
+
 // Detect chapter boundaries inside a book-like text. Falls back to size-based
 // chunking when fewer than 2 markers are found, so non-structured docs still
 // get processed correctly.
