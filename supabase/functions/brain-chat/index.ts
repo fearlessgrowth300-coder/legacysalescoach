@@ -227,6 +227,8 @@ serve(async (req) => {
 
     // ─── Step 5: Response generation ───
     const allowedIds = pipeline.selected.map((s) => s.id);
+    const primaryList = pipeline.selected.filter((s) => s.tier === "primary").map((s) => ({ id: s.id, title: s.source_title }));
+    const supportingList = pipeline.selected.filter((s) => s.tier === "supporting").map((s) => ({ id: s.id, title: s.source_title }));
     const workspaceProfile = await fetchWorkspaceProfile(supabaseAdmin, user.id);
     const recentExchanges = session.recent_exchanges
       .map((e) => `${e.role}: ${e.content}`).join("\n");
@@ -236,7 +238,8 @@ serve(async (req) => {
       chunksBlock: buildChunksBlock(pipeline.supporting_chunks),
       workspaceProfile,
       recentExchanges,
-      allowedIds,
+      primaryList,
+      supportingList,
       frameworkName: pipeline.framework_name,
     });
 
@@ -244,8 +247,9 @@ serve(async (req) => {
       method: "POST",
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
+        model: "google/gemini-3.1-pro-preview",
         max_tokens: 16000,
+        reasoning: { effort: "medium" },
         messages: [{ role: "system", content: systemPrompt }, ...validated],
         stream: true,
       }),
