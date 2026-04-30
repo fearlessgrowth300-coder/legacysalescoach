@@ -108,7 +108,7 @@ VOICE RULES — NON-NEGOTIABLE:
     const meta = {
       framework_name: pipeline.framework_name,
       selected_principles: pipeline.selected.map((s) => ({
-        id: s.id, principle_name: s.principle_name, source_title: s.source_title, source_id: s.source_id,
+        id: s.id, principle_name: s.principle_name, source_title: s.source_title, source_id: s.source_id, tier: s.tier,
       })),
       empty_vault: pipeline.debug.empty_vault,
     };
