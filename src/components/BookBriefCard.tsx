@@ -75,15 +75,22 @@ export function BookBriefCard({
 
       {/* Live banner */}
       {isLive && (
-        <div className="flex items-center gap-2 rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2">
-          <Loader2 className="h-4 w-4 animate-spin text-amber-500" />
-          <span className="text-xs sm:text-sm">
-            {status === "mapping"
-              ? "Reading the book…"
-              : totalCh > 0
-                ? `Reading chapter ${currentReadingIndex} of ${totalCh}`
-                : "Brain is now learning…"}
-          </span>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2">
+            <Loader2 className="h-4 w-4 animate-spin text-amber-500" />
+            <span className="text-xs sm:text-sm">
+              {status === "mapping"
+                ? "Reading the book…"
+                : totalCh > 0
+                  ? `Processing section ${currentReadingIndex} of ${totalCh} detected sections`
+                  : "Brain is now learning…"}
+            </span>
+          </div>
+          {status === "extracting" && totalCh > 0 && (
+            <p className="text-[11px] text-muted-foreground pl-1">
+              Sections are auto-detected from the PDF text and may not match the printed chapter count.
+            </p>
+          )}
         </div>
       )}
 

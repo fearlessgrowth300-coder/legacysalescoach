@@ -1,33 +1,29 @@
-I found the PDF is not fully failing — it has already extracted 71 principles — but it is stuck on the long book pipeline at chapter 4 (`status: extracting`). The likely cause is that the whole-book extraction is running as one long background edge task, which can be killed by runtime limits before it reaches the final `ready` update. The UI also only shows detailed progress for `processing`, not `mapping` / `extracting`, so it looks broken even when it partially worked.
+I found the actual issue: the PDF is not “still reading the whole book”; it processed chapters 1, 2, 3, and 5, but chapter 4 is stuck in `extracting` with 0 principles, so the item never flips to `ready`. The “5 chapters” label means the current chapter detector only found 5 usable sections in the extracted PDF text, not necessarily every printed chapter in the original book.
 
 Plan:
 
-1. Make PDF book processing resumable instead of one long run
-   - Change `process-knowledge` so it can process only one chapter per invocation.
-   - After a chapter finishes, update `book_brief.chapters[index].status = done` immediately.
-   - Then schedule/trigger the next chapter as a new invocation instead of relying on one background task to survive the entire book.
-   - This prevents large PDFs from getting stuck halfway because of function duration limits.
+1. Fix the stuck-state logic
+- Treat an `extracting` chapter as stale if it has been sitting too long with no new principles.
+- Automatically retry stale extracting chapters instead of letting the card spin forever.
+- Add a per-chapter timestamp/error field in `book_brief` updates so the UI can tell “actively working” vs “stuck/retrying”.
 
-2. Add stalled-chapter recovery
-   - Detect chapters left as `extracting` for too long and allow the retry path to resume from that chapter.
-   - Make the final status become `ready` when all chapters are done, or `partial_ready`/`error` only when there are real failed chapters.
-   - Ensure chapter retry updates both the chapter and parent PDF status consistently.
+2. Make chapter 4 recover safely
+- Update `retry-book-chapter` so retrying one chapter does not wait for the long main function response.
+- It should reset only that chapter to `pending`/`extracting`, invoke `process-knowledge` in continuation mode, and return immediately.
+- This prevents the retry button from hanging and prevents the whole PDF card from staying locked in loading.
 
-3. Fix the UI so PDF progress is visible
-   - Render `BookBriefCard` not only when the item is `ready`, but also while it is `mapping` or `extracting`.
-   - Show chapter-by-chapter progress directly in the knowledge-base list, so the user sees “chapter 4 of 5” instead of just a generic spinner/error icon.
-   - Update status icons so `mapping` and `extracting` show as active states, not as failures.
+3. Fix the chained invocation reliability
+- Change `scheduleContinue` to use Edge runtime background scheduling correctly so the next invocation is actually registered before the current invocation exits.
+- Add a small processing lock/attempt marker inside `book_brief` so duplicate continuations don’t process the wrong chapter out of order.
 
-4. Improve error visibility
-   - Store a short error message on the failed chapter when extraction fails.
-   - Update the Knowledge Base card to show that error and a Retry button for the stuck/failed chapter.
-   - Change the generic PDF error copy from “Try a different URL” to PDF-specific guidance.
+4. Improve chapter detection wording
+- Change the UI copy from “Reading chapter 4 of 5” to something clearer like “Processing section 4 of 5 detected sections”.
+- Add helper text explaining that sections are based on the extracted PDF text and may not equal the printed book’s chapter count.
 
-5. Add safer PDF extraction fallback
-   - Keep native text extraction for normal PDFs.
-   - If the PDF is scanned or extracts too little text, use the existing OCR fallback, but surface a clear message if OCR is unavailable or gives no text.
-   - Avoid pretending an unreadable PDF was processed successfully.
+5. Add a Resume PDF button for stuck books
+- For PDFs in `extracting` with no progress for a while, show “Resume processing” on the card.
+- That button will invoke `process-knowledge` with `continueBook: true` for the existing item, instead of remapping the whole PDF.
 
-6. Re-run/resume the current stuck PDF
-   - Use the existing retry mechanism to resume the current `The Psychology of Persuasion` upload from chapter 4 after the fix.
-   - Verify the item reaches `ready` and the extracted principles are visible in the Brain.
+6. After implementation, repair this current item
+- Trigger/resume the existing “The Psychology of Persuasion” item so chapter 4 gets retried.
+- Verify in the database that chapter 4 changes from `extracting` to either `done` with principles or `failed` with a visible error, and that the overall PDF becomes `ready` once no chapters are pending.

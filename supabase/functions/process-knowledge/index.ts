@@ -920,9 +920,43 @@ serve(async (req) => {
         const chapters: any[] = Array.isArray(brief.chapters) ? brief.chapters : [];
         const detectedAll = detectChapters(contentToProcess);
 
-        // Find next chapter that still needs work (pending OR a stale extracting).
-        const nextMeta = chapters.find((c: any) => c.status === "pending")
-          || chapters.find((c: any) => c.status === "extracting");
+        // Recover stale "extracting" chapters: if a chapter has been sitting in
+        // extracting state but the parent item hasn't been updated for >90s,
+        // treat it as stuck (likely the previous invocation was killed mid-run)
+        // and reset it to pending so we can retry it cleanly.
+        const updatedAtMs = item.updated_at ? new Date(item.updated_at).getTime() : 0;
+        const staleMs = Date.now() - updatedAtMs;
+        const STALE_THRESHOLD_MS = 90_000;
+        let workingChapters = chapters;
+        if (staleMs > STALE_THRESHOLD_MS) {
+          const recovered = chapters.map((c: any) =>
+            c.status === "extracting"
+              ? { ...c, status: "pending", error: "Previous attempt timed out — retrying" }
+              : c,
+          );
+          if (JSON.stringify(recovered) !== JSON.stringify(chapters)) {
+            console.log(`Continue: recovered stale extracting chapter(s) after ${Math.round(staleMs / 1000)}s`);
+            workingChapters = recovered;
+            await supabase.from("knowledge_base_items").update({
+              book_brief: { ...brief, chapters: recovered },
+            }).eq("id", itemId);
+            // Wipe any partial principles for the recovered chapter(s) so retry is clean.
+            for (const c of recovered) {
+              if (c.error === "Previous attempt timed out — retrying") {
+                await supabase.from("sales_brain")
+                  .delete()
+                  .eq("user_id", user.id)
+                  .eq("source_id", itemId)
+                  .filter("metadata->>chapter", "eq", String(c.index));
+              }
+            }
+          }
+        }
+
+        // Find next chapter that still needs work — prefer pending, then any
+        // remaining extracting (in-flight from a sibling invocation, very rare).
+        const nextMeta = workingChapters.find((c: any) => c.status === "pending")
+          || workingChapters.find((c: any) => c.status === "extracting");
 
         if (!nextMeta) {
           // All chapters done (or done+failed). Run connection pass and finalize.
@@ -948,7 +982,7 @@ serve(async (req) => {
             console.error("Connection pass failed (non-fatal):", connErr);
           }
 
-          const anyFailed = chapters.some((c: any) => c.status === "failed");
+          const anyFailed = workingChapters.some((c: any) => c.status === "failed");
           await supabase.from("knowledge_base_items").update({
             status: anyFailed ? "ready" : "ready",
           }).eq("id", itemId);
@@ -961,7 +995,7 @@ serve(async (req) => {
         if (!targetDetected) {
           console.error(`Continue: detected chapter not found for index ${nextMeta.index}`);
           // Mark this chapter failed so we don't loop forever.
-          const updated = chapters.map((c: any) =>
+          const updated = workingChapters.map((c: any) =>
             c.index === nextMeta.index ? { ...c, status: "failed", error: "Chapter text not found" } : c,
           );
           await supabase.from("knowledge_base_items")
@@ -971,8 +1005,9 @@ serve(async (req) => {
           return;
         }
 
-        // Mark extracting
-        const extractingChapters = chapters.map((c: any) =>
+        // Mark extracting (and bump updated_at via the touch from this update so
+        // the staleness recovery above can correctly detect long-running attempts).
+        const extractingChapters = workingChapters.map((c: any) =>
           c.index === nextMeta.index ? { ...c, status: "extracting", error: null } : c,
         );
         await supabase.from("knowledge_base_items").update({
@@ -1004,17 +1039,31 @@ serve(async (req) => {
             );
             if (stored) { storedForChapter.push(stored); storedCount++; }
           }
-          const summary = await summarizeChapter(nextMeta.title, storedForChapter, LOVABLE_API_KEY);
 
-          const doneChapters = extractingChapters.map((c: any) =>
-            c.index === nextMeta.index
-              ? { ...c, status: "done", principle_count: storedCount, summary, error: null }
-              : c,
-          );
-          await supabase.from("knowledge_base_items").update({
-            book_brief: { ...brief, chapters: doneChapters },
-          }).eq("id", itemId);
-          console.log(`Continue: chapter ${nextMeta.index} done (${storedCount} principles)`);
+          // If the AI returned zero principles for a real chapter, treat it as a
+          // failure so the user sees a Retry option instead of a silent "0 principles done".
+          if (storedCount === 0) {
+            const failChapters = extractingChapters.map((c: any) =>
+              c.index === nextMeta.index
+                ? { ...c, status: "failed", error: "AI returned no principles — try retrying this section" }
+                : c,
+            );
+            await supabase.from("knowledge_base_items").update({
+              book_brief: { ...brief, chapters: failChapters },
+            }).eq("id", itemId);
+            console.warn(`Continue: chapter ${nextMeta.index} extracted 0 principles — marked failed`);
+          } else {
+            const summary = await summarizeChapter(nextMeta.title, storedForChapter, LOVABLE_API_KEY);
+            const doneChapters = extractingChapters.map((c: any) =>
+              c.index === nextMeta.index
+                ? { ...c, status: "done", principle_count: storedCount, summary, error: null }
+                : c,
+            );
+            await supabase.from("knowledge_base_items").update({
+              book_brief: { ...brief, chapters: doneChapters },
+            }).eq("id", itemId);
+            console.log(`Continue: chapter ${nextMeta.index} done (${storedCount} principles)`);
+          }
         } catch (chapErr: any) {
           if (chapErr?.message === "PARENT_ITEM_DELETED") {
             console.log(`Item ${itemId} deleted during continue at chapter ${nextMeta.index}.`);
