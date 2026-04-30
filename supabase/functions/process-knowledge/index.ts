@@ -810,6 +810,16 @@ serve(async (req) => {
 
     if (isBook) {
       console.log(`Book pipeline starting on ${contentToProcess.length} chars`);
+      const finishBookIfComplete = async (brief: any, chapters: any[]) => {
+        const hasOpenWork = chapters.some((c: any) => c.status === "pending" || c.status === "extracting");
+        if (!hasOpenWork) {
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters },
+            status: "ready",
+          }).eq("id", itemId);
+          console.log(`Book pipeline marked ready for ${itemId}.`);
+        }
+      };
       const seenChunkContent = new Set<string>();
       const allStored: any[] = [];
 
@@ -871,7 +881,7 @@ serve(async (req) => {
             c.index === retryChapterIndex ? { ...c, status: "done", principle_count: storedCount, error: null, summary } : c,
           );
           // If any chapter still pending/extracting, keep status; else flip to ready
-          const stillPending = finalChapters.some((c: any) => c.status === "pending" || c.status === "extracting" || c.status === "failed");
+          const stillPending = finalChapters.some((c: any) => c.status === "pending" || c.status === "extracting");
           await supabase.from("knowledge_base_items").update({
             book_brief: { ...brief, chapters: finalChapters },
             status: stillPending ? "extracting" : "ready",
