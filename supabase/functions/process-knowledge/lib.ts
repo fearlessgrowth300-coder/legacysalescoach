@@ -150,21 +150,10 @@ export function detectChapters(content: string, fallbackChunkSize = 12000): Dete
 
   if (filtered.length < 2) {
     // Fallback to size-based chunks so the rest of the pipeline still works.
-    const fallback = chunkText(content, fallbackChunkSize);
-    let cursor = 0;
-    return fallback.map((text, i) => {
-      const startOffset = content.indexOf(text, cursor);
-      const safeStart = startOffset === -1 ? cursor : startOffset;
-      const endOffset = safeStart + text.length;
-      cursor = endOffset;
-      return {
-        index: i + 1,
-        title: `Chunk ${i + 1}`,
-        startOffset: safeStart,
-        endOffset,
-        text,
-      };
-    });
+    return chunkWithOffsets(content, 0, fallbackChunkSize).map((chunk, i) => ({
+      ...chunk,
+      title: `Section ${i + 1}`,
+    }));
   }
 
   const chapters: DetectedChapter[] = [];
@@ -192,15 +181,10 @@ export function detectChapters(content: string, fallbackChunkSize = 12000): Dete
   // Processing those one-by-one is slow and fragile, so prefer stable chunks.
   const tinySections = chapters.filter((c) => c.text.length < 2500).length;
   if (chapters.length > 20 && tinySections / chapters.length > 0.35) {
-    const fallback = chunkText(content, fallbackChunkSize);
-    let cursor = 0;
-    return fallback.map((text, i) => {
-      const startOffset = content.indexOf(text, cursor);
-      const safeStart = startOffset === -1 ? cursor : startOffset;
-      const endOffset = safeStart + text.length;
-      cursor = endOffset;
-      return { index: i + 1, title: `Section ${i + 1}`, startOffset: safeStart, endOffset, text };
-    });
+    return chunkWithOffsets(content, 0, fallbackChunkSize).map((chunk, i) => ({
+      ...chunk,
+      title: `Section ${i + 1}`,
+    }));
   }
 
   return chapters;
