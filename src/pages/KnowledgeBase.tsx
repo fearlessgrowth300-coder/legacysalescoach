@@ -1029,7 +1029,7 @@ export default function KnowledgeBase() {
                         <Loader2 className="h-3 w-3 animate-spin text-primary" />
                         <p className="text-xs font-medium text-muted-foreground">
                           {item.status === "mapping" ? "Mapping the book…" :
-                           item.status === "extracting" ? "Extracting principles chapter by chapter…" :
+                           item.status === "extracting" ? "Extracting principles section by section…" :
                            "Processing content — extracting knowledge..."}
                         </p>
                       </div>
@@ -1049,6 +1049,34 @@ export default function KnowledgeBase() {
                         </div>
                       )}
                       <Progress value={undefined} className="h-1.5 animate-pulse" />
+                      {/* Resume button: shows after 60s of no updates on extracting books */}
+                      {item.type === "pdf" && item.status === "extracting" && (item as any).updated_at && (
+                        (Date.now() - new Date((item as any).updated_at).getTime()) > 60_000
+                      ) && (
+                        <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2">
+                          <p className="text-xs text-muted-foreground">
+                            This book seems stuck. Resume to continue processing.
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-xs"
+                            onClick={async () => {
+                              try {
+                                await supabase.functions.invoke("process-knowledge", {
+                                  body: { itemId: item.id, type: "pdf", continueBook: true },
+                                });
+                                toast.success("Resuming processing…");
+                                queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+                              } catch (e: any) {
+                                toast.error(e.message || "Resume failed");
+                              }
+                            }}
+                          >
+                            <RefreshCw className="h-3 w-3 mr-1" /> Resume
+                          </Button>
+                        </div>
+                      )}
                       {item.type === "pdf" && (item as any).book_brief && (
                         <div className="mt-3">
                           <BookBriefCard
