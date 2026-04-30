@@ -899,16 +899,23 @@ serve(async (req) => {
       const scheduleContinue = async () => {
         try {
           const fnUrl = `${supabaseUrl}/functions/v1/process-knowledge`;
-          // Fire-and-forget — do NOT await the response, otherwise we re-enter
-          // the same wall-clock budget we are trying to escape.
-          fetch(fnUrl, {
+          // Kick the next invocation and wait only for its quick 202 acceptance.
+          // The heavy work still runs inside that fresh invocation's waitUntil,
+          // but awaiting acceptance prevents Deno from dropping fire-and-forget
+          // fetches before they leave the current runtime.
+          const res = await fetch(fnUrl, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "Authorization": `Bearer ${supabaseKey}`,
             },
             body: JSON.stringify({ itemId, type: "pdf", continueBook: true, userId: user.id }),
-          }).catch((e) => console.error("scheduleContinue fetch failed:", e));
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            console.error("scheduleContinue was not accepted:", res.status, body.substring(0, 300));
+          }
         } catch (e) {
           console.error("scheduleContinue threw:", e);
         }
