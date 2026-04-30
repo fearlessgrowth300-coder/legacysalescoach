@@ -1371,7 +1371,7 @@ async function extractPdfContent(
       return `PDF uploaded (${fileSizeMB.toFixed(2)} MB, ${pageCount} pages) but no readable text could be extracted. The file may be image-only without OCR layer, password-protected, or corrupted. Try a different copy or paste the text manually.`.padEnd(260, ' ');
     }
 
-    return finalText.substring(0, 200000);
+    return finalText.substring(0, 600000);
   } catch (e) {
     console.error("PDF processing error:", e);
     return "";
