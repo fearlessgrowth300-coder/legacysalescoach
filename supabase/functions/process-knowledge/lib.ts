@@ -82,10 +82,14 @@ export function detectChapters(content: string, fallbackChunkSize = 12000): Dete
   }
 
   // Match common chapter / part / section markers at the start of a line.
-  // Examples matched:  "Chapter 1", "CHAPTER II", "Chapter One", "Part 3",
-  // "Section 4", "1. Title", "PROLOGUE", "INTRODUCTION".
+  // Examples matched: "Chapter 1", "CHAPTER II", "Chapter One", "Part 3",
+  // "Section 4", "PROLOGUE", "INTRODUCTION".
+  // Deliberately does NOT match generic numbered list items like "1. Do this";
+  // sales PDFs often contain scripts and numbered bullets, and treating those as
+  // chapters creates fake sections that stall the book pipeline.
+  const wordNumber = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty";
   const markerRe =
-    /^(?:\s{0,4})(?:(?:chapter|chap\.?|part|section|book)\s+(?:[0-9]{1,3}|[ivxlcdm]{1,6}|[a-z]+)\b[^\n]{0,120}|(?:prologue|epilogue|introduction|foreword|preface|conclusion|afterword)\b[^\n]{0,120}|[0-9]{1,3}\.\s+[A-Z][^\n]{2,120})/gim;
+    new RegExp(`^(?:\\s{0,4})(?:(?:chapter|chap\\.?|part|section|book)\\s+(?:[0-9]{1,3}|[ivxlcdm]{1,6}|${wordNumber})\\b[^\\n]{0,120}|(?:prologue|epilogue|introduction|foreword|preface|conclusion|afterword)\\b[^\\n]{0,120})`, "gim");
 
   const matches: { offset: number; title: string }[] = [];
   let m: RegExpExecArray | null;
@@ -140,5 +144,22 @@ export function detectChapters(content: string, fallbackChunkSize = 12000): Dete
   if (chapters.length < 2) {
     return detectChapters(content, fallbackChunkSize).slice(0); // recursion-safe: marker count < 2 path
   }
+
+  // If marker extraction still produces many tiny sections, it is almost
+  // certainly reading a table of contents or outline bullets as headings.
+  // Processing those one-by-one is slow and fragile, so prefer stable chunks.
+  const tinySections = chapters.filter((c) => c.text.length < 2500).length;
+  if (chapters.length > 20 && tinySections / chapters.length > 0.35) {
+    const fallback = chunkText(content, fallbackChunkSize);
+    let cursor = 0;
+    return fallback.map((text, i) => {
+      const startOffset = content.indexOf(text, cursor);
+      const safeStart = startOffset === -1 ? cursor : startOffset;
+      const endOffset = safeStart + text.length;
+      cursor = endOffset;
+      return { index: i + 1, title: `Section ${i + 1}`, startOffset: safeStart, endOffset, text };
+    });
+  }
+
   return chapters;
 }

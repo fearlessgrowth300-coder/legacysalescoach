@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chunkText, dedupePrinciples, mapVariantToSuggestion } from "../../supabase/functions/process-knowledge/lib";
+import { chunkText, dedupePrinciples, detectChapters, mapVariantToSuggestion } from "../../supabase/functions/process-knowledge/lib";
 
 describe("chunkText (true 10k chunking)", () => {
   it("returns the whole string when shorter than chunk size", () => {
@@ -77,5 +77,18 @@ describe("mapVariantToSuggestion (citation contract)", () => {
     const s = mapVariantToSuggestion({ variant: "primary", message: "hi" });
     expect(s.citedPrincipleName).toBeNull();
     expect(s.citedSourceName).toBeNull();
+  });
+});
+
+describe("detectChapters", () => {
+  it("does not treat numbered sales bullets as separate chapters", () => {
+    const content = [
+      "CHAPTER 1: MONEY OBJECTIONS\n" + "Value frame. ".repeat(400),
+      "1. It refuses biased certainty\n" + "Bullet explanation. ".repeat(80),
+      "2. It tests urgency\n" + "Bullet explanation. ".repeat(80),
+      "CHAPTER 2: TRUST OBJECTIONS\n" + "Trust frame. ".repeat(400),
+    ].join("\n\n");
+    const out = detectChapters(content, 12000);
+    expect(out.map((c) => c.title)).toEqual(["CHAPTER 1: MONEY OBJECTIONS", "CHAPTER 2: TRUST OBJECTIONS"]);
   });
 });

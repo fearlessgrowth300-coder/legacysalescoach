@@ -899,16 +899,23 @@ serve(async (req) => {
       const scheduleContinue = async () => {
         try {
           const fnUrl = `${supabaseUrl}/functions/v1/process-knowledge`;
-          // Fire-and-forget — do NOT await the response, otherwise we re-enter
-          // the same wall-clock budget we are trying to escape.
-          fetch(fnUrl, {
+          // Kick the next invocation and wait only for its quick 202 acceptance.
+          // The heavy work still runs inside that fresh invocation's waitUntil,
+          // but awaiting acceptance prevents Deno from dropping fire-and-forget
+          // fetches before they leave the current runtime.
+          const res = await fetch(fnUrl, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "Authorization": `Bearer ${supabaseKey}`,
             },
             body: JSON.stringify({ itemId, type: "pdf", continueBook: true, userId: user.id }),
-          }).catch((e) => console.error("scheduleContinue fetch failed:", e));
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            console.error("scheduleContinue was not accepted:", res.status, body.substring(0, 300));
+          }
         } catch (e) {
           console.error("scheduleContinue threw:", e);
         }
@@ -919,6 +926,27 @@ serve(async (req) => {
         const brief: any = item.book_brief;
         const chapters: any[] = Array.isArray(brief.chapters) ? brief.chapters : [];
         const detectedAll = detectChapters(contentToProcess);
+
+        // Repair older/stalled mappings produced by the previous detector, which
+        // counted numbered bullets as chapters (for example 35 fake sections).
+        // Only do this before any section has successfully stored principles.
+        const noStoredProgress = chapters.every((c: any) => (c.principle_count || 0) === 0 && c.status !== "done");
+        if (noStoredProgress && detectedAll.length > 0 && chapters.length > detectedAll.length) {
+          const remapped = detectedAll.map((c) => ({
+            index: c.index,
+            title: c.title,
+            one_line: "",
+            status: "pending" as const,
+            principle_count: 0,
+          }));
+          await supabase.from("knowledge_base_items").update({
+            book_brief: { ...brief, chapters: remapped },
+            status: "extracting",
+          }).eq("id", itemId);
+          console.log(`Continue: remapped stale section list from ${chapters.length} to ${remapped.length}`);
+          await scheduleContinue();
+          return;
+        }
 
         // Recover stale "extracting" chapters: if a chapter has been sitting in
         // extracting state but the parent item hasn't been updated for >90s,
@@ -953,10 +981,18 @@ serve(async (req) => {
           }
         }
 
-        // Find next chapter that still needs work — prefer pending, then any
-        // remaining extracting (in-flight from a sibling invocation, very rare).
-        const nextMeta = workingChapters.find((c: any) => c.status === "pending")
-          || workingChapters.find((c: any) => c.status === "extracting");
+        // If a section is already running, do not start another one. This keeps
+        // the chained pipeline strictly one-section-at-a-time and prevents
+        // duplicate manual resumes from fighting over book_brief status.
+        const activeChapter = workingChapters.find((c: any) => c.status === "extracting");
+        if (activeChapter) {
+          console.log(`Continue: chapter ${activeChapter.index} is already extracting; waiting for that invocation.`);
+          return;
+        }
+
+        // Find next chapter that still needs work. Stale extracting chapters are
+        // reset to pending above, so pending is the only safe state to claim.
+        const nextMeta = workingChapters.find((c: any) => c.status === "pending");
 
         if (!nextMeta) {
           // All chapters done (or done+failed). Run connection pass and finalize.
