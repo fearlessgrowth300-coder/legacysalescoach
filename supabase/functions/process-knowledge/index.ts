@@ -1229,7 +1229,25 @@ serve(async (req) => {
     const bgTask = runPipeline().catch(async (error) => {
       console.error("process-knowledge background error:", error);
       try {
-        await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+        const { data: current } = await supabase
+          .from("knowledge_base_items")
+          .select("status, book_brief")
+          .eq("id", itemId)
+          .maybeSingle();
+        const chapters = Array.isArray(current?.book_brief?.chapters) ? current.book_brief.chapters : [];
+        if (current?.status === "extracting" && chapters.length > 0) {
+          const recovered = chapters.map((c: any) =>
+            c.status === "extracting"
+              ? { ...c, status: "pending", error: "Previous attempt stopped — queued to retry" }
+              : c,
+          );
+          await supabase.from("knowledge_base_items").update({
+            status: "extracting",
+            book_brief: { ...current.book_brief, chapters: recovered },
+          }).eq("id", itemId);
+        } else {
+          await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+        }
       } catch (_) { /* ignore */ }
     });
 
