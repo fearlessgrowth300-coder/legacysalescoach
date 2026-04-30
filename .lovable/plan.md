@@ -1,52 +1,56 @@
-## Diagnosis (from edge logs + DB inspection)
+## Diagnosis
 
-**Phase 1 fix is healthy.** The edge logs show:
+**The PDF pipeline itself is healthy.** Logs confirm:
+- `unpdf extracted 667828 chars from 279 pages in 1087ms` — extraction is fast
+- `Detected 5 chapter(s)` — chapter detection works
+- The previous FK-violation fix is holding (no orphan errors in the latest run)
 
-```
-unpdf extracted 667828 chars from 279 pages in 1142ms
-Detected 5 chapter(s) / chunk(s)
-```
-
-A 3.41 MB book that previously timed out at 180s now extracts in **~1 second**. The "PDF won't process" surface symptom is gone.
-
-**Real bug uncovered by the logs:**
+**The actual error you're seeing** (red icon on "Psychology of Persuasion") comes from a **truncated AI response**, not the PDF code:
 
 ```
-ERROR Insert error for principle: ... violates foreign key constraint "sales_brain_source_id_fkey"
+Pass 2 returned 0 principles. Raw AI output (first 800 chars):
+{ "principles": [ { "principle_name": "...", ...
+  "the_deep_why": "This works due to two primary psychological mechanisms: t  ← CUT OFF MID-WORD
 ```
 
-Every principle insert fails with the same FK error. The constraint is `source_id → knowledge_base_items(id) ON DELETE CASCADE`. From the timeline:
+The AI starts emitting a perfectly valid principle, then the response is cut off mid-sentence. The closing `]}` never arrives, so `parsePrinciplesJson` returns 0 even though the model was doing its job. The pipeline then "retries at 20k" — which makes the chunk **bigger**, so the truncation gets worse, not better.
 
-- 23:37:36 — first upload of "Psychology of Persuasion" booted, started extracting in the background
-- 23:38:08 — a **new** `knowledge_base_items` row was created (user re-uploaded the file after deleting the failed one)
-- 23:38:09 — second pipeline booted (the one we see succeeding at PDF extraction)
-- 23:38:27–31 — inserts arrive carrying the **old** itemId from the still-running first background task. The old parent row was cascade-deleted when the user removed the failed item, so every insert FK-fails.
+### Root cause
+`extractStructuredLearningsChunk` (line 76 in `supabase/functions/process-knowledge/index.ts`) calls Gemini Flash via the Lovable AI gateway with **no `max_tokens` set**. The gateway default for `google/gemini-2.5-flash` is ~8k output tokens. Each principle has 18 fields and ~1.5k chars of structured prose → 5 principles = ~7.5k tokens → response gets capped mid-stream on the very first principle of dense chapters.
 
-The DB confirms this: the current item row (`2713791d…`) exists fine, has zero `sales_brain` rows. The new pipeline never got past Pass 1 mapping in the second invocation either (it returned 0 principles at 10k, retried at 20k — separate Pass 2 prompt issue, secondary).
+The 800-char log is the **raw model output**, not a log truncation — the parser literally received an incomplete JSON document.
 
-So the user sees a red error icon and an empty briefing because the orphaned background task spammed FK errors and the second pipeline silently aborted on its retry.
+## Fix (small, surgical, one file)
 
-## Fix (small, surgical)
+`supabase/functions/process-knowledge/index.ts` only:
 
-**1. Treat FK violation as "parent deleted" — abort gracefully**
-In `persistLearning` (`supabase/functions/process-knowledge/index.ts` ~line 645): when the insert error message matches `foreign key constraint` or `sales_brain_source_id_fkey`, throw a `PARENT_ITEM_DELETED` sentinel error instead of logging and continuing.
+**1. Raise the output cap on the principle-extraction call** (line ~85)
+Add `max_tokens: 16000` to the Gemini Flash request body. Gemini 2.5 Flash supports up to ~64k output; 16k comfortably fits 10–15 fully-formed principles per chunk and stops the mid-sentence cuts.
 
-**2. Catch the sentinel in the two callers that run the persist loop** (Pass 2 chapter loop ~line 833 and the non-book single-chunk path ~line 991): when caught, log once and `return` from the background task. No more 100-line error spam, no more zombie writes.
+**2. Add a finish-reason log so future truncations are obvious**
+After parsing the response, read `data.choices?.[0]?.finish_reason`. If it's `"length"`, log a clear warning (`"Output truncated by token cap — raise max_tokens"`). Today this failure mode looks identical to "AI returned bad JSON," which sent us in the wrong direction.
 
-**3. Pre-flight existence check at the top of `runPipeline`**
-Before any heavy work, confirm `knowledge_base_items` still has the row for `itemId`. If not, log "item deleted before processing" and return. This catches the race where the user deletes the upload during the first 1–2 seconds.
+**3. Salvage truncated responses in the parser** (line ~224)
+When the JSON is incomplete, the brace-counter in `parsePrinciplesJson` already walks the string — extend the depth-aware object-salvage block (step 4) to also accept objects from inside an unclosed `"principles": [ ... ` array. Today step 4 only runs on top-level objects; a tiny tweak makes it salvage the 1–4 fully-formed principles that arrived before the cutoff. Net effect: even if a future chunk gets truncated, we keep the partial harvest instead of returning zero.
 
-**4. (Bonus) Pass 2 retry-at-20k issue**
-Logs also show "Pass 2 returned 0 principles. Raw AI output: { principles: [ ... " — the AI returned valid JSON with principles but the parser counted 0. Likely the JSON was truncated mid-stream at 800 chars in the log but the parser got the full payload — needs a quick check of the JSON-parse path in the Pass 2 chapter handler. Will inspect during implementation; if it's a truncation issue from token cap, raise the cap. If it's a parser strictness issue, add a permissive fallback.
+**4. Make the 10k → 20k retry actually help**
+After the changes above, the retry's job changes: it's no longer "the AI returned nothing," it's "we want a second look." Keep the retry but log clearly which path triggered it (truncation vs. genuinely empty), so we stop blaming the chunk size for what's really an output-cap problem.
 
-## Files touched
+### Files touched
+- `supabase/functions/process-knowledge/index.ts` — three edits (request body, response handling, parser salvage)
 
-- `supabase/functions/process-knowledge/index.ts` only — three small edits in `persistLearning`, the two persist-loop catch blocks, and the top of `runPipeline`. Plus the Pass 2 parse audit.
-
-No DB changes, no new dependencies, no migrations.
+No DB changes, no migrations, no new dependencies, no UI changes.
 
 ## Expected result
 
-- Re-uploading a previously-failed file no longer poisons the new pipeline with orphan inserts.
-- The "Psychology of Persuasion" upload will populate principles into the briefing card instead of showing the red error icon.
-- Logs become readable again (one "item deleted, aborting" line instead of 50 FK errors).
+- "Psychology of Persuasion" finishes with chapters showing ✅ green and real principle counts instead of 0.
+- The red error icon on the briefing card disappears.
+- Logs become diagnostic: `"finish_reason=length, raised cap recommended"` instead of mysterious "0 principles" warnings.
+- Future dense books degrade gracefully — partial extraction is now possible instead of all-or-nothing.
+
+## What I'm NOT changing
+
+- PDF extraction (`unpdf` is fine — 1s for 279 pages)
+- The FK / orphan-task abort logic (working as intended)
+- The book-skeleton (Pass 1) call — its output is small and not hitting the cap
+- Database schema, RLS, edge function config

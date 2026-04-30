@@ -189,6 +189,10 @@ Return a single JSON object with this exact shape: { "principles": [ ...principl
           },
         ],
         temperature: 0.3,
+        // Gemini Flash defaults to ~8k output tokens on the gateway, which truncates
+        // dense chapters mid-principle (each principle has 18 fields ≈ 1.5k tokens).
+        // 16k comfortably fits 10–15 fully-formed principles per chunk.
+        max_tokens: 16000,
       }),
       signal: AbortSignal.timeout(90000),
     });
@@ -201,6 +205,12 @@ Return a single JSON object with this exact shape: { "principles": [ ...principl
 
     const data = await response.json();
     const aiContent = data.choices?.[0]?.message?.content || "";
+    const finishReason = data.choices?.[0]?.finish_reason;
+    if (finishReason === "length") {
+      console.warn(
+        `Pass 2 output truncated by token cap (finish_reason=length, ${aiContent.length} chars). Salvaging partial principles via brace-counter.`,
+      );
+    }
     if (!aiContent || aiContent.length < 5) {
       console.warn("Empty AI extraction response. Full payload keys:", Object.keys(data || {}));
       return [];
@@ -208,8 +218,10 @@ Return a single JSON object with this exact shape: { "principles": [ ...principl
     const parsed = parsePrinciplesJson(aiContent);
     if (parsed.length === 0) {
       console.warn(
-        `Pass 2 returned 0 principles. Raw AI output (first 800 chars): ${aiContent.substring(0, 800)}`,
+        `Pass 2 returned 0 principles (finish_reason=${finishReason}). Raw AI output (first 800 chars): ${aiContent.substring(0, 800)}`,
       );
+    } else if (finishReason === "length") {
+      console.log(`Pass 2 salvaged ${parsed.length} principles from truncated output.`);
     }
     return parsed;
   } catch (e) {
@@ -285,12 +297,16 @@ function parsePrinciplesJson(raw: string): any[] {
     }
   }
 
-  // 4. Salvage individual top-level JSON objects (depth-aware)
+  // 4. Salvage principle objects from anywhere in the buffer (depth-aware).
+  // CRITICAL: when the model returns `{ "principles": [ {...}, {...}, ...truncated` the
+  // outer wrapper `{` never closes, so depth-0-only salvage finds nothing. We track
+  // the start of EVERY balanced `{...}` regardless of nesting depth, then keep the
+  // ones that look like principles. Works for both wrapper-truncated and
+  // wrapper-less responses.
   const objects: any[] = [];
-  let depth = 0;
+  const starts: number[] = []; // stack of `{` positions
   let inStr = false;
   let escape = false;
-  let objStart = -1;
   for (let i = 0; i < cleaned.length; i++) {
     const ch = cleaned[i];
     if (escape) { escape = false; continue; }
@@ -298,20 +314,17 @@ function parsePrinciplesJson(raw: string): any[] {
     if (ch === '"') { inStr = !inStr; continue; }
     if (inStr) continue;
     if (ch === "{") {
-      if (depth === 0) objStart = i;
-      depth++;
+      starts.push(i);
     } else if (ch === "}") {
-      depth--;
-      if (depth === 0 && objStart !== -1) {
-        const candidate = cleaned.substring(objStart, i + 1);
-        try {
-          const v = JSON.parse(candidate);
-          if (v && typeof v === "object" && (v.principle_name || v.what_i_learned)) {
-            objects.push(v);
-          }
-        } catch { /* skip */ }
-        objStart = -1;
-      }
+      const start = starts.pop();
+      if (start === undefined) continue;
+      const candidate = cleaned.substring(start, i + 1);
+      try {
+        const v = JSON.parse(candidate);
+        if (v && typeof v === "object" && !Array.isArray(v) && (v.principle_name || v.what_i_learned)) {
+          objects.push(v);
+        }
+      } catch { /* skip */ }
     }
   }
   if (objects.length > 0) {
