@@ -695,7 +695,7 @@ serve(async (req) => {
   }
 
   try {
-    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex, userId: bodyUserId } = await req.json();
+    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex, continueBook, userId: bodyUserId } = await req.json();
 
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
