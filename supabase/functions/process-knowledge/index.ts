@@ -1098,6 +1098,7 @@ serve(async (req) => {
               book_brief: { ...brief, chapters: failChapters },
             }).eq("id", itemId);
             console.warn(`Continue: chapter ${nextMeta.index} extracted 0 principles — marked failed`);
+            await finishBookIfComplete(brief, failChapters);
           } else {
             const summary = await summarizeChapter(nextMeta.title, storedForChapter, LOVABLE_API_KEY);
             const doneChapters = extractingChapters.map((c: any) =>
@@ -1109,6 +1110,7 @@ serve(async (req) => {
               book_brief: { ...brief, chapters: doneChapters },
             }).eq("id", itemId);
             console.log(`Continue: chapter ${nextMeta.index} done (${storedCount} principles)`);
+            await finishBookIfComplete(brief, doneChapters);
           }
         } catch (chapErr: any) {
           if (chapErr?.message === "PARENT_ITEM_DELETED") {
@@ -1124,6 +1126,7 @@ serve(async (req) => {
           await supabase.from("knowledge_base_items").update({
             book_brief: { ...brief, chapters: failChapters },
           }).eq("id", itemId);
+          await finishBookIfComplete(brief, failChapters);
         }
 
         // Schedule next chapter (or finalize) in a fresh invocation.
