@@ -273,6 +273,7 @@ serve(async (req) => {
         source_url: s.source_url,
         source_type: s.source_type,
         why_relevant: s.why_relevant,
+        tier: s.tier,
       })),
       framework_name: pipeline.framework_name,
       contradictions: pipeline.contradictions,
