@@ -308,6 +308,8 @@ export default function AiChat() {
         image_url: m.image_url,
         is_edited: m.is_edited,
         is_pinned: m.is_pinned,
+        selected_principles: m.metadata?.selected_principles || undefined,
+        framework_name: m.metadata?.framework_name || undefined,
       }));
       // Resolve signed URLs for images
       const withSignedUrls = await Promise.all(
@@ -719,18 +721,24 @@ export default function AiChat() {
       });
     };
 
+    let lastBrainMeta: any = null;
     try {
       await streamChat({
         messages: aiMessages,
+        conversationId: convId,
         onDelta: upsert,
         onBrainMeta: (meta) => {
-          if (meta.brainRetrieval) {
-            setRetrievalStats(meta.brainRetrieval);
-            if (meta.brainRetrieval.chunksRetrieved > 0) {
-              const sources = (meta.brainRetrieval.sources || []).join(", ") || "brain";
-              toast.info(`🧠 Pulled from brain: ${meta.brainRetrieval.chunksRetrieved} chunks | Sources: ${sources}`, { duration: 4000 });
-            }
+          lastBrainMeta = meta;
+          if (meta.selected_principles) {
+            setMessages(prev => {
+              const last = prev[prev.length - 1];
+              if (last?.role === "assistant") {
+                return prev.map((m, i) => i === prev.length - 1 ? { ...m, selected_principles: meta.selected_principles, framework_name: meta.framework_name } : m);
+              }
+              return [...prev, { role: "assistant", content: "", selected_principles: meta.selected_principles, framework_name: meta.framework_name }];
+            });
           }
+          if (meta.brainRetrieval) setRetrievalStats(meta.brainRetrieval);
         },
         onDone: async (truncated: boolean) => {
           setIsLoading(false);
@@ -742,7 +750,8 @@ export default function AiChat() {
           if (assistantSoFar && convId) {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: convId, user_id: user!.id, role: "assistant", content: assistantSoFar,
-            });
+              metadata: lastBrainMeta ? { selected_principles: lastBrainMeta.selected_principles || [], framework_name: lastBrainMeta.framework_name || "", empty_vault: !!lastBrainMeta.empty_vault } : {},
+            } as any);
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
@@ -880,17 +889,20 @@ export default function AiChat() {
       });
     };
 
+    let lastBrainMeta2: any = null;
     try {
       await streamChat({
         messages: aiMessages,
+        conversationId: activeConvId,
         onDelta: upsert,
         onBrainMeta: (meta) => {
-          if (meta.brainRetrieval) {
-            setRetrievalStats(meta.brainRetrieval);
-            if (meta.brainRetrieval.chunksRetrieved > 0) {
-              const sources = (meta.brainRetrieval.sources || []).join(", ") || "brain";
-              toast.info(`🧠 Pulled from brain: ${meta.brainRetrieval.chunksRetrieved} chunks | Sources: ${sources}`, { duration: 4000 });
-            }
+          lastBrainMeta2 = meta;
+          if (meta.selected_principles) {
+            setMessages(prev => {
+              const last = prev[prev.length - 1];
+              if (last?.role === "assistant") return prev.map((m, i) => i === prev.length - 1 ? { ...m, selected_principles: meta.selected_principles, framework_name: meta.framework_name } : m);
+              return [...prev, { role: "assistant", content: "", selected_principles: meta.selected_principles, framework_name: meta.framework_name }];
+            });
           }
         },
         onDone: async (truncated: boolean) => {
@@ -900,7 +912,8 @@ export default function AiChat() {
           if (assistantSoFar && activeConvId) {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: activeConvId, user_id: user!.id, role: "assistant", content: assistantSoFar,
-            });
+              metadata: lastBrainMeta2 ? { selected_principles: lastBrainMeta2.selected_principles || [], framework_name: lastBrainMeta2.framework_name || "", empty_vault: !!lastBrainMeta2.empty_vault } : {},
+            } as any);
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
@@ -1277,9 +1290,7 @@ export default function AiChat() {
                   ) : (
                     <>
                       {msg.role === "assistant" ? (
-                        <div className="prose prose-sm dark:prose-invert max-w-full break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                          <ReactMarkdown>{msg.content}</ReactMarkdown>
-                        </div>
+                        <BrainCitations content={msg.content} selectedPrinciples={msg.selected_principles} frameworkName={msg.framework_name} />
                       ) : (
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                       )}
