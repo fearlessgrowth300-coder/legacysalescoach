@@ -981,18 +981,20 @@ serve(async (req) => {
           }
         }
 
-        // Find next chapter that still needs work. Do not pick a fresh
-        // `extracting` chapter unless it has gone stale and was reset above;
-        // otherwise manual resume / duplicate invocations can process the same
-        // section twice and fight over status updates.
+        // If a section is already running, do not start another one. This keeps
+        // the chained pipeline strictly one-section-at-a-time and prevents
+        // duplicate manual resumes from fighting over book_brief status.
+        const activeChapter = workingChapters.find((c: any) => c.status === "extracting");
+        if (activeChapter) {
+          console.log(`Continue: chapter ${activeChapter.index} is already extracting; waiting for that invocation.`);
+          return;
+        }
+
+        // Find next chapter that still needs work. Stale extracting chapters are
+        // reset to pending above, so pending is the only safe state to claim.
         const nextMeta = workingChapters.find((c: any) => c.status === "pending");
 
         if (!nextMeta) {
-          const active = workingChapters.find((c: any) => c.status === "extracting");
-          if (active) {
-            console.log(`Continue: chapter ${active.index} is already extracting; not starting a duplicate.`);
-            return;
-          }
           // All chapters done (or done+failed). Run connection pass and finalize.
           try {
             const { data: stored } = await supabase
