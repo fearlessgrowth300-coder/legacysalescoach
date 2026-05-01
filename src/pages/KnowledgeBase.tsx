@@ -426,6 +426,10 @@ export default function KnowledgeBase() {
 
   const deleteItem = useMutation({
     mutationFn: async (id: string) => {
+      const item = items?.find((i: any) => i.id === id);
+      if (item?.file_path) {
+        await supabase.storage.from("knowledge-files").remove([item.file_path, `${item.file_path}.txt`]);
+      }
       const { error } = await supabase.from("knowledge_base_items").delete().eq("id", id);
       if (error) throw error;
     },
@@ -484,6 +488,11 @@ export default function KnowledgeBase() {
       const body: any = { itemId: item.id, type: item.type };
       if (item.type === "pdf" && item.file_path) {
         body.filePath = item.file_path;
+        const { data: extractedTextFile } = await supabase.storage
+          .from("knowledge-files")
+          .download(`${item.file_path}.txt`);
+        const extractedText = extractedTextFile ? await extractedTextFile.text() : "";
+        if (extractedText.length >= 100) body.manualTranscript = extractedText;
       } else if (item.url) {
         body.url = item.url;
       }
