@@ -20,6 +20,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { BrainInsightCard } from "@/components/BrainInsightCard";
 import { BookBriefCard } from "@/components/BookBriefCard";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 type UrlPreview = {
   type: "youtube" | "instagram" | "webpage";
@@ -165,6 +169,27 @@ export default function KnowledgeBase() {
     return msg;
   };
 
+  const extractPdfTextInBrowser = async (file: File, onProgress?: (percent: number) => void) => {
+    const buffer = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data: buffer });
+    const pdf = await loadingTask.promise;
+    const pages: string[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+      const page = await pdf.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: any) => (typeof item?.str === "string" ? item.str : ""))
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (pageText) pages.push(`=== Page ${pageNumber} ===\n${pageText}`);
+      onProgress?.(Math.min(45, 10 + Math.round((pageNumber / pdf.numPages) * 35)));
+    }
+
+    return pages.join("\n\n").substring(0, 600000);
+  };
+
   const addUrl = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.from("knowledge_base_items").insert({
@@ -206,7 +231,17 @@ export default function KnowledgeBase() {
     mutationFn: async () => {
       if (!pdfFile) throw new Error("No file selected");
 
-      setPdfProgress({ step: "Uploading file...", percent: 10 });
+      setPdfProgress({ step: "Reading PDF text...", percent: 10 });
+      let browserExtractedText = "";
+      try {
+        browserExtractedText = await extractPdfTextInBrowser(pdfFile, (percent) => {
+          setPdfProgress({ step: "Reading PDF text...", percent });
+        });
+      } catch (e) {
+        console.warn("Browser PDF text extraction failed; backend will try fallback", e);
+      }
+
+      setPdfProgress({ step: "Uploading file...", percent: 50 });
       const filePath = `${user!.id}/${Date.now()}-${pdfFile.name}`;
       const uploadResult = await runWithRetry(
         () => supabase.storage.from("knowledge-files").upload(filePath, pdfFile),
@@ -215,7 +250,15 @@ export default function KnowledgeBase() {
       );
       if (uploadResult.error) throw uploadResult.error;
 
-      setPdfProgress({ step: "Creating record...", percent: 25 });
+      if (browserExtractedText.length >= 100) {
+        await supabase.storage.from("knowledge-files").upload(
+          `${filePath}.txt`,
+          new Blob([browserExtractedText], { type: "text/plain;charset=utf-8" }),
+          { upsert: true, contentType: "text/plain;charset=utf-8" },
+        );
+      }
+
+      setPdfProgress({ step: "Creating record...", percent: 65 });
       const insertResult = await runWithRetry(
         () => supabase.from("knowledge_base_items").insert({
           user_id: user!.id,
@@ -231,12 +274,17 @@ export default function KnowledgeBase() {
       if (insertResult.error) throw insertResult.error;
       const data = insertResult.data;
 
-      setPdfProgress({ step: "Processing PDF in background...", percent: 50 });
+      setPdfProgress({ step: "Processing PDF in background...", percent: 80 });
 
       // Fire processing in background (with one retry for transient network issues)
       void runWithRetry(
         () => supabase.functions.invoke("process-knowledge", {
-          body: { itemId: data.id, type: "pdf", filePath },
+          body: {
+            itemId: data.id,
+            type: "pdf",
+            filePath,
+            manualTranscript: browserExtractedText.length >= 100 ? browserExtractedText : undefined,
+          },
         }),
         1,
         1200
@@ -378,6 +426,10 @@ export default function KnowledgeBase() {
 
   const deleteItem = useMutation({
     mutationFn: async (id: string) => {
+      const item = items?.find((i: any) => i.id === id);
+      if (item?.file_path) {
+        await supabase.storage.from("knowledge-files").remove([item.file_path, `${item.file_path}.txt`]);
+      }
       const { error } = await supabase.from("knowledge_base_items").delete().eq("id", id);
       if (error) throw error;
     },
@@ -398,7 +450,9 @@ export default function KnowledgeBase() {
         .select("id, file_path")
         .eq("user_id", user.id);
 
-      const filePaths = (allItems || []).map((i: any) => i.file_path).filter(Boolean);
+      const filePaths = (allItems || [])
+        .flatMap((i: any) => i.file_path ? [i.file_path, `${i.file_path}.txt`] : [])
+        .filter(Boolean);
       if (filePaths.length > 0) {
         await supabase.storage.from("knowledge-files").remove(filePaths);
       }
@@ -434,6 +488,11 @@ export default function KnowledgeBase() {
       const body: any = { itemId: item.id, type: item.type };
       if (item.type === "pdf" && item.file_path) {
         body.filePath = item.file_path;
+        const { data: extractedTextFile } = await supabase.storage
+          .from("knowledge-files")
+          .download(`${item.file_path}.txt`);
+        const extractedText = extractedTextFile ? await extractedTextFile.text() : "";
+        if (extractedText.length >= 100) body.manualTranscript = extractedText;
       } else if (item.url) {
         body.url = item.url;
       }
