@@ -1136,10 +1136,14 @@ serve(async (req) => {
         const extractingChapters = workingChapters.map((c: any) =>
           c.index === nextMeta.index ? { ...c, status: "extracting", error: null } : c,
         );
-        await supabase.from("knowledge_base_items").update({
+        const claim = await supabase.from("knowledge_base_items").update({
           book_brief: { ...brief, chapters: extractingChapters },
           status: "extracting",
-        }).eq("id", itemId);
+        }).eq("id", itemId).eq("updated_at", item.updated_at).select("id");
+        if (!claim.data || claim.data.length === 0) {
+          console.log(`Continue: chapter ${nextMeta.index} claim skipped because another invocation updated the book first.`);
+          return;
+        }
 
         try {
           const principles = await extractChapterWithFallback(
