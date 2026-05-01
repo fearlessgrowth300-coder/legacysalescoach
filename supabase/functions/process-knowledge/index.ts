@@ -1348,6 +1348,24 @@ async function extractPdfContent(
 ): Promise<string> {
   // See pdf-extract.ts for the architectural rationale (unpdf > Gemini-as-PDF-reader > pdf-parse).
   try {
+    // Preferred path: the browser extracts text while uploading and stores a
+    // sidecar .txt file. This avoids doing CPU/memory-heavy PDF parsing in the
+    // edge runtime on every chained chapter invocation.
+    try {
+      const { data: textSidecar } = await supabase.storage
+        .from("knowledge-files")
+        .download(`${filePath}.txt`);
+      if (textSidecar) {
+        const sidecarText = (await textSidecar.text()).trim();
+        if (sidecarText.length >= 100) {
+          console.log(`Using browser-extracted PDF text sidecar (${sidecarText.length} chars)`);
+          return sidecarText.substring(0, 600000);
+        }
+      }
+    } catch (sidecarErr) {
+      console.warn("No PDF text sidecar found; falling back to backend extraction", sidecarErr);
+    }
+
     const { data: fileData, error: fileError } = await supabase.storage
       .from("knowledge-files")
       .download(filePath);
