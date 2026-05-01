@@ -250,6 +250,14 @@ export default function KnowledgeBase() {
       );
       if (uploadResult.error) throw uploadResult.error;
 
+      if (browserExtractedText.length >= 100) {
+        await supabase.storage.from("knowledge-files").upload(
+          `${filePath}.txt`,
+          new Blob([browserExtractedText], { type: "text/plain;charset=utf-8" }),
+          { upsert: true, contentType: "text/plain;charset=utf-8" },
+        );
+      }
+
       setPdfProgress({ step: "Creating record...", percent: 65 });
       const insertResult = await runWithRetry(
         () => supabase.from("knowledge_base_items").insert({
@@ -438,7 +446,9 @@ export default function KnowledgeBase() {
         .select("id, file_path")
         .eq("user_id", user.id);
 
-      const filePaths = (allItems || []).map((i: any) => i.file_path).filter(Boolean);
+      const filePaths = (allItems || [])
+        .flatMap((i: any) => i.file_path ? [i.file_path, `${i.file_path}.txt`] : [])
+        .filter(Boolean);
       if (filePaths.length > 0) {
         await supabase.storage.from("knowledge-files").remove(filePaths);
       }
