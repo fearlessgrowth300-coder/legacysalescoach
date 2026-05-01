@@ -441,6 +441,39 @@ Rules:
   }
 }
 
+async function extractBookLearningsChunk(
+  content: string,
+  sourceName: string,
+  chapterTitle: string,
+  apiKey: string,
+  chunkIndex: number,
+  totalChunks: number,
+): Promise<any[]> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash-lite",
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: `Extract concise sales learnings from this book section. Return JSON only: {"principles":[{"principle_name":"","category":"Mindset|Prospecting|Opening|Trust Building|Objection Handling|Closing|Follow Up|Leadership|Script|Warning|Framework|Psychology","what_i_learned":"1-2 clear sentences","the_deep_why":"1 sentence psychology","how_to_apply":"2-3 practical steps","exact_words_to_use":"spoken script if useful","when_to_use":"specific trigger situation","trigger_phrases":"3-5 comma-separated phrases","power_level":7}]}. Return 3-5 principles maximum. Prefer fewer complete items over many slow items.` },
+          { role: "user", content: `Book: ${sourceName}\nChapter: ${chapterTitle}\nPart: ${chunkIndex + 1}/${totalChunks}\n\n${content}` },
+        ],
+        temperature: 0.2,
+        max_tokens: 4500,
+      }),
+      signal: AbortSignal.timeout(22000),
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return parsePrinciplesJson(data.choices?.[0]?.message?.content || "");
+  } catch (e) {
+    console.error("Book chunk extraction failed fast:", e);
+    return [];
+  }
+}
+
 // ===== BOOK PIPELINE: Pass 2 (chapter-aware extraction for one chapter) =====
 async function extractChapterPrinciples(
   chapter: DetectedChapter,
