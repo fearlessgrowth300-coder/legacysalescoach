@@ -20,6 +20,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { BrainInsightCard } from "@/components/BrainInsightCard";
 import { BookBriefCard } from "@/components/BookBriefCard";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 type UrlPreview = {
   type: "youtube" | "instagram" | "webpage";
@@ -163,6 +167,27 @@ export default function KnowledgeBase() {
       return "Network error while uploading. Please retry on a stable connection.";
     }
     return msg;
+  };
+
+  const extractPdfTextInBrowser = async (file: File, onProgress?: (percent: number) => void) => {
+    const buffer = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data: buffer });
+    const pdf = await loadingTask.promise;
+    const pages: string[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+      const page = await pdf.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: any) => (typeof item?.str === "string" ? item.str : ""))
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (pageText) pages.push(`=== Page ${pageNumber} ===\n${pageText}`);
+      onProgress?.(Math.min(45, 10 + Math.round((pageNumber / pdf.numPages) * 35)));
+    }
+
+    return pages.join("\n\n").substring(0, 600000);
   };
 
   const addUrl = useMutation({
