@@ -448,7 +448,7 @@ async function extractChapterPrinciples(
   chapterContext: { title: string; one_line?: string },
   sourceName: string,
   apiKey: string,
-  chunkSize = 10000,
+  chunkSize = 6000,
 ): Promise<any[]> {
   const subChunks = chunkText(chapter.text, chunkSize);
   const all: any[] = [];
@@ -471,14 +471,15 @@ ${subChunks[i]}`;
       apiKey,
       i,
       subChunks.length,
+      { timeoutMs: 45000, maxTokens: 8000, maxPrinciples: 8 },
     );
     all.push(...learnings);
   }
   return dedupePrinciples(all);
 }
 
-// Try chapter at default size; if it returns 0 or throws, retry once with a larger
-// chunk size so the model sees more context per call.
+// Try chapter with small bounded chunks; if one call times out, retry with even
+// smaller chunks so hard PDF sections fail soft instead of wedging the whole book.
 async function extractChapterWithFallback(
   chapter: DetectedChapter,
   bookContext: { title?: string; author?: string; core_system?: string; what_this_book_teaches?: string },
@@ -488,15 +489,15 @@ async function extractChapterWithFallback(
 ): Promise<any[]> {
   try {
     const first = await extractChapterPrinciples(
-      chapter, bookContext, chapterContext, sourceName, apiKey, 10000,
+      chapter, bookContext, chapterContext, sourceName, apiKey, 6000,
     );
     if (first.length > 0) return first;
-    console.warn(`Chapter ${chapter.index} returned 0 principles at 10k — retrying at 20k`);
+    console.warn(`Chapter ${chapter.index} returned 0 principles at 6k — retrying at 3.5k`);
   } catch (e: any) {
-    console.warn(`Chapter ${chapter.index} failed at 10k (${e?.message}) — retrying at 20k`);
+    console.warn(`Chapter ${chapter.index} failed at 6k (${e?.message}) — retrying at 3.5k`);
   }
   return await extractChapterPrinciples(
-    chapter, bookContext, chapterContext, sourceName, apiKey, 20000,
+    chapter, bookContext, chapterContext, sourceName, apiKey, 3500,
   );
 }
 
