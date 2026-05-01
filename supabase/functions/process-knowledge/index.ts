@@ -73,9 +73,17 @@ RULES:
 }
 
 // ===== STRUCTURED LEARNINGS EXTRACTION =====
-async function extractStructuredLearningsChunk(content: string, sourceName: string, apiKey: string, chunkIndex: number, totalChunks: number): Promise<any[]> {
+async function extractStructuredLearningsChunk(
+  content: string,
+  sourceName: string,
+  apiKey: string,
+  chunkIndex: number,
+  totalChunks: number,
+  options: { timeoutMs?: number; maxTokens?: number; maxPrinciples?: number } = {},
+): Promise<any[]> {
   try {
     const chunkLabel = totalChunks > 1 ? ` (Part ${chunkIndex + 1}/${totalChunks})` : "";
+    const maxPrinciples = options.maxPrinciples ?? 12;
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -92,7 +100,7 @@ async function extractStructuredLearningsChunk(content: string, sourceName: stri
 
 You will be given a TRANSCRIPT CHUNK from a video or document.
 
-Extract every single distinct learning. There is no limit. If the chunk has 40 learnings, extract all 40. Miss nothing.
+Extract the highest-value distinct learnings from this chunk. Return at most ${maxPrinciples} principles. Prioritize actionable scripts, warnings, frameworks, psychology, and prospecting moves over repeated ideas.
 
 For EVERY learning you extract, return it in this exact JSON structure:
 
@@ -181,7 +189,7 @@ EXTRACTION RULES:
 
 ---
 
-Return a single JSON object with this exact shape: { "principles": [ ...principle objects... ] }. No extra text. No markdown. No code fences. Always include the "principles" key even if you only extract one item. Extract as many principles as the chunk supports — minimum 5, no upper limit.`,
+Return a single JSON object with this exact shape: { "principles": [ ...principle objects... ] }. No extra text. No markdown. No code fences. Always include the "principles" key even if you only extract one item. Extract 3-${maxPrinciples} strong principles; do not exceed ${maxPrinciples}.`,
           },
           {
             role: "user",
@@ -189,12 +197,11 @@ Return a single JSON object with this exact shape: { "principles": [ ...principl
           },
         ],
         temperature: 0.3,
-        // Gemini Flash defaults to ~8k output tokens on the gateway, which truncates
-        // dense chapters mid-principle (each principle has 18 fields ≈ 1.5k tokens).
-        // 16k comfortably fits 10–15 fully-formed principles per chunk.
-        max_tokens: 16000,
+        // Keep output bounded so one difficult PDF chapter cannot outlive the
+        // Edge background-task wall clock and leave the book stuck in extracting.
+        max_tokens: options.maxTokens ?? 8000,
       }),
-      signal: AbortSignal.timeout(90000),
+      signal: AbortSignal.timeout(options.timeoutMs ?? 45000),
     });
 
     if (!response.ok) {
@@ -434,6 +441,39 @@ Rules:
   }
 }
 
+async function extractBookLearningsChunk(
+  content: string,
+  sourceName: string,
+  chapterTitle: string,
+  apiKey: string,
+  chunkIndex: number,
+  totalChunks: number,
+): Promise<any[]> {
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash-lite",
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: `Extract concise sales learnings from this book section. Return JSON only: {"principles":[{"principle_name":"","category":"Mindset|Prospecting|Opening|Trust Building|Objection Handling|Closing|Follow Up|Leadership|Script|Warning|Framework|Psychology","what_i_learned":"1-2 clear sentences","the_deep_why":"1 sentence psychology","how_to_apply":"2-3 practical steps","exact_words_to_use":"spoken script if useful","when_to_use":"specific trigger situation","trigger_phrases":"3-5 comma-separated phrases","power_level":7}]}. Return 3-5 principles maximum. Prefer fewer complete items over many slow items.` },
+          { role: "user", content: `Book: ${sourceName}\nChapter: ${chapterTitle}\nPart: ${chunkIndex + 1}/${totalChunks}\n\n${content}` },
+        ],
+        temperature: 0.2,
+        max_tokens: 4500,
+      }),
+      signal: AbortSignal.timeout(22000),
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return parsePrinciplesJson(data.choices?.[0]?.message?.content || "");
+  } catch (e) {
+    console.error("Book chunk extraction failed fast:", e);
+    return [];
+  }
+}
+
 // ===== BOOK PIPELINE: Pass 2 (chapter-aware extraction for one chapter) =====
 async function extractChapterPrinciples(
   chapter: DetectedChapter,
@@ -441,11 +481,16 @@ async function extractChapterPrinciples(
   chapterContext: { title: string; one_line?: string },
   sourceName: string,
   apiKey: string,
-  chunkSize = 10000,
+  chunkSize = 6000,
 ): Promise<any[]> {
   const subChunks = chunkText(chapter.text, chunkSize);
   const all: any[] = [];
+  const deadlineMs = Date.now() + 95_000;
   for (let i = 0; i < subChunks.length; i++) {
+    if (Date.now() > deadlineMs) {
+      console.warn(`Chapter ${chapter.index} hit time budget after ${i}/${subChunks.length} subchunks; continuing with ${all.length} principles`);
+      break;
+    }
     const wrapped = `=== BOOK CONTEXT ===
 Title: ${bookContext.title || "Unknown"}
 Author: ${bookContext.author || "Unknown"}
@@ -458,9 +503,10 @@ Role in system: ${chapterContext.one_line || "n/a"}
 
 === CHAPTER TEXT ===
 ${subChunks[i]}`;
-    const learnings = await extractStructuredLearningsChunk(
+    const learnings = await extractBookLearningsChunk(
       wrapped,
-      `${sourceName} — ${chapterContext.title}`,
+      sourceName,
+      chapterContext.title,
       apiKey,
       i,
       subChunks.length,
@@ -470,8 +516,8 @@ ${subChunks[i]}`;
   return dedupePrinciples(all);
 }
 
-// Try chapter at default size; if it returns 0 or throws, retry once with a larger
-// chunk size so the model sees more context per call.
+// Try chapter with small bounded chunks; if one call times out, retry with even
+// smaller chunks so hard PDF sections fail soft instead of wedging the whole book.
 async function extractChapterWithFallback(
   chapter: DetectedChapter,
   bookContext: { title?: string; author?: string; core_system?: string; what_this_book_teaches?: string },
@@ -481,15 +527,15 @@ async function extractChapterWithFallback(
 ): Promise<any[]> {
   try {
     const first = await extractChapterPrinciples(
-      chapter, bookContext, chapterContext, sourceName, apiKey, 10000,
+      chapter, bookContext, chapterContext, sourceName, apiKey, 6000,
     );
     if (first.length > 0) return first;
-    console.warn(`Chapter ${chapter.index} returned 0 principles at 10k — retrying at 20k`);
+    console.warn(`Chapter ${chapter.index} returned 0 principles at 6k — retrying at 3.5k`);
   } catch (e: any) {
-    console.warn(`Chapter ${chapter.index} failed at 10k (${e?.message}) — retrying at 20k`);
+    console.warn(`Chapter ${chapter.index} failed at 6k (${e?.message}) — retrying at 3.5k`);
   }
   return await extractChapterPrinciples(
-    chapter, bookContext, chapterContext, sourceName, apiKey, 20000,
+    chapter, bookContext, chapterContext, sourceName, apiKey, 3500,
   );
 }
 
@@ -1090,10 +1136,14 @@ serve(async (req) => {
         const extractingChapters = workingChapters.map((c: any) =>
           c.index === nextMeta.index ? { ...c, status: "extracting", error: null } : c,
         );
-        await supabase.from("knowledge_base_items").update({
+        const claim = await supabase.from("knowledge_base_items").update({
           book_brief: { ...brief, chapters: extractingChapters },
           status: "extracting",
-        }).eq("id", itemId);
+        }).eq("id", itemId).eq("updated_at", item.updated_at).select("id");
+        if (!claim.data || claim.data.length === 0) {
+          console.log(`Continue: chapter ${nextMeta.index} claim skipped because another invocation updated the book first.`);
+          return;
+        }
 
         try {
           const principles = await extractChapterWithFallback(
