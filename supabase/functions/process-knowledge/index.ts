@@ -73,9 +73,17 @@ RULES:
 }
 
 // ===== STRUCTURED LEARNINGS EXTRACTION =====
-async function extractStructuredLearningsChunk(content: string, sourceName: string, apiKey: string, chunkIndex: number, totalChunks: number): Promise<any[]> {
+async function extractStructuredLearningsChunk(
+  content: string,
+  sourceName: string,
+  apiKey: string,
+  chunkIndex: number,
+  totalChunks: number,
+  options: { timeoutMs?: number; maxTokens?: number; maxPrinciples?: number } = {},
+): Promise<any[]> {
   try {
     const chunkLabel = totalChunks > 1 ? ` (Part ${chunkIndex + 1}/${totalChunks})` : "";
+    const maxPrinciples = options.maxPrinciples ?? 12;
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -92,7 +100,7 @@ async function extractStructuredLearningsChunk(content: string, sourceName: stri
 
 You will be given a TRANSCRIPT CHUNK from a video or document.
 
-Extract every single distinct learning. There is no limit. If the chunk has 40 learnings, extract all 40. Miss nothing.
+Extract the highest-value distinct learnings from this chunk. Return at most ${maxPrinciples} principles. Prioritize actionable scripts, warnings, frameworks, psychology, and prospecting moves over repeated ideas.
 
 For EVERY learning you extract, return it in this exact JSON structure:
 
@@ -181,7 +189,7 @@ EXTRACTION RULES:
 
 ---
 
-Return a single JSON object with this exact shape: { "principles": [ ...principle objects... ] }. No extra text. No markdown. No code fences. Always include the "principles" key even if you only extract one item. Extract as many principles as the chunk supports — minimum 5, no upper limit.`,
+Return a single JSON object with this exact shape: { "principles": [ ...principle objects... ] }. No extra text. No markdown. No code fences. Always include the "principles" key even if you only extract one item. Extract 3-${maxPrinciples} strong principles; do not exceed ${maxPrinciples}.`,
           },
           {
             role: "user",
@@ -189,12 +197,11 @@ Return a single JSON object with this exact shape: { "principles": [ ...principl
           },
         ],
         temperature: 0.3,
-        // Gemini Flash defaults to ~8k output tokens on the gateway, which truncates
-        // dense chapters mid-principle (each principle has 18 fields ≈ 1.5k tokens).
-        // 16k comfortably fits 10–15 fully-formed principles per chunk.
-        max_tokens: 16000,
+        // Keep output bounded so one difficult PDF chapter cannot outlive the
+        // Edge background-task wall clock and leave the book stuck in extracting.
+        max_tokens: options.maxTokens ?? 8000,
       }),
-      signal: AbortSignal.timeout(90000),
+      signal: AbortSignal.timeout(options.timeoutMs ?? 45000),
     });
 
     if (!response.ok) {
