@@ -452,7 +452,12 @@ async function extractChapterPrinciples(
 ): Promise<any[]> {
   const subChunks = chunkText(chapter.text, chunkSize);
   const all: any[] = [];
+  const deadlineMs = Date.now() + 95_000;
   for (let i = 0; i < subChunks.length; i++) {
+    if (Date.now() > deadlineMs) {
+      console.warn(`Chapter ${chapter.index} hit time budget after ${i}/${subChunks.length} subchunks; continuing with ${all.length} principles`);
+      break;
+    }
     const wrapped = `=== BOOK CONTEXT ===
 Title: ${bookContext.title || "Unknown"}
 Author: ${bookContext.author || "Unknown"}
@@ -471,7 +476,7 @@ ${subChunks[i]}`;
       apiKey,
       i,
       subChunks.length,
-      { timeoutMs: 45000, maxTokens: 8000, maxPrinciples: 8 },
+      { timeoutMs: 25000, maxTokens: 5000, maxPrinciples: 5 },
     );
     all.push(...learnings);
   }
