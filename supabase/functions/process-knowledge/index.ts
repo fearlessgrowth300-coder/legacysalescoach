@@ -503,13 +503,13 @@ Role in system: ${chapterContext.one_line || "n/a"}
 
 === CHAPTER TEXT ===
 ${subChunks[i]}`;
-    const learnings = await extractStructuredLearningsChunk(
+    const learnings = await extractBookLearningsChunk(
       wrapped,
-      `${sourceName} — ${chapterContext.title}`,
+      sourceName,
+      chapterContext.title,
       apiKey,
       i,
       subChunks.length,
-      { timeoutMs: 25000, maxTokens: 5000, maxPrinciples: 5 },
     );
     all.push(...learnings);
   }
