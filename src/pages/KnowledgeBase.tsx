@@ -231,7 +231,17 @@ export default function KnowledgeBase() {
     mutationFn: async () => {
       if (!pdfFile) throw new Error("No file selected");
 
-      setPdfProgress({ step: "Uploading file...", percent: 10 });
+      setPdfProgress({ step: "Reading PDF text...", percent: 10 });
+      let browserExtractedText = "";
+      try {
+        browserExtractedText = await extractPdfTextInBrowser(pdfFile, (percent) => {
+          setPdfProgress({ step: "Reading PDF text...", percent });
+        });
+      } catch (e) {
+        console.warn("Browser PDF text extraction failed; backend will try fallback", e);
+      }
+
+      setPdfProgress({ step: "Uploading file...", percent: 50 });
       const filePath = `${user!.id}/${Date.now()}-${pdfFile.name}`;
       const uploadResult = await runWithRetry(
         () => supabase.storage.from("knowledge-files").upload(filePath, pdfFile),
@@ -240,7 +250,7 @@ export default function KnowledgeBase() {
       );
       if (uploadResult.error) throw uploadResult.error;
 
-      setPdfProgress({ step: "Creating record...", percent: 25 });
+      setPdfProgress({ step: "Creating record...", percent: 65 });
       const insertResult = await runWithRetry(
         () => supabase.from("knowledge_base_items").insert({
           user_id: user!.id,
@@ -256,12 +266,17 @@ export default function KnowledgeBase() {
       if (insertResult.error) throw insertResult.error;
       const data = insertResult.data;
 
-      setPdfProgress({ step: "Processing PDF in background...", percent: 50 });
+      setPdfProgress({ step: "Processing PDF in background...", percent: 80 });
 
       // Fire processing in background (with one retry for transient network issues)
       void runWithRetry(
         () => supabase.functions.invoke("process-knowledge", {
-          body: { itemId: data.id, type: "pdf", filePath },
+          body: {
+            itemId: data.id,
+            type: "pdf",
+            filePath,
+            manualTranscript: browserExtractedText.length >= 100 ? browserExtractedText : undefined,
+          },
         }),
         1,
         1200
