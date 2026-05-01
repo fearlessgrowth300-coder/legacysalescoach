@@ -54,6 +54,7 @@ export default function KnowledgeBase() {
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [pdfProgress, setPdfProgress] = useState<{ step: string; percent: number } | null>(null);
+  const autoResumeRef = useRef<Record<string, number>>({});
 
   // URL preview state
   const [urlStep, setUrlStep] = useState<"input" | "preview" | "confirm">("input");
@@ -348,6 +349,26 @@ export default function KnowledgeBase() {
         };
       }
       setProcessingCounts(counts);
+      const now = Date.now();
+      for (const item of processingItems) {
+        if (item.type !== "pdf") continue;
+        const updatedAt = item.updated_at ? new Date(item.updated_at).getTime() : now;
+        const stale = now - updatedAt > 120_000;
+        const lastResume = autoResumeRef.current[item.id] || 0;
+        if (!stale || now - lastResume < 90_000) continue;
+
+        const chapters = Array.isArray((item as any).book_brief?.chapters) ? (item as any).book_brief.chapters : [];
+        const hasOpenChapter = chapters.some((c: any) => c.status === "pending" || c.status === "extracting");
+        autoResumeRef.current[item.id] = now;
+        void supabase.functions.invoke("process-knowledge", {
+          body: {
+            itemId: item.id,
+            type: "pdf",
+            filePath: item.file_path,
+            continueBook: hasOpenChapter,
+          },
+        }).finally(() => queryClient.invalidateQueries({ queryKey: ["kb-items"] }));
+      }
       // Refresh items so book_brief / chapter status update live
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
     };
