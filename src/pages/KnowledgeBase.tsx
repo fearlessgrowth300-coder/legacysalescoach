@@ -1253,16 +1253,23 @@ export default function KnowledgeBase() {
                       )}
                     </div>
                   )}
-                  {item.status === "ready" && itemChunks.length > 0 && (
+                  {item.status === "ready" && (
                     <div
                       className="mt-3 pt-3 border-t cursor-pointer hover:bg-accent/50 rounded-b-lg transition-colors -mx-3 -mb-3 sm:-mx-6 sm:-mb-4 px-3 pb-3 sm:px-6 sm:pb-4"
-                      onClick={() => {
-                        const itemInsights = getPreferredInsightsForItem(item.id);
-                        if (itemInsights.length > 0) {
+                      onClick={async () => {
+                        try {
                           setSelectedItemId(item.id);
-                          showLearnings(itemInsights, item.title);
-                        } else {
-                          toast.info("No insights found for this item yet.");
+                          showLearnings([], item.title);
+                          const itemInsights = await loadInsightsForItem(item.id);
+                          if (itemInsights.length === 0) {
+                            toast.info("No insights found for this item yet.");
+                            setLearningsDialogOpen(false);
+                            return;
+                          }
+                          setProcessedLearnings(itemInsights);
+                        } catch (e: any) {
+                          toast.error(e.message || "Failed to load insights");
+                          setLearningsDialogOpen(false);
                         }
                       }}
                     >
@@ -1270,14 +1277,14 @@ export default function KnowledgeBase() {
                         <Sparkles className="h-3 w-3" /> Learned {getInsightCountForItem(item.id)} insights · <span className="text-primary underline underline-offset-2">View all</span>
                       </p>
                       <div className="space-y-1">
-                        {itemChunks.slice(0, 3).map((chunk) => (
+                        {itemChunks.slice(0, 3).map((chunk: any) => (
                           <div key={chunk.id} className="flex items-start gap-2">
-                            <Badge variant="secondary" className="text-[10px] shrink-0 mt-0.5">{chunk.category.replace(/_/g, " ")}</Badge>
+                            <Badge variant="secondary" className="text-[10px] shrink-0 mt-0.5">{(chunk.category || "general").replace(/_/g, " ")}</Badge>
                             <p className="text-xs text-muted-foreground line-clamp-1">{chunk.content}</p>
                           </div>
                         ))}
-                        {itemChunks.length > 3 && (
-                          <p className="text-xs text-primary font-medium">+ {itemChunks.length - 3} more insights →</p>
+                        {(itemSummaries?.[item.id]?.chunks || 0) > 3 && (
+                          <p className="text-xs text-primary font-medium">+ {(itemSummaries?.[item.id]?.chunks || 0) - 3} more insights →</p>
                         )}
                       </div>
                     </div>
