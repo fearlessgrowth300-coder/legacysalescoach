@@ -722,19 +722,30 @@ export default function KnowledgeBase() {
       </Dialog>
 
       {/* View All Brain Learnings Dialog */}
-      <Dialog open={viewAllLearningsOpen} onOpenChange={setViewAllLearningsOpen}>
+      <Dialog
+        open={viewAllLearningsOpen}
+        onOpenChange={(open) => {
+          setViewAllLearningsOpen(open);
+          if (open && !allLearnings) loadAllLearnings();
+        }}
+      >
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Brain className="h-5 w-5 text-primary" />
-              All Brain Learnings ({allBrainLearnings?.length || 0})
+              All Brain Learnings ({allLearnings?.length ?? brainTotal ?? 0})
             </DialogTitle>
             <DialogDescription>Principles extracted from uploaded videos &amp; PDFs only (read-only vault)</DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh]">
             <div className="space-y-1 py-2 pr-4">
-              {allBrainLearnings && allBrainLearnings.length > 0 ? (
-                allBrainLearnings.map((learning: any) => (
+              {allLearningsLoading && !allLearnings ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Loader2 className="h-8 w-8 mx-auto mb-3 animate-spin" />
+                  <p className="text-sm">Loading all learnings…</p>
+                </div>
+              ) : allLearnings && allLearnings.length > 0 ? (
+                allLearnings.map((learning: any) => (
                   <BrainInsightCard key={learning.id} principle={learning} />
                 ))
               ) : (
