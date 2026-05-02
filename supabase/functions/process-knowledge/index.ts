@@ -1451,7 +1451,22 @@ async function extractPdfContent(
       return `PDF uploaded (${fileSizeMB.toFixed(2)} MB, ${pageCount} pages) but no readable text could be extracted. The file may be image-only without OCR layer, password-protected, or corrupted. Try a different copy or paste the text manually.`.padEnd(260, ' ');
     }
 
-    return finalText.substring(0, 600000);
+    const finalClipped = finalText.substring(0, 600000);
+
+    // Cache the extracted text as a sidecar so subsequent chained chapter
+    // invocations can skip the heavy unpdf re-parse on every call.
+    try {
+      await supabase.storage.from("knowledge-files").upload(
+        `${filePath}.txt`,
+        new Blob([finalClipped], { type: "text/plain;charset=utf-8" }),
+        { upsert: true, contentType: "text/plain;charset=utf-8" },
+      );
+      console.log(`Cached extracted PDF text sidecar (${finalClipped.length} chars)`);
+    } catch (cacheErr) {
+      console.warn("Failed to cache PDF text sidecar (non-fatal):", cacheErr);
+    }
+
+    return finalClipped;
   } catch (e) {
     console.error("PDF processing error:", e);
     return "";
