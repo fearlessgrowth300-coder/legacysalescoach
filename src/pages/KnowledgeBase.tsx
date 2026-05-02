@@ -261,8 +261,8 @@ export default function KnowledgeBase() {
         body: { itemId: data.id, url: urlValue, type: "url", manualTranscript: transcript },
       }).then((result) => {
         queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-        queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
-        queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
+        queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
+        queryClient.invalidateQueries({ queryKey: ["brain-total"] });
         if (result.data?.learnings?.length > 0) {
           showLearnings(result.data.learnings, result.data.sourceName || urlTitle);
         }
@@ -346,8 +346,8 @@ export default function KnowledgeBase() {
           console.error("PDF processing error:", result.data?.error || result.error?.message);
         }
         queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-        queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
-        queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
+        queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
+        queryClient.invalidateQueries({ queryKey: ["brain-total"] });
         if (result.data?.learnings?.length > 0) {
           showLearnings(result.data.learnings, result.data.sourceName || pdfTitle || pdfFile?.name || "PDF");
         }
@@ -441,7 +441,7 @@ export default function KnowledgeBase() {
       if (error) throw error;
       toast.success(`Retrying chapter ${chapterIndex}…`);
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
+      queryClient.invalidateQueries({ queryKey: ["brain-total"] });
     } catch (e: any) {
       toast.error(e.message || "Retry failed");
     } finally {
@@ -452,7 +452,7 @@ export default function KnowledgeBase() {
   const startPolling = () => {
     const interval = setInterval(() => {
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
     }, 3000);
     setTimeout(() => clearInterval(interval), 60000);
   };
@@ -480,7 +480,7 @@ export default function KnowledgeBase() {
             body: { itemId: data.id, url, type: "url" },
           }).then(() => {
             queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-            queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+            queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
           }).catch(console.error);
         }
       } catch (e) { console.error(`Failed to add ${url}:`, e); }
@@ -509,7 +509,7 @@ export default function KnowledgeBase() {
     onSuccess: () => {
       toast.success("Item deleted");
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
     },
   });
 
@@ -546,8 +546,8 @@ export default function KnowledgeBase() {
     onSuccess: () => {
       toast.success("Everything deleted — start fresh!");
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
-      queryClient.invalidateQueries({ queryKey: ["all-brain-learnings"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
+      queryClient.invalidateQueries({ queryKey: ["brain-total"] });
     },
     onError: (e: any) => toast.error(e.message || "Failed to delete all"),
   });
@@ -579,7 +579,7 @@ export default function KnowledgeBase() {
     onSuccess: () => {
       toast.success("Retrying processing...");
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
       startPolling();
     },
     onError: (e: any) => toast.error(e.message),
