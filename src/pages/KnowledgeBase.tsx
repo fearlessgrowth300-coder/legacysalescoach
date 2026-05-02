@@ -613,19 +613,41 @@ export default function KnowledgeBase() {
     return null;
   };
 
-  const getChunksForItem = (itemId: string) => chunks?.filter(c => c.source_id === itemId) || [];
-  const getLearningsForItem = (itemId: string) => allBrainLearnings?.filter(l => l.source_id === itemId) || [];
-  const getPreferredInsightsForItem = (itemId: string) => {
-    const itemLearnings = getLearningsForItem(itemId);
-    const itemChunks = getChunksForItem(itemId);
+  const getChunksForItem = (itemId: string) => itemSummaries?.[itemId]?.previewChunks || [];
+  const getInsightCountForItem = (itemId: string) => {
+    const s = itemSummaries?.[itemId];
+    if (!s) return 0;
+    return s.learnings > 0 ? s.learnings : s.chunks;
+  };
 
-    // Always prefer structured learnings (sales_brain) when any exist
-    if (itemLearnings.length > 0) {
-      return itemLearnings;
+  // Fetch full insights for a single item on demand (paginated, no global cap).
+  const loadInsightsForItem = async (itemId: string): Promise<any[]> => {
+    const pageSize = 1000;
+    let from = 0;
+    const collected: any[] = [];
+    while (from < 10000) {
+      const { data, error } = await supabase
+        .from("sales_brain")
+        .select("*")
+        .eq("source_id", itemId)
+        .order("created_at", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      collected.push(...data);
+      if (data.length < pageSize) break;
+      from += pageSize;
     }
+    if (collected.length > 0) return collected;
 
-    // Only fall back to raw chunks if zero structured learnings exist
-    return itemChunks.map((chunk) => ({
+    // Fallback: raw chunks if no structured learnings exist
+    const { data: chunkData } = await supabase
+      .from("knowledge_chunks")
+      .select("id, category, content, trigger_phrases")
+      .eq("source_id", itemId)
+      .order("created_at", { ascending: false })
+      .limit(1000);
+    return (chunkData || []).map((chunk: any) => ({
       id: chunk.id,
       principle_name: chunk.category?.replace(/_/g, " ") || "Insight",
       category: chunk.category || "general",
@@ -635,7 +657,6 @@ export default function KnowledgeBase() {
       sourceType: "chunk",
     }));
   };
-  const getInsightCountForItem = (itemId: string) => getPreferredInsightsForItem(itemId).length;
 
   return (
     <div className="px-4 py-6 md:py-8 max-w-4xl mx-auto overflow-x-hidden">
