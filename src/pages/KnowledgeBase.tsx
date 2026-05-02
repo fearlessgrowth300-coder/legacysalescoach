@@ -545,6 +545,7 @@ export default function KnowledgeBase() {
     },
     onSuccess: () => {
       toast.success("Everything deleted — start fresh!");
+      setAllLearnings(null);
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
       queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
       queryClient.invalidateQueries({ queryKey: ["brain-total"] });
