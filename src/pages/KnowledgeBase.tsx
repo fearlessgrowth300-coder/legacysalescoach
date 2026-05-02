@@ -66,21 +66,45 @@ export default function KnowledgeBase() {
   const { data: items } = useQuery({
     queryKey: ["kb-items"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("knowledge_base_items").select("*").order("created_at", { ascending: false });
+      const { data, error } = await supabase
+        .from("knowledge_base_items")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(2000);
       if (error) throw error;
       return data;
     },
     enabled: !!user,
   });
 
-  const { data: chunks } = useQuery({
-    queryKey: ["kb-chunks"],
+  // Per-item summary counts (lightweight): one tiny query per item.
+  // This avoids the default 1000-row cap on a single global SELECT, which used to
+  // hide insights/chunks for older items lower on the page (e.g. compensation plan).
+  const { data: itemSummaries } = useQuery({
+    queryKey: ["kb-item-summaries", items?.map((i: any) => i.id).join(",")],
     queryFn: async () => {
-      const { data, error } = await supabase.from("knowledge_chunks").select("*").order("created_at", { ascending: false });
-      if (error) throw error;
-      return data;
+      if (!items || items.length === 0) return {} as Record<string, { learnings: number; chunks: number; previewChunks: any[] }>;
+      const out: Record<string, { learnings: number; chunks: number; previewChunks: any[] }> = {};
+      // Run in small batches to keep things snappy
+      const batchSize = 6;
+      for (let i = 0; i < items.length; i += batchSize) {
+        const batch = items.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (it: any) => {
+          const [learnRes, chunkCountRes, previewRes] = await Promise.all([
+            supabase.from("sales_brain").select("id", { count: "exact", head: true }).eq("source_id", it.id),
+            supabase.from("knowledge_chunks").select("id", { count: "exact", head: true }).eq("source_id", it.id),
+            supabase.from("knowledge_chunks").select("id, category, content").eq("source_id", it.id).order("created_at", { ascending: false }).limit(3),
+          ]);
+          out[it.id] = {
+            learnings: learnRes.count || 0,
+            chunks: chunkCountRes.count || 0,
+            previewChunks: previewRes.data || [],
+          };
+        }));
+      }
+      return out;
     },
-    enabled: !!user,
+    enabled: !!user && !!items && items.length > 0,
   });
 
   // Reset URL dialog state
