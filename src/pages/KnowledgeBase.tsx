@@ -66,21 +66,45 @@ export default function KnowledgeBase() {
   const { data: items } = useQuery({
     queryKey: ["kb-items"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("knowledge_base_items").select("*").order("created_at", { ascending: false });
+      const { data, error } = await supabase
+        .from("knowledge_base_items")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(2000);
       if (error) throw error;
       return data;
     },
     enabled: !!user,
   });
 
-  const { data: chunks } = useQuery({
-    queryKey: ["kb-chunks"],
+  // Per-item summary counts (lightweight): one tiny query per item.
+  // This avoids the default 1000-row cap on a single global SELECT, which used to
+  // hide insights/chunks for older items lower on the page (e.g. compensation plan).
+  const { data: itemSummaries } = useQuery({
+    queryKey: ["kb-item-summaries", items?.map((i: any) => i.id).join(",")],
     queryFn: async () => {
-      const { data, error } = await supabase.from("knowledge_chunks").select("*").order("created_at", { ascending: false });
-      if (error) throw error;
-      return data;
+      if (!items || items.length === 0) return {} as Record<string, { learnings: number; chunks: number; previewChunks: any[] }>;
+      const out: Record<string, { learnings: number; chunks: number; previewChunks: any[] }> = {};
+      // Run in small batches to keep things snappy
+      const batchSize = 6;
+      for (let i = 0; i < items.length; i += batchSize) {
+        const batch = items.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (it: any) => {
+          const [learnRes, chunkCountRes, previewRes] = await Promise.all([
+            supabase.from("sales_brain").select("id", { count: "exact", head: true }).eq("source_id", it.id),
+            supabase.from("knowledge_chunks").select("id", { count: "exact", head: true }).eq("source_id", it.id),
+            supabase.from("knowledge_chunks").select("id, category, content").eq("source_id", it.id).order("created_at", { ascending: false }).limit(3),
+          ]);
+          out[it.id] = {
+            learnings: learnRes.count || 0,
+            chunks: chunkCountRes.count || 0,
+            previewChunks: previewRes.data || [],
+          };
+        }));
+      }
+      return out;
     },
-    enabled: !!user,
+    enabled: !!user && !!items && items.length > 0,
   });
 
   // Reset URL dialog state
@@ -124,16 +148,44 @@ export default function KnowledgeBase() {
   const [learningsDialogOpen, setLearningsDialogOpen] = useState(false);
   const [learningsSourceName, setLearningsSourceName] = useState("");
 
-  // Query for all brain learnings
-  const { data: allBrainLearnings } = useQuery({
-    queryKey: ["brain-learnings"],
+  // Total brain learnings count for header (does NOT load all rows)
+  const { data: brainTotal } = useQuery({
+    queryKey: ["brain-total"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("sales_brain").select("*").order("created_at", { ascending: false });
-      if (error) throw error;
-      return data;
+      const { count } = await supabase.from("sales_brain").select("id", { count: "exact", head: true });
+      return count || 0;
     },
     enabled: !!user,
   });
+
+  // Paginated loader for the "All Brain Learnings" dialog (avoids the 1000-row cap).
+  const [allLearnings, setAllLearnings] = useState<any[] | null>(null);
+  const [allLearningsLoading, setAllLearningsLoading] = useState(false);
+  const loadAllLearnings = async () => {
+    setAllLearningsLoading(true);
+    try {
+      const pageSize = 1000;
+      let from = 0;
+      const collected: any[] = [];
+      while (from < 10000) {
+        const { data, error } = await supabase
+          .from("sales_brain")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        collected.push(...data);
+        if (data.length < pageSize) break;
+        from += pageSize;
+      }
+      setAllLearnings(collected);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to load learnings");
+    } finally {
+      setAllLearningsLoading(false);
+    }
+  };
 
   const [viewAllLearningsOpen, setViewAllLearningsOpen] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -209,8 +261,8 @@ export default function KnowledgeBase() {
         body: { itemId: data.id, url: urlValue, type: "url", manualTranscript: transcript },
       }).then((result) => {
         queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-        queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
-        queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
+        queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
+        queryClient.invalidateQueries({ queryKey: ["brain-total"] });
         if (result.data?.learnings?.length > 0) {
           showLearnings(result.data.learnings, result.data.sourceName || urlTitle);
         }
@@ -294,8 +346,8 @@ export default function KnowledgeBase() {
           console.error("PDF processing error:", result.data?.error || result.error?.message);
         }
         queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-        queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
-        queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
+        queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
+        queryClient.invalidateQueries({ queryKey: ["brain-total"] });
         if (result.data?.learnings?.length > 0) {
           showLearnings(result.data.learnings, result.data.sourceName || pdfTitle || pdfFile?.name || "PDF");
         }
@@ -389,7 +441,7 @@ export default function KnowledgeBase() {
       if (error) throw error;
       toast.success(`Retrying chapter ${chapterIndex}…`);
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
+      queryClient.invalidateQueries({ queryKey: ["brain-total"] });
     } catch (e: any) {
       toast.error(e.message || "Retry failed");
     } finally {
@@ -400,7 +452,7 @@ export default function KnowledgeBase() {
   const startPolling = () => {
     const interval = setInterval(() => {
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
     }, 3000);
     setTimeout(() => clearInterval(interval), 60000);
   };
@@ -428,7 +480,7 @@ export default function KnowledgeBase() {
             body: { itemId: data.id, url, type: "url" },
           }).then(() => {
             queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-            queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+            queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
           }).catch(console.error);
         }
       } catch (e) { console.error(`Failed to add ${url}:`, e); }
@@ -457,7 +509,7 @@ export default function KnowledgeBase() {
     onSuccess: () => {
       toast.success("Item deleted");
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
     },
   });
 
@@ -493,9 +545,10 @@ export default function KnowledgeBase() {
     },
     onSuccess: () => {
       toast.success("Everything deleted — start fresh!");
+      setAllLearnings(null);
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
-      queryClient.invalidateQueries({ queryKey: ["all-brain-learnings"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
+      queryClient.invalidateQueries({ queryKey: ["brain-total"] });
     },
     onError: (e: any) => toast.error(e.message || "Failed to delete all"),
   });
@@ -527,7 +580,7 @@ export default function KnowledgeBase() {
     onSuccess: () => {
       toast.success("Retrying processing...");
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
-      queryClient.invalidateQueries({ queryKey: ["kb-chunks"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
       startPolling();
     },
     onError: (e: any) => toast.error(e.message),
@@ -561,19 +614,41 @@ export default function KnowledgeBase() {
     return null;
   };
 
-  const getChunksForItem = (itemId: string) => chunks?.filter(c => c.source_id === itemId) || [];
-  const getLearningsForItem = (itemId: string) => allBrainLearnings?.filter(l => l.source_id === itemId) || [];
-  const getPreferredInsightsForItem = (itemId: string) => {
-    const itemLearnings = getLearningsForItem(itemId);
-    const itemChunks = getChunksForItem(itemId);
+  const getChunksForItem = (itemId: string) => itemSummaries?.[itemId]?.previewChunks || [];
+  const getInsightCountForItem = (itemId: string) => {
+    const s = itemSummaries?.[itemId];
+    if (!s) return 0;
+    return s.learnings > 0 ? s.learnings : s.chunks;
+  };
 
-    // Always prefer structured learnings (sales_brain) when any exist
-    if (itemLearnings.length > 0) {
-      return itemLearnings;
+  // Fetch full insights for a single item on demand (paginated, no global cap).
+  const loadInsightsForItem = async (itemId: string): Promise<any[]> => {
+    const pageSize = 1000;
+    let from = 0;
+    const collected: any[] = [];
+    while (from < 10000) {
+      const { data, error } = await supabase
+        .from("sales_brain")
+        .select("*")
+        .eq("source_id", itemId)
+        .order("created_at", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      collected.push(...data);
+      if (data.length < pageSize) break;
+      from += pageSize;
     }
+    if (collected.length > 0) return collected;
 
-    // Only fall back to raw chunks if zero structured learnings exist
-    return itemChunks.map((chunk) => ({
+    // Fallback: raw chunks if no structured learnings exist
+    const { data: chunkData } = await supabase
+      .from("knowledge_chunks")
+      .select("id, category, content, trigger_phrases")
+      .eq("source_id", itemId)
+      .order("created_at", { ascending: false })
+      .limit(1000);
+    return (chunkData || []).map((chunk: any) => ({
       id: chunk.id,
       principle_name: chunk.category?.replace(/_/g, " ") || "Insight",
       category: chunk.category || "general",
@@ -583,7 +658,6 @@ export default function KnowledgeBase() {
       sourceType: "chunk",
     }));
   };
-  const getInsightCountForItem = (itemId: string) => getPreferredInsightsForItem(itemId).length;
 
   return (
     <div className="px-4 py-6 md:py-8 max-w-4xl mx-auto overflow-x-hidden">
@@ -649,19 +723,30 @@ export default function KnowledgeBase() {
       </Dialog>
 
       {/* View All Brain Learnings Dialog */}
-      <Dialog open={viewAllLearningsOpen} onOpenChange={setViewAllLearningsOpen}>
+      <Dialog
+        open={viewAllLearningsOpen}
+        onOpenChange={(open) => {
+          setViewAllLearningsOpen(open);
+          if (open && !allLearnings) loadAllLearnings();
+        }}
+      >
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Brain className="h-5 w-5 text-primary" />
-              All Brain Learnings ({allBrainLearnings?.length || 0})
+              All Brain Learnings ({allLearnings?.length ?? brainTotal ?? 0})
             </DialogTitle>
             <DialogDescription>Principles extracted from uploaded videos &amp; PDFs only (read-only vault)</DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh]">
             <div className="space-y-1 py-2 pr-4">
-              {allBrainLearnings && allBrainLearnings.length > 0 ? (
-                allBrainLearnings.map((learning: any) => (
+              {allLearningsLoading && !allLearnings ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Loader2 className="h-8 w-8 mx-auto mb-3 animate-spin" />
+                  <p className="text-sm">Loading all learnings…</p>
+                </div>
+              ) : allLearnings && allLearnings.length > 0 ? (
+                allLearnings.map((learning: any) => (
                   <BrainInsightCard key={learning.id} principle={learning} />
                 ))
               ) : (
@@ -1169,16 +1254,23 @@ export default function KnowledgeBase() {
                       )}
                     </div>
                   )}
-                  {item.status === "ready" && itemChunks.length > 0 && (
+                  {item.status === "ready" && (
                     <div
                       className="mt-3 pt-3 border-t cursor-pointer hover:bg-accent/50 rounded-b-lg transition-colors -mx-3 -mb-3 sm:-mx-6 sm:-mb-4 px-3 pb-3 sm:px-6 sm:pb-4"
-                      onClick={() => {
-                        const itemInsights = getPreferredInsightsForItem(item.id);
-                        if (itemInsights.length > 0) {
+                      onClick={async () => {
+                        try {
                           setSelectedItemId(item.id);
-                          showLearnings(itemInsights, item.title);
-                        } else {
-                          toast.info("No insights found for this item yet.");
+                          showLearnings([], item.title);
+                          const itemInsights = await loadInsightsForItem(item.id);
+                          if (itemInsights.length === 0) {
+                            toast.info("No insights found for this item yet.");
+                            setLearningsDialogOpen(false);
+                            return;
+                          }
+                          setProcessedLearnings(itemInsights);
+                        } catch (e: any) {
+                          toast.error(e.message || "Failed to load insights");
+                          setLearningsDialogOpen(false);
                         }
                       }}
                     >
@@ -1186,14 +1278,14 @@ export default function KnowledgeBase() {
                         <Sparkles className="h-3 w-3" /> Learned {getInsightCountForItem(item.id)} insights · <span className="text-primary underline underline-offset-2">View all</span>
                       </p>
                       <div className="space-y-1">
-                        {itemChunks.slice(0, 3).map((chunk) => (
+                        {itemChunks.slice(0, 3).map((chunk: any) => (
                           <div key={chunk.id} className="flex items-start gap-2">
-                            <Badge variant="secondary" className="text-[10px] shrink-0 mt-0.5">{chunk.category.replace(/_/g, " ")}</Badge>
+                            <Badge variant="secondary" className="text-[10px] shrink-0 mt-0.5">{(chunk.category || "general").replace(/_/g, " ")}</Badge>
                             <p className="text-xs text-muted-foreground line-clamp-1">{chunk.content}</p>
                           </div>
                         ))}
-                        {itemChunks.length > 3 && (
-                          <p className="text-xs text-primary font-medium">+ {itemChunks.length - 3} more insights →</p>
+                        {(itemSummaries?.[item.id]?.chunks || 0) > 3 && (
+                          <p className="text-xs text-primary font-medium">+ {(itemSummaries?.[item.id]?.chunks || 0) - 3} more insights →</p>
                         )}
                       </div>
                     </div>
