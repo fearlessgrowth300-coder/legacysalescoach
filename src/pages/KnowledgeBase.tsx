@@ -148,16 +148,44 @@ export default function KnowledgeBase() {
   const [learningsDialogOpen, setLearningsDialogOpen] = useState(false);
   const [learningsSourceName, setLearningsSourceName] = useState("");
 
-  // Query for all brain learnings
-  const { data: allBrainLearnings } = useQuery({
-    queryKey: ["brain-learnings"],
+  // Total brain learnings count for header (does NOT load all rows)
+  const { data: brainTotal } = useQuery({
+    queryKey: ["brain-total"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("sales_brain").select("*").order("created_at", { ascending: false });
-      if (error) throw error;
-      return data;
+      const { count } = await supabase.from("sales_brain").select("id", { count: "exact", head: true });
+      return count || 0;
     },
     enabled: !!user,
   });
+
+  // Paginated loader for the "All Brain Learnings" dialog (avoids the 1000-row cap).
+  const [allLearnings, setAllLearnings] = useState<any[] | null>(null);
+  const [allLearningsLoading, setAllLearningsLoading] = useState(false);
+  const loadAllLearnings = async () => {
+    setAllLearningsLoading(true);
+    try {
+      const pageSize = 1000;
+      let from = 0;
+      const collected: any[] = [];
+      while (from < 10000) {
+        const { data, error } = await supabase
+          .from("sales_brain")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        collected.push(...data);
+        if (data.length < pageSize) break;
+        from += pageSize;
+      }
+      setAllLearnings(collected);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to load learnings");
+    } finally {
+      setAllLearningsLoading(false);
+    }
+  };
 
   const [viewAllLearningsOpen, setViewAllLearningsOpen] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
