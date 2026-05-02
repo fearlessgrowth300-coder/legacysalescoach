@@ -86,6 +86,13 @@ function chunkWithOffsets(source: string, absoluteStart: number, chunkSize: numb
   return out;
 }
 
+// Cap how many sub-sections one detected chapter can be split into. Without
+// this, a single huge end-of-book chapter (e.g. a long "Conclusion") gets
+// split into 20+ sections that all look like junk to the user and bloat the
+// per-chapter queue. Three is enough to keep each call inside the AI budget
+// without making the UI look broken.
+const MAX_SUBSECTIONS_PER_CHAPTER = 3;
+
 export function splitLargeDetectedChapters(
   chapters: DetectedChapter[],
   maxSectionSize = 12000,
@@ -97,12 +104,21 @@ export function splitLargeDetectedChapters(
       continue;
     }
 
-    const parts = chunkWithOffsets(chapter.text, chapter.startOffset, maxSectionSize);
+    // Choose a chunk size that produces at most MAX_SUBSECTIONS_PER_CHAPTER pieces.
+    const targetChunkSize = Math.max(
+      maxSectionSize,
+      Math.ceil(chapter.text.length / MAX_SUBSECTIONS_PER_CHAPTER),
+    );
+    const rawParts = chunkWithOffsets(chapter.text, chapter.startOffset, targetChunkSize);
+    const parts = rawParts.slice(0, MAX_SUBSECTIONS_PER_CHAPTER);
+    // Use a clean, presentable title. Capitalise the first letter so split
+    // labels never look like "conclusion: · section 2/3".
+    const baseTitle = (chapter.title || "Section").trim().replace(/^./, (c) => c.toUpperCase());
     parts.forEach((part, i) => {
       normalized.push({
         ...part,
         index: normalized.length + 1,
-        title: `${chapter.title} · section ${i + 1}/${parts.length}`,
+        title: parts.length > 1 ? `${baseTitle} (part ${i + 1}/${parts.length})` : baseTitle,
       });
     });
   }
