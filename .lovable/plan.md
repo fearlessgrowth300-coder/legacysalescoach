@@ -1,42 +1,74 @@
-I found two separate problems causing what you are seeing:
+## Problem
 
-1. The Knowledge Base page loads only the default first 1000 rows from `sales_brain` and `knowledge_chunks`. Your backend already has thousands of learned insights, so older items lower down the page, including the compensation plan, can show as if they have no learned insights even though the data exists.
-2. On reload, the page fetches every item, every chunk, and every brain learning up front. That makes the page slow before the visible cards populate.
+Compare the screenshots:
 
-Plan to fix it properly:
+- **Old behavior (images 1 & 2):** the reply weaves in **6–8 distinct sources** ("33 Dark Psychology…", "sales is easy actually", "hhj Naming Principle", "What Are Paradigms…", "59 Minutes of No B.S.", "How to grow your business faster", "Reliability is the Greatest Gift"). Sources are named **in prose**, not as raw IDs.
+- **New behavior (image 3):** the reply is grounded in **only ONE source** (`The_22_Immutable_Laws_of_Marketing…`) and the same source ID is repeated as a **raw `[[cite:57973031-…]]` token** twice — meaning the UI is also failing to convert the token into a clean source pill.
 
-1. Replace the heavy global data fetches on `KnowledgeBase.tsx`
-   - Stop loading all `sales_brain` and all `knowledge_chunks` rows at page load.
-   - Load the knowledge items first, then fetch only lightweight per-item counts and previews.
-   - This removes the 1000-row cutoff problem and makes reload much faster.
+So there are two regressions stacked on top of each other.
 
-2. Add paginated / batched loading for learned insights
-   - When the user taps an item, fetch that item’s full learned insights by `source_id` with pagination instead of relying on the page-level cache.
-   - Do the same for chunks only as fallback.
-   - This will make every item, including older ones lower down like the compensation plan, show its learned insights.
+## Root cause
 
-3. Fix card visibility logic
-   - Change the item cards so they show “Learned X insights · View all” based on real counts from the database, not only whether the first global `chunks` query happened to include that item.
-   - Add a safe fallback state if an item is ready but its preview has not loaded yet.
+In `supabase/functions/_shared/brain-pipeline.ts` the selection step is artificially narrow:
 
-4. Fix the “Brain Learnings” dialog
-   - Convert “All Brain Learnings” from a single default-limited query into paginated loading.
-   - Show an accurate total/count behavior and avoid silently hiding rows after the first 1000.
+```
+selectPrinciples(...)
+  → primary:    maxItems: 3
+  → supporting: maxItems: 2     // total cap: 5 principles
+rerank(...)
+  → top: scored.slice(0, 8)    // only 8 candidates ever reach the selector
+hybridRetrieve(...)
+  → principles: dedupedP.slice(0, 25)   // pool is fine, but gets cut to 8 then 5
+```
 
-5. Improve processing polling without slowing reload
-   - Keep polling active items, but only query counts for currently processing items.
-   - Invalidate the correct query keys after uploads, retries, and deletes so the UI refreshes reliably.
+So even when the vault has hundreds of relevant principles spread across many books/videos, the response is built from at most 5 — and frequently just 1–2 PRIMARY ones, which is exactly what image 3 shows.
 
-6. Clean up the React warning shown in the console
-   - Adjust the small `Badge` usage that is receiving a ref indirectly so the warning does not keep appearing on the Knowledge Base page.
+On top of that, the prompt in `brain-chat/index.ts` says "lead with primaries, supporting are optional" — when only 1 primary is chosen, the whole reply collapses onto a single source.
 
-Expected result:
-- Compensation plan and every older/lower item will show the learned insights.
-- Reload should be noticeably faster.
-- No more hidden insights due to the 1000-row default query limit.
-- The page will scale better as you add more books and PDFs.
+The leaking `[[cite:UUID]]` token in image 3 means `BrainCitations` either (a) didn't receive `selected_principles` for that message or (b) the id wasn't in the allowed list, so the renderer left the token as plain text.
 
-Technical details:
-- Main file: `src/pages/KnowledgeBase.tsx`
-- Likely small supporting UI cleanup: `src/components/BookBriefCard.tsx` or the relevant trigger/Badge usage if needed
-- No database schema change is required for this specific fix because useful indexes already exist on `sales_brain(user_id, source_id)` and `knowledge_chunks(user_id, source_id)`.
+## Plan
+
+### 1. Widen retrieval → selection so many sources can be cited
+
+In `supabase/functions/_shared/brain-pipeline.ts`:
+
+- `hybridRetrieve`: keep top **40** principles (was 25) and **30** chunks (was 20).
+- `rerank`: return top **15** (was 8). Boost diversity by source — if 3+ candidates share the same `source_id`, keep only the top 2 of that source so one book can't dominate.
+- `selectPrinciples`: raise caps to **primary: 1–5**, **supporting: 0–4** (total up to 9 principles, drawn from up to ~7 distinct sources). Update the schema `maxItems` and the prompt copy.
+- Add a new selection rule in the prompt: *"Whenever possible, pick principles from at least 3 different `source_title`s so the reply weaves multiple books/videos together."*
+
+### 2. Force multi-source weaving in the response prompt
+
+In `supabase/functions/brain-chat/index.ts` `buildSystemPrompt`:
+
+- Replace the current "lead with primaries" wording with: *"You MUST cite at least 3 distinct source titles across the reply (when 3+ are provided). Each `WHY THIS WORKS` bullet must name a different source where possible."*
+- Strengthen the existing "name the source out loud" rule with examples that match the old style ("According to **33 Dark Psychology Sales Techniques** and **sales is easy, actually**, …").
+- Keep the `[[cite:ID]]` requirement but make it explicit that **the ID goes inside the brackets, never the source title**, and that **the source title must also appear in prose** in the same sentence — this is what image 3 lost.
+
+### 3. Stop raw `[[cite:UUID]]` tokens from leaking to the UI
+
+Two-pronged fix:
+
+- **Backend safety net** (`brain-chat/index.ts`, after the stream finishes is too late since it's streamed; do it as a transform): for any `[[cite:ID]]` whose `ID` is NOT in `allowedIds`, strip the bracketed token before forwarding the chunk. This guarantees the ugly raw UUID never reaches the screen.
+- **Frontend** (`src/components/BrainCitations.tsx` + the message renderer in `AiChat.tsx`): confirm tokens are converted to numbered source pills (`¹`, `²`, …) inline. If `selected_principles` is missing for a message (older rows), strip remaining `[[cite:...]]` tokens instead of rendering them as text.
+
+### 4. Persist `selected_principles` per message so re-renders stay clean
+
+Verify that when a message is saved to the DB, `selected_principles` and `framework_name` are stored on the row (looks like they already are based on the `Msg` type). If a row is missing them, the renderer must fall back to stripping tokens (covered in step 3) so users never see raw UUIDs after a reload.
+
+### 5. Quick sanity verification after deploy
+
+After implementing, send the same Val/coaching question and check:
+
+- The reply names **3+ distinct source titles** in prose.
+- No `[[cite:UUID]]` text is visible — only formatted source references.
+- The `BrainCitations` panel under the message lists multiple sources, not one.
+
+## Files to change
+
+- `supabase/functions/_shared/brain-pipeline.ts` — widen rerank, raise selection caps, add diversity + multi-source rule.
+- `supabase/functions/brain-chat/index.ts` — update system prompt for multi-source weaving; add stream transform that strips invalid `[[cite:...]]` tokens.
+- `src/components/BrainCitations.tsx` and/or `src/pages/AiChat.tsx` — ensure tokens always render as pills, never raw text; strip orphan tokens when metadata is missing.
+
+No DB schema changes required.

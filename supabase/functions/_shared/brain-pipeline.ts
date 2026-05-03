@@ -231,8 +231,8 @@ export async function hybridRetrieve(
   const dedupedC = deduplicateChunks(mergedC, "relevance_score");
 
   return {
-    principles: dedupedP.slice(0, 25),
-    chunks: dedupedC.slice(0, 20),
+    principles: dedupedP.slice(0, 40),
+    chunks: dedupedC.slice(0, 30),
     embeddingUsed,
   };
 }
@@ -246,7 +246,7 @@ export async function rerank(
   session: SessionContext,
 ): Promise<{ top: Principle[]; topScore: number }> {
   if (candidates.length === 0) return { top: [], topScore: 0 };
-  if (candidates.length <= 8) {
+  if (candidates.length <= 15) {
     return { top: candidates, topScore: candidates[0]?.relevance_score ? candidates[0].relevance_score / 100 : 0.6 };
   }
 
@@ -292,7 +292,19 @@ export async function rerank(
     return { p, score };
   });
   scored.sort((a, b) => b.score - a.score);
-  const top = scored.slice(0, 8).map((s) => s.p);
+  // Diversity cap: at most 2 principles per source_id so one book can't dominate
+  const perSourceCount = new Map<string, number>();
+  const diverse: { p: Principle; score: number }[] = [];
+  const overflow: { p: Principle; score: number }[] = [];
+  for (const s of scored) {
+    const sid = s.p.source_id || "__none__";
+    const c = perSourceCount.get(sid) || 0;
+    if (c < 2) { diverse.push(s); perSourceCount.set(sid, c + 1); }
+    else overflow.push(s);
+  }
+  // Fill up to 15 with overflow if diverse pool is short
+  const merged = [...diverse, ...overflow].slice(0, 15);
+  const top = merged.map((s) => s.p);
   return { top, topScore: scored[0]?.score ?? 0 };
 }
 
@@ -323,11 +335,15 @@ deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
   const result = await callTool(
     apiKey,
     REASONING_MODEL,
-    `You are an elite sales coach choosing principles to drive a coaching reply.
+    `You are an elite sales coach choosing principles to drive a multi-source coaching reply.
 
 Pick TWO TIERS:
-  • PRIMARY (1-3): the principles that MUST drive the answer. These define the strategy.
-  • SUPPORTING (0-2): principles that reinforce, contrast, or add a tactical layer to the primaries. They should NOT lead the answer but are great to cite alongside a primary.
+  • PRIMARY (2-5): the principles that MUST drive the answer. These define the core strategy. Pick AT LEAST 2 when the candidates support it.
+  • SUPPORTING (1-4): principles that reinforce, contrast, add a tactical layer, or supply scripts. They strengthen the primaries.
+
+CRITICAL DIVERSITY RULE:
+  - Whenever possible, pick principles from AT LEAST 3 DIFFERENT sources (different source titles). The user uploaded many books/videos and expects the reply to weave them together — not parrot a single source.
+  - Only collapse onto fewer sources if the candidates genuinely don't span 3 sources.
 
 Rules:
   - Explain why each in one short sentence.
@@ -341,7 +357,7 @@ Rules:
       properties: {
         primary: {
           type: "array",
-          maxItems: 3,
+          maxItems: 5,
           items: {
             type: "object",
             properties: {
@@ -354,7 +370,7 @@ Rules:
         },
         supporting: {
           type: "array",
-          maxItems: 2,
+          maxItems: 4,
           items: {
             type: "object",
             properties: {
