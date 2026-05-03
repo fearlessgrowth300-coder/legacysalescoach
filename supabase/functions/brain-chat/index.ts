@@ -287,35 +287,59 @@ serve(async (req) => {
     const metaEvent = `data: ${JSON.stringify({ brain_meta: brainMeta })}\n\n`;
 
     let fullText = "";
+    const allowedIdSet = new Set(allowedIds.map((s) => s.toLowerCase()));
+    // Strip [[cite:UUID]] tokens whose UUID is not in the allowed list (defends against the model hallucinating ids)
+    const CITE_RE = /\[\[cite:([0-9a-f-]{8,})\]\]/gi;
+    const sanitizeCitations = (text: string): string =>
+      text.replace(CITE_RE, (full, id) => allowedIdSet.has(String(id).toLowerCase()) ? full : "");
+
     const transformed = new ReadableStream({
       async start(controller) {
         controller.enqueue(encoder.encode(metaEvent));
         const reader = aiResp.body!.getReader();
         const decoder = new TextDecoder();
         let buf = "";
+        // Re-encoder for outbound chunks (we mutate content before forwarding)
+        const reEncoder = new TextEncoder();
         try {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            controller.enqueue(value);
-            // sniff text for citation validation logging (non-blocking)
             buf += decoder.decode(value, { stream: true });
+            // Forward complete SSE lines, sanitizing delta.content along the way.
+            // Hold back the last partial line until the next read.
+            let outBuf = "";
             let idx: number;
             while ((idx = buf.indexOf("\n")) !== -1) {
-              const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
-              if (!line.startsWith("data: ")) continue;
-              const json = line.slice(6).trim();
-              if (json === "[DONE]") continue;
-              try {
-                const parsed = JSON.parse(json);
-                const c = parsed.choices?.[0]?.delta?.content;
-                if (typeof c === "string") fullText += c;
-              } catch { /* partial */ }
+              const line = buf.slice(0, idx);
+              buf = buf.slice(idx + 1);
+              if (line.startsWith("data: ")) {
+                const json = line.slice(6).trim();
+                if (json === "[DONE]") {
+                  outBuf += line + "\n";
+                  continue;
+                }
+                try {
+                  const parsed = JSON.parse(json);
+                  const c = parsed.choices?.[0]?.delta?.content;
+                  if (typeof c === "string") {
+                    const sanitized = sanitizeCitations(c);
+                    fullText += sanitized;
+                    parsed.choices[0].delta.content = sanitized;
+                    outBuf += `data: ${JSON.stringify(parsed)}\n`;
+                    continue;
+                  }
+                } catch { /* fall through and forward as-is */ }
+              }
+              outBuf += line + "\n";
             }
+            if (outBuf) controller.enqueue(reEncoder.encode(outBuf));
           }
+          // Flush any leftover buffered line
+          if (buf) controller.enqueue(reEncoder.encode(buf));
         } finally {
           const v = validateCitations(fullText, allowedIds);
-          if (v.invalid.length) console.warn(`[brain-chat] ${v.invalid.length} invalid citation ids in response`);
+          if (v.invalid.length) console.warn(`[brain-chat] ${v.invalid.length} invalid citation ids stripped from response`);
           if (v.total === 0) console.warn(`[brain-chat] response had no citations`);
           controller.close();
         }
