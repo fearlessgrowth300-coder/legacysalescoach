@@ -349,8 +349,9 @@ Pick TWO TIERS:
   • SUPPORTING (1-4): principles that reinforce, contrast, add a tactical layer, or supply scripts. They strengthen the primaries.
 
 CRITICAL DIVERSITY RULE:
-  - Whenever possible, pick principles from AT LEAST 3 DIFFERENT sources (different source titles). The user uploaded many books/videos and expects the reply to weave them together — not parrot a single source.
-  - Only collapse onto fewer sources if the candidates genuinely don't span 3 sources.
+  - ${sourceDiversityHint}
+  - Pick principles from AT LEAST 3 DIFFERENT source titles whenever the candidates allow it. The user uploaded many books/videos and expects the reply to weave them together — not parrot a single source.
+  - Prefer principles whose categories complement each other (e.g. mindset + objection handling + closing) over three from the same category.
 
 Rules:
   - Explain why each in one short sentence.
@@ -434,6 +435,36 @@ Rules:
   };
   pushTier(result.primary, "primary");
   pushTier(result.supporting || [], "supporting");
+
+  // ─── Source-diversity backfill ─────────────────────────────────────
+  // If the model collapsed onto 1-2 sources but the candidate pool has more,
+  // forcibly add top-ranked candidates from other sources as supporting tier.
+  // This is what guarantees the answer actually weaves multiple books/videos.
+  const selectedSourceKeys = new Set(
+    selected.map((s) => s.source_id || s.source_title).filter(Boolean) as string[]
+  );
+  if (selectedSourceKeys.size < 3 && uniqueSources.size >= 3) {
+    for (const cand of candidates) {
+      if (selected.length >= 7) break;
+      if (selectedSourceKeys.size >= 3 && selected.length >= 5) break;
+      if (seen.has(cand.id)) continue;
+      const key = cand.source_id || cand.source_name;
+      if (!key || selectedSourceKeys.has(key)) continue;
+      seen.add(cand.id);
+      selectedSourceKeys.add(key);
+      selected.push({
+        id: cand.id,
+        principle_name: cand.principle_name,
+        source_id: cand.source_id,
+        source_title: cand.source_name,
+        source_url: null,
+        source_type: cand.source_type,
+        why_relevant: `Adds a complementary angle from ${cand.source_name} (${cand.category}).`,
+        tier: "supporting",
+        full: cand,
+      });
+    }
+  }
 
   return {
     selected,
