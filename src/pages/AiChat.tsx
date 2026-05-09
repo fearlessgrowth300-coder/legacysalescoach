@@ -750,7 +750,7 @@ export default function AiChat() {
           if (assistantSoFar && convId) {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: convId, user_id: user!.id, role: "assistant", content: assistantSoFar,
-              metadata: lastBrainMeta ? { selected_principles: lastBrainMeta.selected_principles || [], framework_name: lastBrainMeta.framework_name || "", empty_vault: !!lastBrainMeta.empty_vault } : {},
+              metadata: lastBrainMeta ? { selected_principles: lastBrainMeta.selected_principles || [], framework_name: lastBrainMeta.framework_name || "", empty_vault: !!lastBrainMeta.empty_vault, debug: lastBrainMeta.debug || null } : {},
             } as any);
           }
           setFollowUps(generateFollowUps(assistantSoFar));
@@ -912,7 +912,7 @@ export default function AiChat() {
           if (assistantSoFar && activeConvId) {
             await supabase.from("ai_chat_messages").insert({
               conversation_id: activeConvId, user_id: user!.id, role: "assistant", content: assistantSoFar,
-              metadata: lastBrainMeta2 ? { selected_principles: lastBrainMeta2.selected_principles || [], framework_name: lastBrainMeta2.framework_name || "", empty_vault: !!lastBrainMeta2.empty_vault } : {},
+              metadata: lastBrainMeta2 ? { selected_principles: lastBrainMeta2.selected_principles || [], framework_name: lastBrainMeta2.framework_name || "", empty_vault: !!lastBrainMeta2.empty_vault, debug: lastBrainMeta2.debug || null } : {},
             } as any);
           }
           setFollowUps(generateFollowUps(assistantSoFar));
