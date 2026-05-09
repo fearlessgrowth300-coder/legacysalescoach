@@ -1,74 +1,60 @@
-## Problem
+## Goal
+Make the AI Brain behave like the older strong responses again: first understand the actual user message or screenshot conversation, then search the whole uploaded vault across PDFs/videos/chunks/categories, then combine the best principles into one grounded reply.
 
-Compare the screenshots:
-
-- **Old behavior (images 1 & 2):** the reply weaves in **6–8 distinct sources** ("33 Dark Psychology…", "sales is easy actually", "hhj Naming Principle", "What Are Paradigms…", "59 Minutes of No B.S.", "How to grow your business faster", "Reliability is the Greatest Gift"). Sources are named **in prose**, not as raw IDs.
-- **New behavior (image 3):** the reply is grounded in **only ONE source** (`The_22_Immutable_Laws_of_Marketing…`) and the same source ID is repeated as a **raw `[[cite:57973031-…]]` token** twice — meaning the UI is also failing to convert the token into a clean source pill.
-
-So there are two regressions stacked on top of each other.
-
-## Root cause
-
-In `supabase/functions/_shared/brain-pipeline.ts` the selection step is artificially narrow:
-
-```
-selectPrinciples(...)
-  → primary:    maxItems: 3
-  → supporting: maxItems: 2     // total cap: 5 principles
-rerank(...)
-  → top: scored.slice(0, 8)    // only 8 candidates ever reach the selector
-hybridRetrieve(...)
-  → principles: dedupedP.slice(0, 25)   // pool is fine, but gets cut to 8 then 5
-```
-
-So even when the vault has hundreds of relevant principles spread across many books/videos, the response is built from at most 5 — and frequently just 1–2 PRIMARY ones, which is exactly what image 3 shows.
-
-On top of that, the prompt in `brain-chat/index.ts` says "lead with primaries, supporting are optional" — when only 1 primary is chosen, the whole reply collapses onto a single source.
-
-The leaking `[[cite:UUID]]` token in image 3 means `BrainCitations` either (a) didn't receive `selected_principles` for that message or (b) the id wasn't in the allowed list, so the renderer left the token as plain text.
+## What is wrong now
+- Screenshot/image messages are passed to the final answer model, but the retrieval query is only the typed text like “Analyze this image”; so the Brain searches the vault with the wrong query.
+- The pipeline selects too narrowly in practice: recent assistant messages show only 1 selected principle and 1 source, even though the vault has 4,212 principles.
+- `knowledge_chunks` are included only as weak background; they do not help choose which categories/sources/principles should drive the answer.
+- Assistant metadata saved to chat history drops `debug`, so it is hard to verify what was retrieved after reload.
+- The prompt says multi-source, but the selection step can still return one source and the answer then parrots that one book.
 
 ## Plan
 
-### 1. Widen retrieval → selection so many sources can be cited
+### 1. Add a “conversation understanding” step before retrieval
+In `supabase/functions/brain-chat/index.ts`:
+- Detect whether the last user message contains images/screenshots.
+- Use a fast vision/text model to produce a retrieval-ready brief before `runPipeline`, including:
+  - extracted screenshot text / DM conversation
+  - prospect’s last message
+  - user’s goal
+  - likely objection/category: salary, price, trust, rapport, closing, follow-up, leadership, mindset, etc.
+  - sales intent and emotional context
+- Use that enriched brief as the retrieval `question`, while still passing the original screenshot/message to the final answer model.
 
+### 2. Make retrieval search wider and category-aware
 In `supabase/functions/_shared/brain-pipeline.ts`:
+- Expand query generation to use the enriched brief and recent conversation, not only the raw user text.
+- Increase semantic matches per subquery from small pools to a wider pool, then dedupe/rerank.
+- Pull more `knowledge_chunks` and use their categories/content to influence principle selection.
+- Add category balancing so one category/source cannot crowd everything out when the request clearly spans multiple angles.
 
-- `hybridRetrieve`: keep top **40** principles (was 25) and **30** chunks (was 20).
-- `rerank`: return top **15** (was 8). Boost diversity by source — if 3+ candidates share the same `source_id`, keep only the top 2 of that source so one book can't dominate.
-- `selectPrinciples`: raise caps to **primary: 1–5**, **supporting: 0–4** (total up to 9 principles, drawn from up to ~7 distinct sources). Update the schema `maxItems` and the prompt copy.
-- Add a new selection rule in the prompt: *"Whenever possible, pick principles from at least 3 different `source_title`s so the reply weaves multiple books/videos together."*
+### 3. Force multi-source selection unless the vault truly has only one match
+In `selectPrinciples`:
+- Require 3–6 primary/supporting principles when candidates span enough sources.
+- Enforce at code level after model selection: if the selector returns only one source, backfill top relevant candidates from other sources/categories.
+- Keep max 2 per source, but prefer at least 3 different source titles.
+- Include source title/type/category in the selection prompt so the model can choose across books/videos intentionally.
 
-### 2. Force multi-source weaving in the response prompt
+### 4. Use chunks as reasoning support, not invisible filler
+- Add selected/top chunks into the reasoning prompt with category/source context.
+- Tell the final model to use chunks to understand the situation and reinforce the chosen principles.
+- Keep citations tied to principles only, but let chunks guide what the reply should address.
 
-In `supabase/functions/brain-chat/index.ts` `buildSystemPrompt`:
+### 5. Improve final answer instructions for “read message/screenshot first”
+In `brain-chat/index.ts` system prompt:
+- Add a mandatory flow:
+  1. Read the screenshot/text and identify what the prospect actually means.
+  2. Diagnose the stage/objection/emotion.
+  3. Pull from multiple vault sources.
+  4. Combine them into THE STRATEGY / THE REPLY / WHY THIS WORKS.
+- Make it avoid random/general replies and avoid answering from one book when more sources are available.
 
-- Replace the current "lead with primaries" wording with: *"You MUST cite at least 3 distinct source titles across the reply (when 3+ are provided). Each `WHY THIS WORKS` bullet must name a different source where possible."*
-- Strengthen the existing "name the source out loud" rule with examples that match the old style ("According to **33 Dark Psychology Sales Techniques** and **sales is easy, actually**, …").
-- Keep the `[[cite:ID]]` requirement but make it explicit that **the ID goes inside the brackets, never the source title**, and that **the source title must also appear in prose** in the same sentence — this is what image 3 lost.
+### 6. Save retrieval debug metadata so we can verify it
+When saving assistant messages in `src/pages/AiChat.tsx`:
+- Preserve `debug`, selected source count, unique source titles, and framework metadata.
+- This lets the Sources footer and database history show whether the Brain actually pulled from multiple sources after reload.
 
-### 3. Stop raw `[[cite:UUID]]` tokens from leaking to the UI
-
-Two-pronged fix:
-
-- **Backend safety net** (`brain-chat/index.ts`, after the stream finishes is too late since it's streamed; do it as a transform): for any `[[cite:ID]]` whose `ID` is NOT in `allowedIds`, strip the bracketed token before forwarding the chunk. This guarantees the ugly raw UUID never reaches the screen.
-- **Frontend** (`src/components/BrainCitations.tsx` + the message renderer in `AiChat.tsx`): confirm tokens are converted to numbered source pills (`¹`, `²`, …) inline. If `selected_principles` is missing for a message (older rows), strip remaining `[[cite:...]]` tokens instead of rendering them as text.
-
-### 4. Persist `selected_principles` per message so re-renders stay clean
-
-Verify that when a message is saved to the DB, `selected_principles` and `framework_name` are stored on the row (looks like they already are based on the `Msg` type). If a row is missing them, the renderer must fall back to stripping tokens (covered in step 3) so users never see raw UUIDs after a reload.
-
-### 5. Quick sanity verification after deploy
-
-After implementing, send the same Val/coaching question and check:
-
-- The reply names **3+ distinct source titles** in prose.
-- No `[[cite:UUID]]` text is visible — only formatted source references.
-- The `BrainCitations` panel under the message lists multiple sources, not one.
-
-## Files to change
-
-- `supabase/functions/_shared/brain-pipeline.ts` — widen rerank, raise selection caps, add diversity + multi-source rule.
-- `supabase/functions/brain-chat/index.ts` — update system prompt for multi-source weaving; add stream transform that strips invalid `[[cite:...]]` tokens.
-- `src/components/BrainCitations.tsx` and/or `src/pages/AiChat.tsx` — ensure tokens always render as pills, never raw text; strip orphan tokens when metadata is missing.
-
-No DB schema changes required.
+## Validation
+- Check recent assistant metadata after a test message: selected principles should usually be 3+ with 3+ unique source titles when the vault has matches.
+- Test a screenshot conversation: the retrieval query should be based on the screenshot’s extracted conversation, not “Analyze this image.”
+- Confirm the answer names multiple sources in prose and gives a specific copy/paste reply grounded in the vault.

@@ -200,8 +200,8 @@ export async function hybridRetrieve(
     if (!emb) { semPRuns.push([]); semCRuns.push([]); return; }
     const embStr = JSON.stringify(emb);
     const [pRes, cRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 8, match_threshold: 0.3, p_user_id: userId }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 8, match_threshold: 0.3, p_user_id: userId }),
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 14, match_threshold: 0.25, p_user_id: userId }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 12, match_threshold: 0.25, p_user_id: userId }),
     ]);
     semPRuns.push((pRes.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) })));
     semCRuns.push((cRes.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) })));
@@ -231,8 +231,8 @@ export async function hybridRetrieve(
   const dedupedC = deduplicateChunks(mergedC, "relevance_score");
 
   return {
-    principles: dedupedP.slice(0, 40),
-    chunks: dedupedC.slice(0, 30),
+    principles: dedupedP.slice(0, 60),
+    chunks: dedupedC.slice(0, 40),
     embeddingUsed,
   };
 }
@@ -321,12 +321,19 @@ export async function selectPrinciples(
 
   const candidateBlock = candidates.map((p) => `--- principle id=${p.id} ---
 name: ${p.principle_name}
+source: "${p.source_name}" (${p.source_type})
 category: ${p.category}
 what_i_learned: ${(p.what_i_learned || "").substring(0, 400)}
 how_to_apply: ${(p.how_to_apply || "").substring(0, 300)}
 when_to_use: ${(p.when_to_use || "").substring(0, 200)}
 exact_words: ${(p.exact_words_to_use || "").substring(0, 200)}
 deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
+
+  // Pre-compute available unique sources so we can ask for the right diversity
+  const uniqueSources = new Set(candidates.map((c) => c.source_id || c.source_name).filter(Boolean));
+  const sourceDiversityHint = uniqueSources.size >= 3
+    ? `Candidates span ${uniqueSources.size} different sources — your selection MUST include at least 3 different source titles. This is non-negotiable when the diversity exists.`
+    : `Candidates only cover ${uniqueSources.size} source(s) — use what's available.`;
 
   const sessionLine = session.active_framework_name
     ? `\nThe previous turn used framework "${session.active_framework_name}". Prefer to reuse it ONLY if it still fits — otherwise switch and explain why in the framework_name field.`
@@ -342,8 +349,9 @@ Pick TWO TIERS:
   • SUPPORTING (1-4): principles that reinforce, contrast, add a tactical layer, or supply scripts. They strengthen the primaries.
 
 CRITICAL DIVERSITY RULE:
-  - Whenever possible, pick principles from AT LEAST 3 DIFFERENT sources (different source titles). The user uploaded many books/videos and expects the reply to weave them together — not parrot a single source.
-  - Only collapse onto fewer sources if the candidates genuinely don't span 3 sources.
+  - ${sourceDiversityHint}
+  - Pick principles from AT LEAST 3 DIFFERENT source titles whenever the candidates allow it. The user uploaded many books/videos and expects the reply to weave them together — not parrot a single source.
+  - Prefer principles whose categories complement each other (e.g. mindset + objection handling + closing) over three from the same category.
 
 Rules:
   - Explain why each in one short sentence.
@@ -427,6 +435,36 @@ Rules:
   };
   pushTier(result.primary, "primary");
   pushTier(result.supporting || [], "supporting");
+
+  // ─── Source-diversity backfill ─────────────────────────────────────
+  // If the model collapsed onto 1-2 sources but the candidate pool has more,
+  // forcibly add top-ranked candidates from other sources as supporting tier.
+  // This is what guarantees the answer actually weaves multiple books/videos.
+  const selectedSourceKeys = new Set(
+    selected.map((s) => s.source_id || s.source_title).filter(Boolean) as string[]
+  );
+  if (selectedSourceKeys.size < 3 && uniqueSources.size >= 3) {
+    for (const cand of candidates) {
+      if (selected.length >= 7) break;
+      if (selectedSourceKeys.size >= 3 && selected.length >= 5) break;
+      if (seen.has(cand.id)) continue;
+      const key = cand.source_id || cand.source_name;
+      if (!key || selectedSourceKeys.has(key)) continue;
+      seen.add(cand.id);
+      selectedSourceKeys.add(key);
+      selected.push({
+        id: cand.id,
+        principle_name: cand.principle_name,
+        source_id: cand.source_id,
+        source_title: cand.source_name,
+        source_url: null,
+        source_type: cand.source_type,
+        why_relevant: `Adds a complementary angle from ${cand.source_name} (${cand.category}).`,
+        tier: "supporting",
+        full: cand,
+      });
+    }
+  }
 
   return {
     selected,
