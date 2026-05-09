@@ -182,11 +182,14 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     if (authError || !user) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
-    // Extract last user message text for retrieval
+    // Extract last user message text + images for retrieval brief
     const lastUserMsg = [...validated].reverse().find((m: any) => m.role === "user");
-    const queryText = typeof lastUserMsg?.content === "string"
+    const lastUserText = typeof lastUserMsg?.content === "string"
       ? lastUserMsg.content
       : (Array.isArray(lastUserMsg?.content) ? lastUserMsg.content.map((p: any) => p.text || "").join(" ") : "");
+    const lastUserImages: string[] = Array.isArray(lastUserMsg?.content)
+      ? lastUserMsg.content.filter((p: any) => p.type === "image_url" && p.image_url?.url).map((p: any) => p.image_url.url)
+      : [];
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
@@ -194,12 +197,57 @@ serve(async (req) => {
     // Build session context (last 3 exchanges + previous-turn principles)
     const session = await buildSessionContext(supabaseAdmin, conversation_id || null, validated);
 
+    // ─── STEP 0: Build a retrieval brief ───
+    // If there's a screenshot or the typed text is vague, ask a fast vision/text model
+    // to extract: prospect's last message, the user's goal, the objection/category,
+    // and a short keyword list. We use that as the retrieval `question` so vector
+    // search hits the right principles across the full vault — instead of querying
+    // the brain with "Analyze this image" or a 3-word prompt.
+    const recentForBrief = session.recent_exchanges.slice(-4)
+      .map((e) => `${e.role}: ${e.content}`).join("\n");
+
+    let retrievalQuery = lastUserText;
+    try {
+      const briefSystem = `You build a RETRIEVAL BRIEF for a sales-coaching vector database.
+Output a single dense paragraph (4-8 sentences) covering:
+- What the prospect actually said / the situation (paraphrase any screenshot conversation in plain text).
+- The user's goal or question.
+- The likely objection category (price, salary, trust, rapport, mindset, follow-up, closing, leadership, prospecting, psychology, framework, objection handling, etc.).
+- 8-15 keywords a sales book or video would use about this situation.
+Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to find the right principles in a vector DB.`;
+      const briefUserParts: any[] = [{ type: "text", text: `Recent chat:\n${recentForBrief || "(none)"}\n\nLatest user message: "${lastUserText || "(no text)"}"\n\nProduce the retrieval brief now.` }];
+      for (const img of lastUserImages.slice(0, 3)) briefUserParts.push({ type: "image_url", image_url: { url: img } });
+
+      const briefResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          temperature: 0.2,
+          max_tokens: 600,
+          messages: [
+            { role: "system", content: briefSystem },
+            { role: "user", content: lastUserImages.length > 0 ? briefUserParts : briefUserParts[0].text },
+          ],
+        }),
+      });
+      if (briefResp.ok) {
+        const bd = await briefResp.json();
+        const brief = bd.choices?.[0]?.message?.content?.trim();
+        if (brief && brief.length > 30) {
+          retrievalQuery = `${lastUserText}\n\n[Retrieval brief]\n${brief}`;
+        }
+      }
+    } catch (e) {
+      console.warn("[brain-chat] retrieval brief failed, falling back to raw text:", e);
+    }
+
     // ─── Layers 1+2 ───
     const pipeline = await runPipeline({
       apiKey: LOVABLE_API_KEY,
       supabaseAdmin,
       userId: user.id,
-      question: queryText,
+      question: retrievalQuery,
       session,
     });
 
