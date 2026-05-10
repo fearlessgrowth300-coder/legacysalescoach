@@ -79,6 +79,14 @@ export type RetrievalDebug = {
   top_score: number;
   embedding_used: boolean;
   empty_vault: boolean;
+  semantic_principles_count?: number;
+  static_principles_count?: number;
+  candidate_source_count?: number;
+  reranked_source_count?: number;
+  selected_source_count?: number;
+  candidate_source_titles?: string[];
+  selected_source_titles?: string[];
+  chunk_source_count?: number;
 };
 
 export type PipelineOutput = {
