@@ -562,10 +562,35 @@ export async function runPipeline(opts: {
   const subqueries = await expandQuery(apiKey, question, session);
 
   // Step 2
-  const { principles, chunks, embeddingUsed } = await hybridRetrieve(supabaseAdmin, userId, subqueries);
+  const { principles, chunks, embeddingUsed, semanticCount, staticCount } =
+    await hybridRetrieve(supabaseAdmin, userId, subqueries);
+
+  const candidateSourceTitles = [...new Set(
+    principles.map((p) => p.source_name).filter((x): x is string => !!x)
+  )];
+  const chunkSourceCount = new Set(
+    chunks.map((c) => c.source_id).filter((x): x is string => !!x)
+  ).size;
 
   // Step 3
   const { top, topScore } = await rerank(apiKey, question, principles, session);
+  const rerankedSourceCount = new Set(
+    top.map((p) => p.source_id || p.source_name).filter(Boolean) as string[]
+  ).size;
+
+  const baseDebug = {
+    subqueries,
+    candidate_count: principles.length,
+    reranked_count: top.length,
+    top_score: topScore,
+    embedding_used: embeddingUsed,
+    semantic_principles_count: semanticCount,
+    static_principles_count: staticCount,
+    candidate_source_count: candidateSourceTitles.length,
+    reranked_source_count: rerankedSourceCount,
+    candidate_source_titles: candidateSourceTitles.slice(0, 25),
+    chunk_source_count: chunkSourceCount,
+  };
 
   // Empty-vault gate (before Step 4 to save a call)
   const EMPTY_THRESHOLD = 0.35;
@@ -577,10 +602,7 @@ export async function runPipeline(opts: {
       framework_name: "",
       supporting_chunks: [],
       empty_vault_topic: topic,
-      debug: {
-        subqueries, candidate_count: principles.length, reranked_count: top.length,
-        top_score: topScore, embedding_used: embeddingUsed, empty_vault: true,
-      },
+      debug: { ...baseDebug, empty_vault: true, selected_source_count: 0, selected_source_titles: [] },
     };
   }
 
@@ -608,15 +630,14 @@ export async function runPipeline(opts: {
       framework_name: "",
       supporting_chunks: [],
       empty_vault_topic: topic,
-      debug: {
-        subqueries, candidate_count: principles.length, reranked_count: top.length,
-        top_score: topScore, embedding_used: embeddingUsed, empty_vault: true,
-      },
+      debug: { ...baseDebug, empty_vault: true, selected_source_count: 0, selected_source_titles: [] },
     };
   }
 
-  // Pick top 6 chunks — already deduped + diversity-aware via merge order
-  const supporting_chunks = chunks.slice(0, 6);
+  const selectedSourceTitles = [...new Set(reasoning.selected.map((s) => s.source_title).filter(Boolean))];
+
+  // Pick top 8 chunks — already deduped + diversity-aware via merge order
+  const supporting_chunks = chunks.slice(0, 8);
 
   return {
     selected: reasoning.selected,
@@ -624,8 +645,10 @@ export async function runPipeline(opts: {
     framework_name: reasoning.framework_name,
     supporting_chunks,
     debug: {
-      subqueries, candidate_count: principles.length, reranked_count: top.length,
-      top_score: topScore, embedding_used: embeddingUsed, empty_vault: false,
+      ...baseDebug,
+      empty_vault: false,
+      selected_source_count: selectedSourceTitles.length,
+      selected_source_titles: selectedSourceTitles,
     },
   };
 }
