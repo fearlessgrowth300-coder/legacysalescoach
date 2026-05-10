@@ -178,7 +178,13 @@ export async function hybridRetrieve(
   supabaseAdmin: any,
   userId: string,
   subqueries: string[],
-): Promise<{ principles: Principle[]; chunks: Chunk[]; embeddingUsed: boolean }> {
+): Promise<{
+  principles: Principle[];
+  chunks: Chunk[];
+  embeddingUsed: boolean;
+  semanticCount: number;
+  staticCount: number;
+}> {
   // Generate embeddings for all sub-queries in parallel
   const embeddings = await Promise.all(
     subqueries.map((q) => generateEmbedding(q.substring(0, 1000))),
@@ -192,13 +198,13 @@ export async function hybridRetrieve(
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false, nullsFirst: false })
-      .limit(60),
+      .limit(200),
     supabaseAdmin.from("knowledge_chunks")
       .select("id, content, category, source_id, source_type, relevance_score")
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false })
-      .limit(40),
+      .limit(60),
   ]);
 
   // Run semantic retrieval per sub-query
@@ -208,8 +214,8 @@ export async function hybridRetrieve(
     if (!emb) { semPRuns.push([]); semCRuns.push([]); return; }
     const embStr = JSON.stringify(emb);
     const [pRes, cRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 14, match_threshold: 0.25, p_user_id: userId }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 12, match_threshold: 0.25, p_user_id: userId }),
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 18, match_threshold: 0.22, p_user_id: userId }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 14, match_threshold: 0.22, p_user_id: userId }),
     ]);
     semPRuns.push((pRes.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) })));
     semCRuns.push((cRes.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) })));
@@ -232,16 +238,57 @@ export async function hybridRetrieve(
   }
   const enrichedSemP = flatSemP.map((p) => ({ ...(fullById.get(p.id) || {}), ...p }) as Principle);
 
-  const mergedP = mergeByIdPriority(enrichedSemP, (staticPrinciplesRaw || []) as Principle[]);
+  // Pull a few extra principles from sources surfaced by chunk retrieval
+  // so PDFs/videos that hit on chunk-search but not principle-search still
+  // contribute principles to the candidate pool.
+  const chunkSourceIds = [...new Set(
+    flatSemC.map((c) => c.source_id).filter((x): x is string => !!x)
+  )].slice(0, 8);
+  let chunkSourcePrinciples: Principle[] = [];
+  if (chunkSourceIds.length) {
+    const { data: csp } = await supabaseAdmin.from("sales_brain")
+      .select("id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story")
+      .eq("user_id", userId).is("workspace_id", null)
+      .in("source_id", chunkSourceIds)
+      .order("relevance_score", { ascending: false, nullsFirst: false })
+      .limit(40);
+    chunkSourcePrinciples = (csp || []) as Principle[];
+  }
+
+  const mergedP = mergeByIdPriority(enrichedSemP, chunkSourcePrinciples);
+  const mergedP2 = mergeByIdPriority(mergedP, (staticPrinciplesRaw || []) as Principle[]);
   const mergedC = mergeByIdPriority(flatSemC, (staticChunksRaw || []) as Chunk[]);
 
-  const dedupedP = deduplicatePrinciples(mergedP, "relevance_score");
+  const dedupedP = deduplicatePrinciples(mergedP2, "relevance_score");
   const dedupedC = deduplicateChunks(mergedC, "relevance_score");
 
+  // Source-balanced ordering: round-robin one principle per source until
+  // we've cycled through, then fill the rest. This guarantees the candidate
+  // pool spans many books/videos before we hand it to the reranker/selector.
+  const bySource = new Map<string, Principle[]>();
+  for (const p of dedupedP) {
+    const key = p.source_id || p.source_name || "__none__";
+    if (!bySource.has(key)) bySource.set(key, []);
+    bySource.get(key)!.push(p);
+  }
+  const balanced: Principle[] = [];
+  const queues = [...bySource.values()];
+  let progressed = true;
+  while (balanced.length < 80 && progressed) {
+    progressed = false;
+    for (const q of queues) {
+      const next = q.shift();
+      if (next) { balanced.push(next); progressed = true; }
+      if (balanced.length >= 80) break;
+    }
+  }
+
   return {
-    principles: dedupedP.slice(0, 60),
-    chunks: dedupedC.slice(0, 40),
+    principles: balanced.slice(0, 80),
+    chunks: dedupedC.slice(0, 50),
     embeddingUsed,
+    semanticCount: enrichedSemP.length,
+    staticCount: (staticPrinciplesRaw || []).length,
   };
 }
 
