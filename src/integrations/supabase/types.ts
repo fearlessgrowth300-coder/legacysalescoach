@@ -1067,7 +1067,9 @@ export type Database = {
           category: string
           content: string
           id: string
+          relevance_score: number
           similarity: number
+          source_id: string
           source_type: string
           trigger_phrases: string
         }[]
@@ -1081,12 +1083,22 @@ export type Database = {
         }
         Returns: {
           category: string
+          common_mistake: string
+          exact_words_to_use: string
           how_to_apply: string
           id: string
+          power_level: number
           principle_name: string
+          real_example_or_story: string
+          relevance_score: number
           similarity: number
+          source_id: string
           source_name: string
+          source_type: string
+          the_deep_why: string
           what_i_learned: string
+          when_not_to_use: string
+          when_to_use: string
         }[]
       }
     }

@@ -79,6 +79,14 @@ export type RetrievalDebug = {
   top_score: number;
   embedding_used: boolean;
   empty_vault: boolean;
+  semantic_principles_count?: number;
+  static_principles_count?: number;
+  candidate_source_count?: number;
+  reranked_source_count?: number;
+  selected_source_count?: number;
+  candidate_source_titles?: string[];
+  selected_source_titles?: string[];
+  chunk_source_count?: number;
 };
 
 export type PipelineOutput = {
@@ -170,7 +178,13 @@ export async function hybridRetrieve(
   supabaseAdmin: any,
   userId: string,
   subqueries: string[],
-): Promise<{ principles: Principle[]; chunks: Chunk[]; embeddingUsed: boolean }> {
+): Promise<{
+  principles: Principle[];
+  chunks: Chunk[];
+  embeddingUsed: boolean;
+  semanticCount: number;
+  staticCount: number;
+}> {
   // Generate embeddings for all sub-queries in parallel
   const embeddings = await Promise.all(
     subqueries.map((q) => generateEmbedding(q.substring(0, 1000))),
@@ -184,13 +198,13 @@ export async function hybridRetrieve(
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false, nullsFirst: false })
-      .limit(60),
+      .limit(200),
     supabaseAdmin.from("knowledge_chunks")
       .select("id, content, category, source_id, source_type, relevance_score")
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false })
-      .limit(40),
+      .limit(60),
   ]);
 
   // Run semantic retrieval per sub-query
@@ -200,8 +214,8 @@ export async function hybridRetrieve(
     if (!emb) { semPRuns.push([]); semCRuns.push([]); return; }
     const embStr = JSON.stringify(emb);
     const [pRes, cRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 14, match_threshold: 0.25, p_user_id: userId }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 12, match_threshold: 0.25, p_user_id: userId }),
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 18, match_threshold: 0.22, p_user_id: userId }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 14, match_threshold: 0.22, p_user_id: userId }),
     ]);
     semPRuns.push((pRes.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) })));
     semCRuns.push((cRes.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) })));
@@ -224,16 +238,57 @@ export async function hybridRetrieve(
   }
   const enrichedSemP = flatSemP.map((p) => ({ ...(fullById.get(p.id) || {}), ...p }) as Principle);
 
-  const mergedP = mergeByIdPriority(enrichedSemP, (staticPrinciplesRaw || []) as Principle[]);
+  // Pull a few extra principles from sources surfaced by chunk retrieval
+  // so PDFs/videos that hit on chunk-search but not principle-search still
+  // contribute principles to the candidate pool.
+  const chunkSourceIds = [...new Set(
+    flatSemC.map((c) => c.source_id).filter((x): x is string => !!x)
+  )].slice(0, 8);
+  let chunkSourcePrinciples: Principle[] = [];
+  if (chunkSourceIds.length) {
+    const { data: csp } = await supabaseAdmin.from("sales_brain")
+      .select("id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story")
+      .eq("user_id", userId).is("workspace_id", null)
+      .in("source_id", chunkSourceIds)
+      .order("relevance_score", { ascending: false, nullsFirst: false })
+      .limit(40);
+    chunkSourcePrinciples = (csp || []) as Principle[];
+  }
+
+  const mergedP = mergeByIdPriority(enrichedSemP, chunkSourcePrinciples);
+  const mergedP2 = mergeByIdPriority(mergedP, (staticPrinciplesRaw || []) as Principle[]);
   const mergedC = mergeByIdPriority(flatSemC, (staticChunksRaw || []) as Chunk[]);
 
-  const dedupedP = deduplicatePrinciples(mergedP, "relevance_score");
+  const dedupedP = deduplicatePrinciples(mergedP2, "relevance_score");
   const dedupedC = deduplicateChunks(mergedC, "relevance_score");
 
+  // Source-balanced ordering: round-robin one principle per source until
+  // we've cycled through, then fill the rest. This guarantees the candidate
+  // pool spans many books/videos before we hand it to the reranker/selector.
+  const bySource = new Map<string, Principle[]>();
+  for (const p of dedupedP) {
+    const key = p.source_id || p.source_name || "__none__";
+    if (!bySource.has(key)) bySource.set(key, []);
+    bySource.get(key)!.push(p);
+  }
+  const balanced: Principle[] = [];
+  const queues = [...bySource.values()];
+  let progressed = true;
+  while (balanced.length < 80 && progressed) {
+    progressed = false;
+    for (const q of queues) {
+      const next = q.shift();
+      if (next) { balanced.push(next); progressed = true; }
+      if (balanced.length >= 80) break;
+    }
+  }
+
   return {
-    principles: dedupedP.slice(0, 60),
-    chunks: dedupedC.slice(0, 40),
+    principles: balanced.slice(0, 80),
+    chunks: dedupedC.slice(0, 50),
     embeddingUsed,
+    semanticCount: enrichedSemP.length,
+    staticCount: (staticPrinciplesRaw || []).length,
   };
 }
 
@@ -246,12 +301,12 @@ export async function rerank(
   session: SessionContext,
 ): Promise<{ top: Principle[]; topScore: number }> {
   if (candidates.length === 0) return { top: [], topScore: 0 };
-  if (candidates.length <= 15) {
+  if (candidates.length <= 20) {
     return { top: candidates, topScore: candidates[0]?.relevance_score ? candidates[0].relevance_score / 100 : 0.6 };
   }
 
   const summary = candidates.map((p, i) =>
-    `${i}. id=${p.id} | ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`
+    `${i}. id=${p.id} | source="${p.source_name}" | ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`
   ).join("\n");
 
   const result = await callTool(
@@ -284,7 +339,6 @@ export async function rerank(
       if (typeof r.id === "string" && typeof r.score === "number") scoreMap.set(r.id, r.score);
     }
   }
-  // Fallback: any candidate without a score gets its semantic score (or 0.4)
   const activeBoost = new Set(session.active_principle_ids || []);
   const scored = candidates.map((p) => {
     const base = scoreMap.get(p.id) ?? (p.relevance_score ? p.relevance_score / 100 : 0.4);
@@ -292,18 +346,18 @@ export async function rerank(
     return { p, score };
   });
   scored.sort((a, b) => b.score - a.score);
-  // Diversity cap: at most 2 principles per source_id so one book can't dominate
+  // Diversity cap: at most 3 principles per source so one book can't dominate,
+  // but we keep more total so the selector has many sources to combine.
   const perSourceCount = new Map<string, number>();
   const diverse: { p: Principle; score: number }[] = [];
   const overflow: { p: Principle; score: number }[] = [];
   for (const s of scored) {
-    const sid = s.p.source_id || "__none__";
+    const sid = s.p.source_id || s.p.source_name || "__none__";
     const c = perSourceCount.get(sid) || 0;
-    if (c < 2) { diverse.push(s); perSourceCount.set(sid, c + 1); }
+    if (c < 3) { diverse.push(s); perSourceCount.set(sid, c + 1); }
     else overflow.push(s);
   }
-  // Fill up to 15 with overflow if diverse pool is short
-  const merged = [...diverse, ...overflow].slice(0, 15);
+  const merged = [...diverse, ...overflow].slice(0, 24);
   const top = merged.map((s) => s.p);
   return { top, topScore: scored[0]?.score ?? 0 };
 }
@@ -508,10 +562,35 @@ export async function runPipeline(opts: {
   const subqueries = await expandQuery(apiKey, question, session);
 
   // Step 2
-  const { principles, chunks, embeddingUsed } = await hybridRetrieve(supabaseAdmin, userId, subqueries);
+  const { principles, chunks, embeddingUsed, semanticCount, staticCount } =
+    await hybridRetrieve(supabaseAdmin, userId, subqueries);
+
+  const candidateSourceTitles = [...new Set(
+    principles.map((p) => p.source_name).filter((x): x is string => !!x)
+  )];
+  const chunkSourceCount = new Set(
+    chunks.map((c) => c.source_id).filter((x): x is string => !!x)
+  ).size;
 
   // Step 3
   const { top, topScore } = await rerank(apiKey, question, principles, session);
+  const rerankedSourceCount = new Set(
+    top.map((p) => p.source_id || p.source_name).filter(Boolean) as string[]
+  ).size;
+
+  const baseDebug = {
+    subqueries,
+    candidate_count: principles.length,
+    reranked_count: top.length,
+    top_score: topScore,
+    embedding_used: embeddingUsed,
+    semantic_principles_count: semanticCount,
+    static_principles_count: staticCount,
+    candidate_source_count: candidateSourceTitles.length,
+    reranked_source_count: rerankedSourceCount,
+    candidate_source_titles: candidateSourceTitles.slice(0, 25),
+    chunk_source_count: chunkSourceCount,
+  };
 
   // Empty-vault gate (before Step 4 to save a call)
   const EMPTY_THRESHOLD = 0.35;
@@ -523,10 +602,7 @@ export async function runPipeline(opts: {
       framework_name: "",
       supporting_chunks: [],
       empty_vault_topic: topic,
-      debug: {
-        subqueries, candidate_count: principles.length, reranked_count: top.length,
-        top_score: topScore, embedding_used: embeddingUsed, empty_vault: true,
-      },
+      debug: { ...baseDebug, empty_vault: true, selected_source_count: 0, selected_source_titles: [] },
     };
   }
 
@@ -554,15 +630,14 @@ export async function runPipeline(opts: {
       framework_name: "",
       supporting_chunks: [],
       empty_vault_topic: topic,
-      debug: {
-        subqueries, candidate_count: principles.length, reranked_count: top.length,
-        top_score: topScore, embedding_used: embeddingUsed, empty_vault: true,
-      },
+      debug: { ...baseDebug, empty_vault: true, selected_source_count: 0, selected_source_titles: [] },
     };
   }
 
-  // Pick top 6 chunks — already deduped + diversity-aware via merge order
-  const supporting_chunks = chunks.slice(0, 6);
+  const selectedSourceTitles = [...new Set(reasoning.selected.map((s) => s.source_title).filter(Boolean))];
+
+  // Pick top 8 chunks — already deduped + diversity-aware via merge order
+  const supporting_chunks = chunks.slice(0, 8);
 
   return {
     selected: reasoning.selected,
@@ -570,8 +645,10 @@ export async function runPipeline(opts: {
     framework_name: reasoning.framework_name,
     supporting_chunks,
     debug: {
-      subqueries, candidate_count: principles.length, reranked_count: top.length,
-      top_score: topScore, embedding_used: embeddingUsed, empty_vault: false,
+      ...baseDebug,
+      empty_vault: false,
+      selected_source_count: selectedSourceTitles.length,
+      selected_source_titles: selectedSourceTitles,
     },
   };
 }
