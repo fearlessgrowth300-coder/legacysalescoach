@@ -301,12 +301,12 @@ export async function rerank(
   session: SessionContext,
 ): Promise<{ top: Principle[]; topScore: number }> {
   if (candidates.length === 0) return { top: [], topScore: 0 };
-  if (candidates.length <= 15) {
+  if (candidates.length <= 20) {
     return { top: candidates, topScore: candidates[0]?.relevance_score ? candidates[0].relevance_score / 100 : 0.6 };
   }
 
   const summary = candidates.map((p, i) =>
-    `${i}. id=${p.id} | ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`
+    `${i}. id=${p.id} | source="${p.source_name}" | ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`
   ).join("\n");
 
   const result = await callTool(
@@ -339,7 +339,6 @@ export async function rerank(
       if (typeof r.id === "string" && typeof r.score === "number") scoreMap.set(r.id, r.score);
     }
   }
-  // Fallback: any candidate without a score gets its semantic score (or 0.4)
   const activeBoost = new Set(session.active_principle_ids || []);
   const scored = candidates.map((p) => {
     const base = scoreMap.get(p.id) ?? (p.relevance_score ? p.relevance_score / 100 : 0.4);
@@ -347,18 +346,18 @@ export async function rerank(
     return { p, score };
   });
   scored.sort((a, b) => b.score - a.score);
-  // Diversity cap: at most 2 principles per source_id so one book can't dominate
+  // Diversity cap: at most 3 principles per source so one book can't dominate,
+  // but we keep more total so the selector has many sources to combine.
   const perSourceCount = new Map<string, number>();
   const diverse: { p: Principle; score: number }[] = [];
   const overflow: { p: Principle; score: number }[] = [];
   for (const s of scored) {
-    const sid = s.p.source_id || "__none__";
+    const sid = s.p.source_id || s.p.source_name || "__none__";
     const c = perSourceCount.get(sid) || 0;
-    if (c < 2) { diverse.push(s); perSourceCount.set(sid, c + 1); }
+    if (c < 3) { diverse.push(s); perSourceCount.set(sid, c + 1); }
     else overflow.push(s);
   }
-  // Fill up to 15 with overflow if diverse pool is short
-  const merged = [...diverse, ...overflow].slice(0, 15);
+  const merged = [...diverse, ...overflow].slice(0, 24);
   const top = merged.map((s) => s.p);
   return { top, topScore: scored[0]?.score ?? 0 };
 }
