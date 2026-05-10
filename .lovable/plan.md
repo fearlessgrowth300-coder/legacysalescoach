@@ -1,60 +1,64 @@
-## Goal
-Make the AI Brain behave like the older strong responses again: first understand the actual user message or screenshot conversation, then search the whole uploaded vault across PDFs/videos/chunks/categories, then combine the best principles into one grounded reply.
+## What I found
 
-## What is wrong now
-- Screenshot/image messages are passed to the final answer model, but the retrieval query is only the typed text like “Analyze this image”; so the Brain searches the vault with the wrong query.
-- The pipeline selects too narrowly in practice: recent assistant messages show only 1 selected principle and 1 source, even though the vault has 4,212 principles.
-- `knowledge_chunks` are included only as weak background; they do not help choose which categories/sources/principles should drive the answer.
-- Assistant metadata saved to chat history drops `debug`, so it is hard to verify what was retrieved after reload.
-- The prompt says multi-source, but the selection step can still return one source and the answer then parrots that one book.
+The Brain is still returning one source because the pipeline is narrowing too hard before the multi-source selection step:
+
+1. The last saved assistant message shows `candidate_count: 1`, `reranked_count: 1`, `selected_count: 1`, `unique_sources: 1`.
+2. That means the diversity backfill never had 3+ candidates/sources to choose from.
+3. The database does have enough data: the user has about 2,960 principles across 30 sources, and the top static pool alone contains 11 sources.
+4. The vector database function `match_sales_brain` only returns minimal fields and can return one highly similar item, so semantic retrieval can dominate and starve the candidate pool before the selector sees the broader vault.
+5. The supporting chunks are currently passed as background only, but they are not used to expand/select source diversity strongly enough.
 
 ## Plan
 
-### 1. Add a “conversation understanding” step before retrieval
-In `supabase/functions/brain-chat/index.ts`:
-- Detect whether the last user message contains images/screenshots.
-- Use a fast vision/text model to produce a retrieval-ready brief before `runPipeline`, including:
-  - extracted screenshot text / DM conversation
-  - prospect’s last message
-  - user’s goal
-  - likely objection/category: salary, price, trust, rapport, closing, follow-up, leadership, mindset, etc.
-  - sales intent and emotional context
-- Use that enriched brief as the retrieval `question`, while still passing the original screenshot/message to the final answer model.
+### 1. Make retrieval impossible to starve
+Update `supabase/functions/_shared/brain-pipeline.ts` so the pipeline always blends semantic results with a wider category/source-balanced static pool before reranking.
 
-### 2. Make retrieval search wider and category-aware
-In `supabase/functions/_shared/brain-pipeline.ts`:
-- Expand query generation to use the enriched brief and recent conversation, not only the raw user text.
-- Increase semantic matches per subquery from small pools to a wider pool, then dedupe/rerank.
-- Pull more `knowledge_chunks` and use their categories/content to influence principle selection.
-- Add category balancing so one category/source cannot crowd everything out when the request clearly spans multiple angles.
+- Keep semantic matches, but do not let them become the whole candidate list.
+- Add a source-balanced fallback from `sales_brain` across categories like objection handling, prospecting, psychology, trust building, framework, closing, mindset, rapport.
+- Guarantee the reranker receives candidates from multiple source titles whenever the vault has them.
 
-### 3. Force multi-source selection unless the vault truly has only one match
-In `selectPrinciples`:
-- Require 3–6 primary/supporting principles when candidates span enough sources.
-- Enforce at code level after model selection: if the selector returns only one source, backfill top relevant candidates from other sources/categories.
-- Keep max 2 per source, but prefer at least 3 different source titles.
-- Include source title/type/category in the selection prompt so the model can choose across books/videos intentionally.
+### 2. Fix the semantic RPC bottleneck
+Create/update database functions with a migration:
 
-### 4. Use chunks as reasoning support, not invisible filler
-- Add selected/top chunks into the reasoning prompt with category/source context.
-- Tell the final model to use chunks to understand the situation and reinforce the chosen principles.
-- Keep citations tied to principles only, but let chunks guide what the reply should address.
+- `match_sales_brain` should return the rich fields needed by the pipeline: `source_id`, `source_type`, `relevance_score`, `power_level`, `exact_words_to_use`, `the_deep_why`, `when_to_use`, `when_not_to_use`, `common_mistake`, and `real_example_or_story`.
+- `match_knowledge_chunks` should return `source_id` and `relevance_score` too.
 
-### 5. Improve final answer instructions for “read message/screenshot first”
-In `brain-chat/index.ts` system prompt:
-- Add a mandatory flow:
-  1. Read the screenshot/text and identify what the prospect actually means.
-  2. Diagnose the stage/objection/emotion.
-  3. Pull from multiple vault sources.
-  4. Combine them into THE STRATEGY / THE REPLY / WHY THIS WORKS.
-- Make it avoid random/general replies and avoid answering from one book when more sources are available.
+This prevents semantic rows from arriving incomplete and being weaker than static rows.
 
-### 6. Save retrieval debug metadata so we can verify it
-When saving assistant messages in `src/pages/AiChat.tsx`:
-- Preserve `debug`, selected source count, unique source titles, and framework metadata.
-- This lets the Sources footer and database history show whether the Brain actually pulled from multiple sources after reload.
+### 3. Add source/category diversification after retrieval and rerank
+Add a deterministic balancing step:
 
-## Validation
-- Check recent assistant metadata after a test message: selected principles should usually be 3+ with 3+ unique source titles when the vault has matches.
-- Test a screenshot conversation: the retrieval query should be based on the screenshot’s extracted conversation, not “Analyze this image.”
-- Confirm the answer names multiple sources in prose and gives a specific copy/paste reply grounded in the vault.
+- Cap each source before rerank.
+- Require at least 8-12 candidates into selection when enough exist.
+- Backfill from underrepresented sources/categories before `selectPrinciples` runs.
+- Keep max 2 per source in final selection, but force at least 3 sources when candidates allow.
+
+### 4. Make chunks actively influence selected principles
+Use `knowledge_chunks` to extract extra keywords/categories/source IDs, then use those to pull matching `sales_brain` principles.
+
+This makes PDFs/videos and chunk context help decide which principles to use, instead of being invisible background.
+
+### 5. Improve debug visibility in saved metadata
+Extend `pipeline.debug` with:
+
+- `semantic_principles_count`
+- `static_principles_count`
+- `candidate_source_count`
+- `reranked_source_count`
+- `selected_source_count`
+- selected source titles
+- candidate source titles
+
+So after a retry we can verify in the database whether the Brain actually searched across the vault.
+
+### 6. Deploy and validate against the exact failing scenario
+After implementation:
+
+- Deploy `brain-chat`.
+- Test the same “job vs business” prompt through the edge function.
+- Verify the returned `brain_meta.selected_principles` has 3+ unique source titles when available.
+- Verify saved chat metadata no longer shows `candidate_count: 1` for broad sales questions.
+
+## Expected result
+
+For broad messages/screenshots like the one shown, the Brain should no longer pull only from `The_22_Immutable_Laws...`. It should retrieve across multiple relevant books/videos/chunks, then combine 3+ sources into the strategy, reply, and explanation.
