@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import {
   runPipeline, buildSessionContext, buildPrinciplesBlock, buildChunksBlock, buildEvidenceBlock,
 } from "../_shared/brain-pipeline.ts";
-import { validateCitations } from "../_shared/citations.ts";
+
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
