@@ -747,3 +747,15 @@ export function buildChunksBlock(chunks: Chunk[]): string {
   if (!chunks.length) return "(none)";
   return chunks.map((c, i) => `[chunk ${i + 1} | ${c.category}] ${(c.content || "").substring(0, 400)}`).join("\n\n");
 }
+
+export function buildEvidenceBlock(principles: Principle[]): string {
+  if (!principles.length) return "(none)";
+  return principles.map((p, i) =>
+    `### Evidence ${i + 1} — ${p.principle_name}
+Source: "${p.source_name}" (${p.source_type}) | category: ${p.category}
+What it teaches: ${(p.what_i_learned || "").substring(0, 280)}
+How to apply: ${(p.how_to_apply || "").substring(0, 240)}
+Exact words: ${(p.exact_words_to_use || "(none)").substring(0, 200)}
+Deep why: ${(p.the_deep_why || "(unspecified)").substring(0, 200)}`
+  ).join("\n\n");
+}
