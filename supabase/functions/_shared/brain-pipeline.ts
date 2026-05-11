@@ -94,6 +94,7 @@ export type PipelineOutput = {
   contradictions: ReasoningResult["contradictions"];
   framework_name: string;
   supporting_chunks: Chunk[];
+  evidence_principles: Principle[]; // wider source-balanced reranked pool for the response prompt
   debug: RetrievalDebug;
   empty_vault_topic?: string;
 };
