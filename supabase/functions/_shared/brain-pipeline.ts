@@ -94,6 +94,7 @@ export type PipelineOutput = {
   contradictions: ReasoningResult["contradictions"];
   framework_name: string;
   supporting_chunks: Chunk[];
+  evidence_principles: Principle[]; // wider source-balanced reranked pool for the response prompt
   debug: RetrievalDebug;
   empty_vault_topic?: string;
 };
@@ -601,6 +602,7 @@ export async function runPipeline(opts: {
       contradictions: [],
       framework_name: "",
       supporting_chunks: [],
+      evidence_principles: [],
       empty_vault_topic: topic,
       debug: { ...baseDebug, empty_vault: true, selected_source_count: 0, selected_source_titles: [] },
     };
@@ -629,6 +631,7 @@ export async function runPipeline(opts: {
       contradictions: reasoning.contradictions,
       framework_name: "",
       supporting_chunks: [],
+      evidence_principles: [],
       empty_vault_topic: topic,
       debug: { ...baseDebug, empty_vault: true, selected_source_count: 0, selected_source_titles: [] },
     };
@@ -639,11 +642,34 @@ export async function runPipeline(opts: {
   // Pick top 8 chunks — already deduped + diversity-aware via merge order
   const supporting_chunks = chunks.slice(0, 8);
 
+  // Build a wider source-balanced "evidence pack" of reranked principles so the
+  // response prompt can weave from many books/videos even when the strict
+  // selector collapsed to one or two sources.
+  const selectedIds = new Set(reasoning.selected.map((s) => s.id));
+  const bySrc = new Map<string, Principle[]>();
+  for (const p of top) {
+    if (selectedIds.has(p.id)) continue;
+    const k = p.source_id || p.source_name || "__none__";
+    if (!bySrc.has(k)) bySrc.set(k, []);
+    bySrc.get(k)!.push(p);
+  }
+  const evidence: Principle[] = [];
+  let prog = true;
+  while (evidence.length < 14 && prog) {
+    prog = false;
+    for (const q of bySrc.values()) {
+      const n = q.shift();
+      if (n) { evidence.push(n); prog = true; }
+      if (evidence.length >= 14) break;
+    }
+  }
+
   return {
     selected: reasoning.selected,
     contradictions: reasoning.contradictions,
     framework_name: reasoning.framework_name,
     supporting_chunks,
+    evidence_principles: evidence,
     debug: {
       ...baseDebug,
       empty_vault: false,
@@ -720,4 +746,16 @@ Real example: ${p.real_example_or_story || "(none)"}`;
 export function buildChunksBlock(chunks: Chunk[]): string {
   if (!chunks.length) return "(none)";
   return chunks.map((c, i) => `[chunk ${i + 1} | ${c.category}] ${(c.content || "").substring(0, 400)}`).join("\n\n");
+}
+
+export function buildEvidenceBlock(principles: Principle[]): string {
+  if (!principles.length) return "(none)";
+  return principles.map((p, i) =>
+    `### Evidence ${i + 1} — ${p.principle_name}
+Source: "${p.source_name}" (${p.source_type}) | category: ${p.category}
+What it teaches: ${(p.what_i_learned || "").substring(0, 280)}
+How to apply: ${(p.how_to_apply || "").substring(0, 240)}
+Exact words: ${(p.exact_words_to_use || "(none)").substring(0, 200)}
+Deep why: ${(p.the_deep_why || "(unspecified)").substring(0, 200)}`
+  ).join("\n\n");
 }

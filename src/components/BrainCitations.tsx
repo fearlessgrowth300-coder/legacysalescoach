@@ -36,6 +36,10 @@ export default function BrainCitations({ content, selectedPrinciples, frameworkN
     return m;
   }, [principles]);
 
+  // Old-style replies name sources inline and never emit [[cite:]] tokens.
+  // Only render the Sources footer when the model actually used citation tokens.
+  const hasCiteTokens = useMemo(() => /\[\[cite:[0-9a-f-]{8,}\]\]/i.test(content), [content]);
+
   // Replace [[cite:id]] with markdown link tokens we can post-render with `a` component
   const transformed = useMemo(() => {
     return content.replace(CITE_RE, (_match, rawId) => {
@@ -97,7 +101,7 @@ export default function BrainCitations({ content, selectedPrinciples, frameworkN
         </ReactMarkdown>
       </div>
 
-      {principles.length > 0 && (
+      {hasCiteTokens && principles.length > 0 && (
         <div className="mt-4 pt-3 border-t border-border/50">
           <div className="flex items-center gap-2 mb-2">
             <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
