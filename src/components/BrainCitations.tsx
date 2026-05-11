@@ -38,7 +38,7 @@ export default function BrainCitations({ content, selectedPrinciples, frameworkN
 
   // Old-style replies name sources inline and never emit [[cite:]] tokens.
   // Only render the Sources footer when the model actually used citation tokens.
-  const hasCiteTokens = useMemo(() => CITE_RE.test(content), [content]);
+  const hasCiteTokens = useMemo(() => /\[\[cite:[0-9a-f-]{8,}\]\]/i.test(content), [content]);
 
   // Replace [[cite:id]] with markdown link tokens we can post-render with `a` component
   const transformed = useMemo(() => {
