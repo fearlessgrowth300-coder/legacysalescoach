@@ -101,7 +101,7 @@ export default function BrainCitations({ content, selectedPrinciples, frameworkN
         </ReactMarkdown>
       </div>
 
-      {principles.length > 0 && (
+      {hasCiteTokens && principles.length > 0 && (
         <div className="mt-4 pt-3 border-t border-border/50">
           <div className="flex items-center gap-2 mb-2">
             <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
