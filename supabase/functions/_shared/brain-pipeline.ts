@@ -602,6 +602,7 @@ export async function runPipeline(opts: {
       contradictions: [],
       framework_name: "",
       supporting_chunks: [],
+      evidence_principles: [],
       empty_vault_topic: topic,
       debug: { ...baseDebug, empty_vault: true, selected_source_count: 0, selected_source_titles: [] },
     };
@@ -630,6 +631,7 @@ export async function runPipeline(opts: {
       contradictions: reasoning.contradictions,
       framework_name: "",
       supporting_chunks: [],
+      evidence_principles: [],
       empty_vault_topic: topic,
       debug: { ...baseDebug, empty_vault: true, selected_source_count: 0, selected_source_titles: [] },
     };
@@ -640,11 +642,34 @@ export async function runPipeline(opts: {
   // Pick top 8 chunks — already deduped + diversity-aware via merge order
   const supporting_chunks = chunks.slice(0, 8);
 
+  // Build a wider source-balanced "evidence pack" of reranked principles so the
+  // response prompt can weave from many books/videos even when the strict
+  // selector collapsed to one or two sources.
+  const selectedIds = new Set(reasoning.selected.map((s) => s.id));
+  const bySrc = new Map<string, Principle[]>();
+  for (const p of top) {
+    if (selectedIds.has(p.id)) continue;
+    const k = p.source_id || p.source_name || "__none__";
+    if (!bySrc.has(k)) bySrc.set(k, []);
+    bySrc.get(k)!.push(p);
+  }
+  const evidence: Principle[] = [];
+  let prog = true;
+  while (evidence.length < 14 && prog) {
+    prog = false;
+    for (const q of bySrc.values()) {
+      const n = q.shift();
+      if (n) { evidence.push(n); prog = true; }
+      if (evidence.length >= 14) break;
+    }
+  }
+
   return {
     selected: reasoning.selected,
     contradictions: reasoning.contradictions,
     framework_name: reasoning.framework_name,
     supporting_chunks,
+    evidence_principles: evidence,
     debug: {
       ...baseDebug,
       empty_vault: false,
