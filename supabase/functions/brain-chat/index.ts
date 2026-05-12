@@ -353,7 +353,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
       ...pipeline.evidence_principles.map((p) => p.source_name),
     ].filter((x): x is string => !!x))];
 
-    const systemPrompt = buildSystemPrompt({
+    let systemPrompt = buildSystemPrompt({
       selectedBlock: buildPrinciplesBlock(pipeline.selected),
       evidenceBlock: buildEvidenceBlock(pipeline.evidence_principles),
       chunksBlock: buildChunksBlock(pipeline.supporting_chunks),
@@ -362,6 +362,10 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
       frameworkName: pipeline.framework_name,
       sourceTitles,
     });
+
+    if (hasImageAttachment && conversationText) {
+      systemPrompt += `\n\n=== SCREENSHOT CONVERSATION (extracted via OCR) ===\n${conversationText}\n\n=== USER INSTRUCTION ===\n"${userInstruction}"\n\nThe user pasted a real conversation as a screenshot. Read it carefully, diagnose what is happening, then follow the response style above. End your reply with a clear, copy-paste ready message the user can send to this prospect.`;
+    }
 
     const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
