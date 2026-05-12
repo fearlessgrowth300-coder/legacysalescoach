@@ -193,6 +193,13 @@ export default function Workspaces() {
         target_audience: targetAudience || null,
         business_model: businessModel || null,
         positioning: positioning || null,
+        audience_description: audienceDescription || null,
+        pain_points: painPoints || null,
+        common_objections: commonObjections || null,
+        friend_backstory: friendBackstory || null,
+        transformation: transformation || null,
+        expert_description: expertDescription || null,
+        referral_triggers: referralTriggers || null,
         is_active: !workspaces?.length,
       } as any).select().single();
       if (error) throw error;
