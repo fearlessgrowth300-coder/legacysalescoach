@@ -593,9 +593,14 @@ export async function runPipeline(opts: {
     chunk_source_count: chunkSourceCount,
   };
 
-  // Empty-vault gate (before Step 4 to save a call)
-  const EMPTY_THRESHOLD = 0.35;
-  if (top.length === 0 || topScore < EMPTY_THRESHOLD) {
+  // Empty-vault gate — only fires when retrieval truly returned nothing useful.
+  // Even one decent reranked principle is enough to attempt selection.
+  const STRONG = 0.45;
+  const decent = top.filter((p) =>
+    (typeof p.relevance_score === "number" && p.relevance_score >= STRONG * 100) ||
+    (p.relevance_score ?? 0) >= 4
+  );
+  if (top.length === 0 || (decent.length < 1 && topScore < 0.25)) {
     const topic = await extractTopic(apiKey, question);
     return {
       selected: [],
