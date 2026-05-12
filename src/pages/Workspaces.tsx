@@ -53,6 +53,13 @@ export default function Workspaces() {
   const [editTarget, setEditTarget] = useState("");
   const [editBusiness, setEditBusiness] = useState("");
   const [editPositioning, setEditPositioning] = useState("");
+  const [editAudienceDescription, setEditAudienceDescription] = useState("");
+  const [editPainPoints, setEditPainPoints] = useState("");
+  const [editCommonObjections, setEditCommonObjections] = useState("");
+  const [editFriendBackstory, setEditFriendBackstory] = useState("");
+  const [editTransformation, setEditTransformation] = useState("");
+  const [editExpertDescription, setEditExpertDescription] = useState("");
+  const [editReferralTriggers, setEditReferralTriggers] = useState("");
   const [editLinkedIds, setEditLinkedIds] = useState<string[]>([]);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const { data: workspaces } = useQuery({
