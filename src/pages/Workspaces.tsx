@@ -90,6 +90,8 @@ export default function Workspaces() {
     setName(""); setNicheDescription(""); setInstagramUrl(""); setTiktokUrl("");
     setStoreUrl(""); setCustomFramework(""); setWorkspaceType("friend"); setLinkedFriendIds([]);
     setTargetAudience(""); setBusinessModel(""); setPositioning("");
+    setAudienceDescription(""); setPainPoints(""); setCommonObjections("");
+    setFriendBackstory(""); setTransformation(""); setExpertDescription(""); setReferralTriggers("");
   };
 
   const openEditDialog = (ws: any) => {
@@ -103,6 +105,13 @@ export default function Workspaces() {
     setEditTarget(ws.target_audience || "");
     setEditBusiness(ws.business_model || "");
     setEditPositioning(ws.positioning || "");
+    setEditAudienceDescription(ws.audience_description || "");
+    setEditPainPoints(ws.pain_points || "");
+    setEditCommonObjections(ws.common_objections || "");
+    setEditFriendBackstory(ws.friend_backstory || "");
+    setEditTransformation(ws.transformation || "");
+    setEditExpertDescription(ws.expert_description || "");
+    setEditReferralTriggers(ws.referral_triggers || "");
     // Load existing links for expert workspaces
     const linked = (workspaceLinks || [])
       .filter((l: any) => l.expert_workspace_id === ws.id)
