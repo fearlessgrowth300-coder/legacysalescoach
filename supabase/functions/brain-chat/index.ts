@@ -316,7 +316,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
       session,
     });
 
-    const encoder = new TextEncoder();
+    // (encoder declared above)
 
     // ─── EMPTY VAULT — fixed-form, no Step 5 ───
     if (pipeline.debug.empty_vault || pipeline.selected.length === 0) {
