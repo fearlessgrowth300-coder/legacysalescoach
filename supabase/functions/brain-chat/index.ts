@@ -192,49 +192,119 @@ serve(async (req) => {
     // Build session context (last 3 exchanges + previous-turn principles)
     const session = await buildSessionContext(supabaseAdmin, conversation_id || null, validated);
 
-    // ─── STEP 0: Build a retrieval brief ───
-    // If there's a screenshot or the typed text is vague, ask a fast vision/text model
-    // to extract: prospect's last message, the user's goal, the objection/category,
-    // and a short keyword list. We use that as the retrieval `question` so vector
-    // search hits the right principles across the full vault — instead of querying
-    // the brain with "Analyze this image" or a 3-word prompt.
     const recentForBrief = session.recent_exchanges.slice(-4)
       .map((e) => `${e.role}: ${e.content}`).join("\n");
 
     let retrievalQuery = lastUserText;
-    try {
-      const briefSystem = `You build a RETRIEVAL BRIEF for a sales-coaching vector database.
+    let conversationText = ""; // OCR'd screenshot text
+    let userInstruction = "";  // typed text accompanying the screenshot
+    const hasImageAttachment = lastUserImages.length > 0;
+    const encoder = new TextEncoder();
+
+    if (hasImageAttachment) {
+      console.log("[brain-chat] image flow — running OCR on", lastUserImages.length, "image(s)");
+      // OCR each image via the existing ocr-screenshot edge function
+      const ocrTexts: string[] = [];
+      for (const img of lastUserImages.slice(0, 4)) {
+        try {
+          let imageBase64 = "";
+          let mimeType = "image/png";
+          if (img.startsWith("data:")) {
+            const m = img.match(/^data:([^;]+);base64,(.+)$/);
+            if (m) { mimeType = m[1]; imageBase64 = m[2]; }
+          } else {
+            const dataUrl = await imageToBase64(img);
+            if (dataUrl) {
+              const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+              if (m) { mimeType = m[1]; imageBase64 = m[2]; }
+            }
+          }
+          if (!imageBase64) continue;
+          const { data, error } = await supabaseAdmin.functions.invoke("ocr-screenshot", {
+            body: { imageBase64, mimeType },
+            headers: { Authorization: authHeader },
+          });
+          if (!error && data?.text) ocrTexts.push(String(data.text));
+        } catch (e) {
+          console.warn("[brain-chat] OCR failed for an image:", e);
+        }
+      }
+      conversationText = ocrTexts.join("\n\n---\n\n").trim();
+      userInstruction = (lastUserText || "").trim() || "Read the conversation and write the best reply.";
+
+      if (conversationText.length < 20) {
+        const fixed = "I couldn't read the screenshot clearly. Try uploading a higher-quality image or paste the conversation text directly.";
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: { selected_principles: [], framework_name: "", contradictions: [], empty_vault: false, debug: { ocr_failed: true } } })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: fixed } }] })}\n\n`));
+            controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+            controller.close();
+          },
+        });
+        return new Response(stream, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
+      }
+
+      // Extract a sales-situation sentence to drive vector retrieval
+      try {
+        const sitResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash-lite",
+            temperature: 0,
+            max_tokens: 120,
+            messages: [{
+              role: "user",
+              content: `Read this conversation and write a 1-sentence sales situation description for semantic search. Focus on objection type, prospect psychology, and conversation stage. Output the situation only — no other text.\n\nConversation:\n${conversationText.slice(0, 1500)}`,
+            }],
+          }),
+        });
+        if (sitResp.ok) {
+          const sd = await sitResp.json();
+          const sit = sd.choices?.[0]?.message?.content?.trim();
+          if (sit) {
+            retrievalQuery = `${sit}\n\nUser instruction: ${userInstruction}`;
+            console.log("[brain-chat] situation:", sit);
+          }
+        }
+      } catch (e) {
+        console.warn("[brain-chat] situation extraction failed:", e);
+        retrievalQuery = conversationText.slice(0, 600);
+      }
+    } else {
+      // ─── No image: build a retrieval brief from text ───
+      try {
+        const briefSystem = `You build a RETRIEVAL BRIEF for a sales-coaching vector database.
 Output a single dense paragraph (4-8 sentences) covering:
 - What the prospect actually said / the situation (paraphrase any screenshot conversation in plain text).
 - The user's goal or question.
 - The likely objection category (price, salary, trust, rapport, mindset, follow-up, closing, leadership, prospecting, psychology, framework, objection handling, etc.).
 - 8-15 keywords a sales book or video would use about this situation.
 Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to find the right principles in a vector DB.`;
-      const briefUserParts: any[] = [{ type: "text", text: `Recent chat:\n${recentForBrief || "(none)"}\n\nLatest user message: "${lastUserText || "(no text)"}"\n\nProduce the retrieval brief now.` }];
-      for (const img of lastUserImages.slice(0, 3)) briefUserParts.push({ type: "image_url", image_url: { url: img } });
-
-      const briefResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          temperature: 0.2,
-          max_tokens: 600,
-          messages: [
-            { role: "system", content: briefSystem },
-            { role: "user", content: lastUserImages.length > 0 ? briefUserParts : briefUserParts[0].text },
-          ],
-        }),
-      });
-      if (briefResp.ok) {
-        const bd = await briefResp.json();
-        const brief = bd.choices?.[0]?.message?.content?.trim();
-        if (brief && brief.length > 30) {
-          retrievalQuery = `${lastUserText}\n\n[Retrieval brief]\n${brief}`;
+        const briefResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash",
+            temperature: 0.2,
+            max_tokens: 600,
+            messages: [
+              { role: "system", content: briefSystem },
+              { role: "user", content: `Recent chat:\n${recentForBrief || "(none)"}\n\nLatest user message: "${lastUserText || "(no text)"}"\n\nProduce the retrieval brief now.` },
+            ],
+          }),
+        });
+        if (briefResp.ok) {
+          const bd = await briefResp.json();
+          const brief = bd.choices?.[0]?.message?.content?.trim();
+          if (brief && brief.length > 30) {
+            retrievalQuery = `${lastUserText}\n\n[Retrieval brief]\n${brief}`;
+          }
         }
+      } catch (e) {
+        console.warn("[brain-chat] retrieval brief failed, falling back to raw text:", e);
       }
-    } catch (e) {
-      console.warn("[brain-chat] retrieval brief failed, falling back to raw text:", e);
     }
 
     // ─── Layers 1+2 ───
