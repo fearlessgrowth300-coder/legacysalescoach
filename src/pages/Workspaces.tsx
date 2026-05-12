@@ -32,6 +32,14 @@ export default function Workspaces() {
   const [targetAudience, setTargetAudience] = useState("");
   const [businessModel, setBusinessModel] = useState("");
   const [positioning, setPositioning] = useState("");
+  // Friend Mode fields
+  const [audienceDescription, setAudienceDescription] = useState("");
+  const [painPoints, setPainPoints] = useState("");
+  const [commonObjections, setCommonObjections] = useState("");
+  const [friendBackstory, setFriendBackstory] = useState("");
+  const [transformation, setTransformation] = useState("");
+  const [expertDescription, setExpertDescription] = useState("");
+  const [referralTriggers, setReferralTriggers] = useState("");
 
   // Edit state
   const [editWorkspace, setEditWorkspace] = useState<any>(null);
@@ -45,6 +53,13 @@ export default function Workspaces() {
   const [editTarget, setEditTarget] = useState("");
   const [editBusiness, setEditBusiness] = useState("");
   const [editPositioning, setEditPositioning] = useState("");
+  const [editAudienceDescription, setEditAudienceDescription] = useState("");
+  const [editPainPoints, setEditPainPoints] = useState("");
+  const [editCommonObjections, setEditCommonObjections] = useState("");
+  const [editFriendBackstory, setEditFriendBackstory] = useState("");
+  const [editTransformation, setEditTransformation] = useState("");
+  const [editExpertDescription, setEditExpertDescription] = useState("");
+  const [editReferralTriggers, setEditReferralTriggers] = useState("");
   const [editLinkedIds, setEditLinkedIds] = useState<string[]>([]);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const { data: workspaces } = useQuery({
@@ -75,6 +90,8 @@ export default function Workspaces() {
     setName(""); setNicheDescription(""); setInstagramUrl(""); setTiktokUrl("");
     setStoreUrl(""); setCustomFramework(""); setWorkspaceType("friend"); setLinkedFriendIds([]);
     setTargetAudience(""); setBusinessModel(""); setPositioning("");
+    setAudienceDescription(""); setPainPoints(""); setCommonObjections("");
+    setFriendBackstory(""); setTransformation(""); setExpertDescription(""); setReferralTriggers("");
   };
 
   const openEditDialog = (ws: any) => {
@@ -88,6 +105,13 @@ export default function Workspaces() {
     setEditTarget(ws.target_audience || "");
     setEditBusiness(ws.business_model || "");
     setEditPositioning(ws.positioning || "");
+    setEditAudienceDescription(ws.audience_description || "");
+    setEditPainPoints(ws.pain_points || "");
+    setEditCommonObjections(ws.common_objections || "");
+    setEditFriendBackstory(ws.friend_backstory || "");
+    setEditTransformation(ws.transformation || "");
+    setEditExpertDescription(ws.expert_description || "");
+    setEditReferralTriggers(ws.referral_triggers || "");
     // Load existing links for expert workspaces
     const linked = (workspaceLinks || [])
       .filter((l: any) => l.expert_workspace_id === ws.id)
@@ -109,6 +133,13 @@ export default function Workspaces() {
         target_audience: editTarget || null,
         business_model: editBusiness || null,
         positioning: editPositioning || null,
+        audience_description: editAudienceDescription || null,
+        pain_points: editPainPoints || null,
+        common_objections: editCommonObjections || null,
+        friend_backstory: editFriendBackstory || null,
+        transformation: editTransformation || null,
+        expert_description: editExpertDescription || null,
+        referral_triggers: editReferralTriggers || null,
       } as any).eq("id", editWorkspace.id);
       if (error) throw error;
 
@@ -162,6 +193,13 @@ export default function Workspaces() {
         target_audience: targetAudience || null,
         business_model: businessModel || null,
         positioning: positioning || null,
+        audience_description: audienceDescription || null,
+        pain_points: painPoints || null,
+        common_objections: commonObjections || null,
+        friend_backstory: friendBackstory || null,
+        transformation: transformation || null,
+        expert_description: expertDescription || null,
+        referral_triggers: referralTriggers || null,
         is_active: !workspaces?.length,
       } as any).select().single();
       if (error) throw error;
@@ -251,11 +289,15 @@ export default function Workspaces() {
   const renderWorkspaceFields = (mode: "create" | "edit") => {
     const isExpert = mode === "create" ? workspaceType === "expert" : editWorkspace?.workspace_type === "expert";
     const vals = mode === "create"
-      ? { name, niche: nicheDescription, ig: instagramUrl, tt: tiktokUrl, store: storeUrl, fw: customFramework, ta: targetAudience, bm: businessModel, pos: positioning, linked: linkedFriendIds }
-      : { name: editName, niche: editNiche, ig: editInstagram, tt: editTiktok, store: editStore, fw: editFramework, ta: editTarget, bm: editBusiness, pos: editPositioning, linked: editLinkedIds };
+      ? { name, niche: nicheDescription, ig: instagramUrl, tt: tiktokUrl, store: storeUrl, fw: customFramework, ta: targetAudience, bm: businessModel, pos: positioning, linked: linkedFriendIds,
+          aud: audienceDescription, pp: painPoints, obj: commonObjections, back: friendBackstory, trans: transformation, exp: expertDescription, ref: referralTriggers }
+      : { name: editName, niche: editNiche, ig: editInstagram, tt: editTiktok, store: editStore, fw: editFramework, ta: editTarget, bm: editBusiness, pos: editPositioning, linked: editLinkedIds,
+          aud: editAudienceDescription, pp: editPainPoints, obj: editCommonObjections, back: editFriendBackstory, trans: editTransformation, exp: editExpertDescription, ref: editReferralTriggers };
     const setters = mode === "create"
-      ? { name: setName, niche: setNicheDescription, ig: setInstagramUrl, tt: setTiktokUrl, store: setStoreUrl, fw: setCustomFramework, ta: setTargetAudience, bm: setBusinessModel, pos: setPositioning, toggleLink: toggleLinkedFriend }
-      : { name: setEditName, niche: setEditNiche, ig: setEditInstagram, tt: setEditTiktok, store: setEditStore, fw: setEditFramework, ta: setEditTarget, bm: setEditBusiness, pos: setEditPositioning, toggleLink: toggleEditLinkedFriend };
+      ? { name: setName, niche: setNicheDescription, ig: setInstagramUrl, tt: setTiktokUrl, store: setStoreUrl, fw: setCustomFramework, ta: setTargetAudience, bm: setBusinessModel, pos: setPositioning, toggleLink: toggleLinkedFriend,
+          aud: setAudienceDescription, pp: setPainPoints, obj: setCommonObjections, back: setFriendBackstory, trans: setTransformation, exp: setExpertDescription, ref: setReferralTriggers }
+      : { name: setEditName, niche: setEditNiche, ig: setEditInstagram, tt: setEditTiktok, store: setEditStore, fw: setEditFramework, ta: setEditTarget, bm: setEditBusiness, pos: setEditPositioning, toggleLink: toggleEditLinkedFriend,
+          aud: setEditAudienceDescription, pp: setEditPainPoints, obj: setEditCommonObjections, back: setEditFriendBackstory, trans: setEditTransformation, exp: setEditExpertDescription, ref: setEditReferralTriggers };
 
     return (
       <div className="space-y-4 py-2">
@@ -334,6 +376,84 @@ export default function Workspaces() {
             rows={6}
           />
         </div>
+
+        {!isExpert && (
+          <div className="space-y-5 border-t pt-4 mt-2">
+            <div className="space-y-1">
+              <h3 className="text-base font-semibold flex items-center gap-2"><Heart className="h-4 w-4 text-pink-500" /> Friend Mode Personality</h3>
+              <p className="text-xs text-muted-foreground">These fields shape who the AI Friend "is" and how it responds.</p>
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">Your Target Audience</Label>
+              <p className="text-xs text-muted-foreground mb-2">Who are the people you reach out to? The AI Friend will BE one of them.</p>
+              <Textarea value={vals.aud} onChange={(e) => setters.aud(e.target.value)} rows={6} placeholder={`Describe your audience in detail:
+- Who are they? (moms, 9-5 workers, beginners, etc.)
+- Age range and lifestyle
+- Where they hang out online
+- What their daily life looks like
+- What they secretly want but won't admit
+- What makes them feel stuck or behind in life`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">Top Pain Points In This Niche</Label>
+              <p className="text-xs text-muted-foreground mb-2">List every struggle, fear, and frustration. The AI will detect and respond from personal experience.</p>
+              <Textarea value={vals.pp} onChange={(e) => setters.pp(e.target.value)} rows={6} placeholder={`List all pain points (one per line):
+- Struggling to make their first sale online
+- Overwhelmed by too many tools and platforms
+- Tried other programs and got burned
+- Husband/family doesn't believe in them
+- No time because of kids and full-time job
+- Feel like they're not tech-savvy enough
+- Scared of being scammed again`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">Common Objections You Hear</Label>
+              <p className="text-xs text-muted-foreground mb-2">What prospects say when they hesitate. The AI Friend will have a personal response ready.</p>
+              <Textarea value={vals.obj} onChange={(e) => setters.obj(e.target.value)} rows={5} placeholder={`List objections you hear most:
+- I don't have money right now
+- I don't have time with my kids
+- I've tried things like this before
+- Is this a pyramid scheme?
+- I'm not good with technology
+- Let me think about it`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">The Friend's Personal Story</Label>
+              <p className="text-xs text-muted-foreground mb-2">The story the AI tells as its own — first person, mirroring the audience's struggle.</p>
+              <Textarea value={vals.back} onChange={(e) => setters.back(e.target.value)} rows={6} placeholder={`Write the friend's story in first person:
+I was exactly where you are 18 months ago. I was a mum of 3, working a job I hated, trying to figure out this whole online business thing while everyone around me told me I was wasting my time...`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">The Transformation / Result</Label>
+              <p className="text-xs text-muted-foreground mb-2">What changed for the friend. Real and specific — no income claims.</p>
+              <Textarea value={vals.trans} onChange={(e) => setters.trans(e.target.value)} rows={5} placeholder={`What changed and how:
+Then I found a team that actually showed me step by step. Within 3 months I replaced my job income and now I work from home around my kids...`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">The Expert / Team Being Referred To</Label>
+              <p className="text-xs text-muted-foreground mb-2">Who the friend refers the prospect to — described warmly, as a person/team they trust.</p>
+              <Textarea value={vals.exp} onChange={(e) => setters.exp(e.target.value)} rows={5} placeholder={`Describe the expert/team naturally:
+The team that helped me is run by [name]. They specialise in helping people like us starting from zero. They don't do the hype thing — they actually sit with you and build it properly...`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">When To Make The Referral</Label>
+              <p className="text-xs text-muted-foreground mb-2">Signals that tell the Friend AI the prospect is ready to be referred.</p>
+              <Textarea value={vals.ref} onChange={(e) => setters.ref(e.target.value)} rows={5} placeholder={`Signs the prospect is ready:
+- They've shared a specific struggle
+- They've asked how you did it
+- They've said they want to change
+- They've asked about your team/mentor
+- They've responded with real emotion`} />
+            </div>
+          </div>
+        )}
 
         {isExpert && (
           <div>
