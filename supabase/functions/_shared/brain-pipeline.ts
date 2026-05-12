@@ -630,16 +630,33 @@ export async function runPipeline(opts: {
   }
 
   if (reasoning.selected.length === 0) {
-    const topic = await extractTopic(apiKey, question);
-    return {
-      selected: [],
-      contradictions: reasoning.contradictions,
-      framework_name: "",
-      supporting_chunks: [],
-      evidence_principles: [],
-      empty_vault_topic: topic,
-      debug: { ...baseDebug, empty_vault: true, selected_source_count: 0, selected_source_titles: [] },
-    };
+    // Selector returned nothing but retrieval found principles — synthesize a
+    // selection from the top reranked candidates so we never silently fall
+    // back to the "vault doesn't cover this topic" message.
+    const fallback = top.slice(0, 5);
+    reasoning.selected = fallback.map((p) => ({
+      id: p.id,
+      principle_name: p.principle_name,
+      source_id: p.source_id,
+      source_title: p.source_name,
+      source_url: null,
+      source_type: p.source_type,
+      why_relevant: `Top reranked principle from ${p.source_name} for this situation.`,
+      tier: "primary" as const,
+      full: p,
+    }));
+    // Re-resolve titles/urls for these too
+    const fbIds = [...new Set(reasoning.selected.map((s) => s.source_id).filter((x): x is string => !!x))];
+    if (fbIds.length) {
+      const { data: kb } = await supabaseAdmin.from("knowledge_base_items")
+        .select("id, title, url, type").in("id", fbIds);
+      const map = new Map<string, any>();
+      (kb || []).forEach((k: any) => map.set(k.id, k));
+      for (const s of reasoning.selected) {
+        const k = s.source_id ? map.get(s.source_id) : null;
+        if (k) { s.source_title = k.title; s.source_url = k.url; s.source_type = k.type; }
+      }
+    }
   }
 
   const selectedSourceTitles = [...new Set(reasoning.selected.map((s) => s.source_title).filter(Boolean))];
