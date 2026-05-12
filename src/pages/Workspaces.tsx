@@ -289,11 +289,15 @@ export default function Workspaces() {
   const renderWorkspaceFields = (mode: "create" | "edit") => {
     const isExpert = mode === "create" ? workspaceType === "expert" : editWorkspace?.workspace_type === "expert";
     const vals = mode === "create"
-      ? { name, niche: nicheDescription, ig: instagramUrl, tt: tiktokUrl, store: storeUrl, fw: customFramework, ta: targetAudience, bm: businessModel, pos: positioning, linked: linkedFriendIds }
-      : { name: editName, niche: editNiche, ig: editInstagram, tt: editTiktok, store: editStore, fw: editFramework, ta: editTarget, bm: editBusiness, pos: editPositioning, linked: editLinkedIds };
+      ? { name, niche: nicheDescription, ig: instagramUrl, tt: tiktokUrl, store: storeUrl, fw: customFramework, ta: targetAudience, bm: businessModel, pos: positioning, linked: linkedFriendIds,
+          aud: audienceDescription, pp: painPoints, obj: commonObjections, back: friendBackstory, trans: transformation, exp: expertDescription, ref: referralTriggers }
+      : { name: editName, niche: editNiche, ig: editInstagram, tt: editTiktok, store: editStore, fw: editFramework, ta: editTarget, bm: editBusiness, pos: editPositioning, linked: editLinkedIds,
+          aud: editAudienceDescription, pp: editPainPoints, obj: editCommonObjections, back: editFriendBackstory, trans: editTransformation, exp: editExpertDescription, ref: editReferralTriggers };
     const setters = mode === "create"
-      ? { name: setName, niche: setNicheDescription, ig: setInstagramUrl, tt: setTiktokUrl, store: setStoreUrl, fw: setCustomFramework, ta: setTargetAudience, bm: setBusinessModel, pos: setPositioning, toggleLink: toggleLinkedFriend }
-      : { name: setEditName, niche: setEditNiche, ig: setEditInstagram, tt: setEditTiktok, store: setEditStore, fw: setEditFramework, ta: setEditTarget, bm: setEditBusiness, pos: setEditPositioning, toggleLink: toggleEditLinkedFriend };
+      ? { name: setName, niche: setNicheDescription, ig: setInstagramUrl, tt: setTiktokUrl, store: setStoreUrl, fw: setCustomFramework, ta: setTargetAudience, bm: setBusinessModel, pos: setPositioning, toggleLink: toggleLinkedFriend,
+          aud: setAudienceDescription, pp: setPainPoints, obj: setCommonObjections, back: setFriendBackstory, trans: setTransformation, exp: setExpertDescription, ref: setReferralTriggers }
+      : { name: setEditName, niche: setEditNiche, ig: setEditInstagram, tt: setEditTiktok, store: setEditStore, fw: setEditFramework, ta: setEditTarget, bm: setEditBusiness, pos: setEditPositioning, toggleLink: toggleEditLinkedFriend,
+          aud: setEditAudienceDescription, pp: setEditPainPoints, obj: setEditCommonObjections, back: setEditFriendBackstory, trans: setEditTransformation, exp: setEditExpertDescription, ref: setEditReferralTriggers };
 
     return (
       <div className="space-y-4 py-2">
