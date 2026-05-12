@@ -133,6 +133,13 @@ export default function Workspaces() {
         target_audience: editTarget || null,
         business_model: editBusiness || null,
         positioning: editPositioning || null,
+        audience_description: editAudienceDescription || null,
+        pain_points: editPainPoints || null,
+        common_objections: editCommonObjections || null,
+        friend_backstory: editFriendBackstory || null,
+        transformation: editTransformation || null,
+        expert_description: editExpertDescription || null,
+        referral_triggers: editReferralTriggers || null,
       } as any).eq("id", editWorkspace.id);
       if (error) throw error;
 
