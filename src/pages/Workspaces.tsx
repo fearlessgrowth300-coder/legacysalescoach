@@ -32,6 +32,14 @@ export default function Workspaces() {
   const [targetAudience, setTargetAudience] = useState("");
   const [businessModel, setBusinessModel] = useState("");
   const [positioning, setPositioning] = useState("");
+  // Friend Mode fields
+  const [audienceDescription, setAudienceDescription] = useState("");
+  const [painPoints, setPainPoints] = useState("");
+  const [commonObjections, setCommonObjections] = useState("");
+  const [friendBackstory, setFriendBackstory] = useState("");
+  const [transformation, setTransformation] = useState("");
+  const [expertDescription, setExpertDescription] = useState("");
+  const [referralTriggers, setReferralTriggers] = useState("");
 
   // Edit state
   const [editWorkspace, setEditWorkspace] = useState<any>(null);
