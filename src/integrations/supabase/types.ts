@@ -983,67 +983,88 @@ export type Database = {
       }
       workspaces: {
         Row: {
+          audience_description: string | null
           business_model: string | null
+          common_objections: string | null
           created_at: string
           custom_framework: string | null
           default_reply_mode: string
+          expert_description: string | null
+          friend_backstory: string | null
           id: string
           instagram_url: string | null
           is_active: boolean
           name: string
           niche_description: string | null
+          pain_points: string | null
           parsed_framework: Json | null
           positioning: string | null
           products_detected: string | null
           profile_analysis: string | null
+          referral_triggers: string | null
           store_url: string | null
           style_vector: Json | null
           target_audience: string | null
           tiktok_url: string | null
+          transformation: string | null
           updated_at: string
           user_id: string
           workspace_type: string
         }
         Insert: {
+          audience_description?: string | null
           business_model?: string | null
+          common_objections?: string | null
           created_at?: string
           custom_framework?: string | null
           default_reply_mode?: string
+          expert_description?: string | null
+          friend_backstory?: string | null
           id?: string
           instagram_url?: string | null
           is_active?: boolean
           name: string
           niche_description?: string | null
+          pain_points?: string | null
           parsed_framework?: Json | null
           positioning?: string | null
           products_detected?: string | null
           profile_analysis?: string | null
+          referral_triggers?: string | null
           store_url?: string | null
           style_vector?: Json | null
           target_audience?: string | null
           tiktok_url?: string | null
+          transformation?: string | null
           updated_at?: string
           user_id: string
           workspace_type?: string
         }
         Update: {
+          audience_description?: string | null
           business_model?: string | null
+          common_objections?: string | null
           created_at?: string
           custom_framework?: string | null
           default_reply_mode?: string
+          expert_description?: string | null
+          friend_backstory?: string | null
           id?: string
           instagram_url?: string | null
           is_active?: boolean
           name?: string
           niche_description?: string | null
+          pain_points?: string | null
           parsed_framework?: Json | null
           positioning?: string | null
           products_detected?: string | null
           profile_analysis?: string | null
+          referral_triggers?: string | null
           store_url?: string | null
           style_vector?: Json | null
           target_audience?: string | null
           tiktok_url?: string | null
+          transformation?: string | null
           updated_at?: string
           user_id?: string
           workspace_type?: string
