@@ -377,6 +377,84 @@ export default function Workspaces() {
           />
         </div>
 
+        {!isExpert && (
+          <div className="space-y-5 border-t pt-4 mt-2">
+            <div className="space-y-1">
+              <h3 className="text-base font-semibold flex items-center gap-2"><Heart className="h-4 w-4 text-pink-500" /> Friend Mode Personality</h3>
+              <p className="text-xs text-muted-foreground">These fields shape who the AI Friend "is" and how it responds.</p>
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">Your Target Audience</Label>
+              <p className="text-xs text-muted-foreground mb-2">Who are the people you reach out to? The AI Friend will BE one of them.</p>
+              <Textarea value={vals.aud} onChange={(e) => setters.aud(e.target.value)} rows={6} placeholder={`Describe your audience in detail:
+- Who are they? (moms, 9-5 workers, beginners, etc.)
+- Age range and lifestyle
+- Where they hang out online
+- What their daily life looks like
+- What they secretly want but won't admit
+- What makes them feel stuck or behind in life`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">Top Pain Points In This Niche</Label>
+              <p className="text-xs text-muted-foreground mb-2">List every struggle, fear, and frustration. The AI will detect and respond from personal experience.</p>
+              <Textarea value={vals.pp} onChange={(e) => setters.pp(e.target.value)} rows={6} placeholder={`List all pain points (one per line):
+- Struggling to make their first sale online
+- Overwhelmed by too many tools and platforms
+- Tried other programs and got burned
+- Husband/family doesn't believe in them
+- No time because of kids and full-time job
+- Feel like they're not tech-savvy enough
+- Scared of being scammed again`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">Common Objections You Hear</Label>
+              <p className="text-xs text-muted-foreground mb-2">What prospects say when they hesitate. The AI Friend will have a personal response ready.</p>
+              <Textarea value={vals.obj} onChange={(e) => setters.obj(e.target.value)} rows={5} placeholder={`List objections you hear most:
+- I don't have money right now
+- I don't have time with my kids
+- I've tried things like this before
+- Is this a pyramid scheme?
+- I'm not good with technology
+- Let me think about it`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">The Friend's Personal Story</Label>
+              <p className="text-xs text-muted-foreground mb-2">The story the AI tells as its own — first person, mirroring the audience's struggle.</p>
+              <Textarea value={vals.back} onChange={(e) => setters.back(e.target.value)} rows={6} placeholder={`Write the friend's story in first person:
+I was exactly where you are 18 months ago. I was a mum of 3, working a job I hated, trying to figure out this whole online business thing while everyone around me told me I was wasting my time...`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">The Transformation / Result</Label>
+              <p className="text-xs text-muted-foreground mb-2">What changed for the friend. Real and specific — no income claims.</p>
+              <Textarea value={vals.trans} onChange={(e) => setters.trans(e.target.value)} rows={5} placeholder={`What changed and how:
+Then I found a team that actually showed me step by step. Within 3 months I replaced my job income and now I work from home around my kids...`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">The Expert / Team Being Referred To</Label>
+              <p className="text-xs text-muted-foreground mb-2">Who the friend refers the prospect to — described warmly, as a person/team they trust.</p>
+              <Textarea value={vals.exp} onChange={(e) => setters.exp(e.target.value)} rows={5} placeholder={`Describe the expert/team naturally:
+The team that helped me is run by [name]. They specialise in helping people like us starting from zero. They don't do the hype thing — they actually sit with you and build it properly...`} />
+            </div>
+
+            <div>
+              <Label className="text-sm font-semibold">When To Make The Referral</Label>
+              <p className="text-xs text-muted-foreground mb-2">Signals that tell the Friend AI the prospect is ready to be referred.</p>
+              <Textarea value={vals.ref} onChange={(e) => setters.ref(e.target.value)} rows={5} placeholder={`Signs the prospect is ready:
+- They've shared a specific struggle
+- They've asked how you did it
+- They've said they want to change
+- They've asked about your team/mentor
+- They've responded with real emotion`} />
+            </div>
+          </div>
+        )}
+
         {isExpert && (
           <div>
             <Label className="flex items-center gap-2">
