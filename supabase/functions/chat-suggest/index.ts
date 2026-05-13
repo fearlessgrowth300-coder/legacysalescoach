@@ -122,6 +122,17 @@ function buildFriendModeInstructions(workspace: any, brainChunks?: string, perso
   const parsedFramework = workspace?.parsed_framework || null;
   const styleVector = workspace?.style_vector || null;
 
+  // ===== NEW: Friend identity fields from workspace =====
+  const audienceDescription = (workspace?.audience_description || "").trim();
+  const painPoints = (workspace?.pain_points || "").trim();
+  const commonObjections = (workspace?.common_objections || "").trim();
+  const friendBackstory = (workspace?.friend_backstory || "").trim();
+  const transformation = (workspace?.transformation || "").trim();
+  const expertDescription = (workspace?.expert_description || "").trim();
+  const referralTriggers = (workspace?.referral_triggers || "").trim();
+  const instagramUrl = (workspace?.instagram_url || "").trim();
+  const storeUrl = (workspace?.store_url || "").trim();
+
   // Use workspace persona if available, otherwise fallback to defaults
   const tone = personaData?.tone || "Warm, relatable";
   const audience = personaData?.audience || "people in " + niche;
