@@ -396,6 +396,10 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
       ...pipeline.evidence_principles.map((p) => p.source_name),
     ].filter((x): x is string => !!x))];
 
+    const distinctSources = distinctSourcesFor(pipeline.selected, pipeline.evidence_principles, 4);
+    const whySkeleton = buildWhySkeleton(distinctSources);
+    const openerHint = buildOpenerHint(distinctSources);
+
     let systemPrompt = buildSystemPrompt({
       selectedBlock: buildPrinciplesBlock(pipeline.selected),
       evidenceBlock: buildEvidenceBlock(pipeline.evidence_principles),
@@ -404,6 +408,8 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
       recentExchanges,
       frameworkName: pipeline.framework_name,
       sourceTitles,
+      whySkeleton,
+      openerHint,
     });
 
     if (hasImageAttachment && conversationText) {
