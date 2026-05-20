@@ -1,63 +1,41 @@
-# Brain chat: image-aware intent + softer empty-vault gate
+# Fix: Brain replies still cite only one source
 
-Two related bugs in `brain-chat`:
+## Diagnosis
 
-1. When the user uploads a screenshot and types a vague instruction ("reply this message"), the retrieval brief is built from the typed text only and the empty-vault gate fires before the screenshot is ever used as the situation.
-2. The empty-vault gate fires whenever `topScore < 0.35` even if 5+ relevant principles were retrieved — this triggers the "vault doesn't cover this topic" message in the same session that just produced multi-source answers.
+The vault has 30+ sources (Start with Why, 360 Leader, Psychology of Selling, Objection Crusher, Sell Like Crazy, etc.), and the pipeline already has a source-diversity backfill in `selectPrinciples`. The retrieval is fine — the **response model is ignoring** the soft instruction "name at least 3 different source titles." In the screenshot, all four WHY THIS WORKS bullets cite the same book.
+
+Soft prompt rules don't work. We need to make multi-sourcing structurally impossible to skip.
 
 ## Changes
 
-### 1. `supabase/functions/brain-chat/index.ts` — image = conversation paste
+### 1. `_shared/brain-pipeline.ts` — guarantee source diversity in `selected`
+- After the existing backfill, enforce: of the final `selected` list, **at most 2 principles may share a source**. If a third candidate from an already-used source would be added, swap it for the next reranked candidate from an unused source (drawing from `top`/`evidence`).
+- Goal: when there are ≥3 sources in candidates, `selected` always covers ≥3 distinct sources.
 
-Detect image attachments on the latest user message and switch to a conversation-paste flow before the retrieval brief.
+### 2. `brain-chat/index.ts` — pre-render the WHY THIS WORKS skeleton
+Instead of asking the model to remember to cite multiple sources, build the bullet list ourselves with the source slot already filled, e.g.:
 
-- New `hasImageAttachment` derived from `lastUserImages.length > 0`.
-- When true:
-  - Call the existing `ocr-screenshot` edge function for each image (already deployed; supports `imageBase64` + `mimeType`). Strip the `data:` prefix and pass the base64 + mime so we don't need a public URL.
-  - Concatenate OCR text into `conversationText`. If total text < 20 chars, stream a single fixed message: *"I couldn't read the screenshot clearly. Try uploading a higher-quality image or paste the conversation text directly."* (use the same SSE pattern as the empty-vault branch, with `brain_meta.empty_vault: false`).
-  - Treat the typed text as `userInstruction` (default "Read the conversation and write the best reply.").
-  - Run a new `extractSituation(apiKey, conversationText)` helper (Gemini 2.5-flash-lite, temp 0, max 120 tokens) that returns a 1-sentence sales-situation description.
-  - Use that situation sentence as `retrievalQuery` instead of the typed text + brief. Keep the existing brief flow only for the no-image path.
-- Append a `CONVERSATION (extracted from screenshot)` + `USER INSTRUCTION` block to the system prompt so the response model sees both. Reuse the existing "Brain" identity/style — do NOT rewrite the response style; just inject extra context.
-
-### 2. `supabase/functions/_shared/brain-pipeline.ts` — relax empty-vault gate
-
-Replace the current gate (lines 596-609):
-
-```ts
-const EMPTY_THRESHOLD = 0.35;
-if (top.length === 0 || topScore < EMPTY_THRESHOLD) { ... empty ... }
+```
+**WHY THIS WORKS:**
+- **[Tactic]:** [Reason in 1 sentence] — naming **Start with Why**.
+- **[Tactic]:** [Reason in 1 sentence] — naming **The 360 Degree Leader**.
+- **[Tactic]:** [Reason in 1 sentence] — naming **The Psychology of Selling**.
+- **[Tactic]:** [Reason in 1 sentence] — naming **Objection Crusher**.
 ```
 
-with a result-count-aware version:
+Inject this pre-assigned skeleton into the system prompt as `=== REQUIRED WHY-THIS-WORKS SLOTS ===`, with one slot per **distinct** source from `pipeline.selected` + top `evidence_principles` (max 4). Instruction: "Reproduce these bullets verbatim, replacing `[Tactic]` and `[Reason]` only. Do NOT change the source name. Do NOT drop bullets. Do NOT add more."
 
-```ts
-const STRONG = 0.45;          // any one principle above this = not empty
-const MIN_RESULTS = 1;        // even one decent hit is enough to try
-const decent = top.filter(p =>
-  (typeof p.relevance_score === "number" && p.relevance_score >= STRONG * 100) ||
-  (p.relevance_score ?? 0) >= 4
-);
-if (top.length === 0 || (decent.length < MIN_RESULTS && topScore < 0.25)) {
-  // truly empty — fire fixed response
-}
-```
+Also for THE STRATEGY paragraph, require an inline "According to **{primarySourceA}** ... combined with **{primarySourceB}** ..." opener built from the first two distinct primary sources.
 
-This keeps the fixed empty response only when retrieval really returned nothing, and lets the selector run whenever ≥1 reranked principle is reasonably relevant.
+### 3. Post-generation validator (lightweight)
+After streaming completes (or before, with non-streaming check on a short retry path), count distinct source titles named in the reply. If fewer than 3 distinct sources from `sourceTitles` appear AND ≥3 were available, log a `[brain-chat] single-source collapse` warning with the actual sources cited. (Keep the user-facing reply as-is for now; the warning lets us monitor whether the structural fix is holding.)
 
-Also remove the second empty-vault branch (lines 627-638) trigger when `reasoning.selected.length === 0` — instead, fall through to a non-empty result using `top.slice(0, 5)` as `selected` so the response model still gets evidence (we already do source-diversity backfill; this is the safety net).
+## Why this fixes it
 
-### 3. No UI / no DB changes
+- The model can no longer "forget" to cite multiple sources because the bullet skeleton is already written with the right source names.
+- Diversity capping in selection means even if the user asks something very Start-with-Why-shaped, only 2 of the selected principles can come from that book — the other slots force other books in.
+- No retrieval logic changes (it's already diverse). All changes are in selection cap + response prompt structure.
 
-`brain_meta.empty_vault` already drives the UI; behavior just becomes correct.
-
-## Files
-
-- `supabase/functions/brain-chat/index.ts` — image-detection branch, OCR call, `extractSituation`, prompt augmentation.
-- `supabase/functions/_shared/brain-pipeline.ts` — softer empty-vault gate + non-empty fallback when selector returns nothing.
-
-## Validation
-
-- Deploy both functions.
-- Manual: send "reply this message" + screenshot in Brain chat → expect a multi-source answer with the new SITUATION/REPLY format embedded in the existing Brain style, no "vault doesn't cover" message.
-- Check `supabase--edge_function_logs brain-chat` for the new `[brain-chat] image flow` log line and the situation sentence.
+## Files touched
+- `supabase/functions/_shared/brain-pipeline.ts` — add 2-per-source cap in `selectPrinciples`
+- `supabase/functions/brain-chat/index.ts` — pre-render WHY-skeleton + opener template, append validator log
