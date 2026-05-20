@@ -494,7 +494,6 @@ Rules:
   // ─── Source-diversity backfill ─────────────────────────────────────
   // If the model collapsed onto 1-2 sources but the candidate pool has more,
   // forcibly add top-ranked candidates from other sources as supporting tier.
-  // This is what guarantees the answer actually weaves multiple books/videos.
   const selectedSourceKeys = new Set(
     selected.map((s) => s.source_id || s.source_title).filter(Boolean) as string[]
   );
@@ -519,6 +518,51 @@ Rules:
         full: cand,
       });
     }
+  }
+
+  // ─── HARD 2-per-source cap ─────────────────────────────────────────
+  // Evict any 3rd+ principle from the same source; swap in the top-ranked
+  // candidate from a source not yet represented. Guarantees multi-source mix.
+  if (uniqueSources.size >= 3) {
+    const perSource = new Map<string, number>();
+    const kept: SelectedPrinciple[] = [];
+    const evictedSlots: ("primary" | "supporting")[] = [];
+    for (const s of selected) {
+      const key = (s.source_id || s.source_title || "__none__") as string;
+      const n = perSource.get(key) || 0;
+      if (n < 2) {
+        perSource.set(key, n + 1);
+        kept.push(s);
+      } else {
+        evictedSlots.push(s.tier);
+        seen.delete(s.id);
+      }
+    }
+    const usedKeys = new Set(
+      kept.map((s) => (s.source_id || s.source_title) as string).filter(Boolean)
+    );
+    for (const cand of candidates) {
+      if (evictedSlots.length === 0) break;
+      if (seen.has(cand.id)) continue;
+      const key = (cand.source_id || cand.source_name) as string;
+      if (!key || usedKeys.has(key)) continue;
+      seen.add(cand.id);
+      usedKeys.add(key);
+      const tier = evictedSlots.shift()!;
+      kept.push({
+        id: cand.id,
+        principle_name: cand.principle_name,
+        source_id: cand.source_id,
+        source_title: cand.source_name,
+        source_url: null,
+        source_type: cand.source_type,
+        why_relevant: `Adds a complementary angle from ${cand.source_name} (${cand.category}).`,
+        tier,
+        full: cand,
+      });
+    }
+    selected.length = 0;
+    selected.push(...kept);
   }
 
   return {
