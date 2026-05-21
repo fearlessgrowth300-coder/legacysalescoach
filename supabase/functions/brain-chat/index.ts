@@ -400,7 +400,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
     // Collect every source title the model is allowed to name (selected + evidence)
     const sourceTitles = [...new Set([
       ...pipeline.selected.map((s) => s.source_title),
-      ...pipeline.evidence_principles.map((p) => p.source_name),
+      ...pipeline.evidence_principles.map((p) => p.source_title || p.source_name),
     ].filter((x): x is string => !!x))];
 
     const distinctSources = distinctSourcesFor(pipeline.selected, pipeline.evidence_principles, 4);
