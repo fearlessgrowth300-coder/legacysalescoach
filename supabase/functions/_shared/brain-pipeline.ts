@@ -423,7 +423,7 @@ export async function selectPrinciples(
 
   const candidateBlock = candidates.map((p) => `--- principle id=${p.id} ---
 name: ${p.principle_name}
-source: "${p.source_name}" (${p.source_type})
+source: "${sourceTitleOf(p)}" (${p.source_type})
 category: ${p.category}
 what_i_learned: ${(p.what_i_learned || "").substring(0, 400)}
 how_to_apply: ${(p.how_to_apply || "").substring(0, 300)}
@@ -432,7 +432,7 @@ exact_words: ${(p.exact_words_to_use || "").substring(0, 200)}
 deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
 
   // Pre-compute available unique sources so we can ask for the right diversity
-  const uniqueSources = new Set(candidates.map((c) => c.source_id || c.source_name).filter(Boolean));
+  const uniqueSources = new Set(candidates.map((c) => sourceKeyOf(c)).filter(Boolean));
   const sourceDiversityHint = uniqueSources.size >= 3
     ? `Candidates span ${uniqueSources.size} different sources — your selection MUST include at least 3 different source titles. This is non-negotiable when the diversity exists.`
     : `Candidates only cover ${uniqueSources.size} source(s) — use what's available.`;
@@ -526,7 +526,7 @@ Rules:
         id: full.id,
         principle_name: full.principle_name,
         source_id: full.source_id,
-        source_title: full.source_name,
+        source_title: sourceTitleOf(full),
         source_url: null,
         source_type: full.source_type,
         why_relevant: typeof s.why_relevant === "string" ? s.why_relevant : "",
@@ -549,7 +549,7 @@ Rules:
       if (selected.length >= 7) break;
       if (selectedSourceKeys.size >= 3 && selected.length >= 5) break;
       if (seen.has(cand.id)) continue;
-      const key = cand.source_id || cand.source_name;
+      const key = sourceKeyOf(cand);
       if (!key || selectedSourceKeys.has(key)) continue;
       seen.add(cand.id);
       selectedSourceKeys.add(key);
@@ -557,10 +557,10 @@ Rules:
         id: cand.id,
         principle_name: cand.principle_name,
         source_id: cand.source_id,
-        source_title: cand.source_name,
+        source_title: sourceTitleOf(cand),
         source_url: null,
         source_type: cand.source_type,
-        why_relevant: `Adds a complementary angle from ${cand.source_name} (${cand.category}).`,
+        why_relevant: `Adds a complementary angle from ${sourceTitleOf(cand)} (${cand.category}).`,
         tier: "supporting",
         full: cand,
       });
@@ -591,7 +591,7 @@ Rules:
     for (const cand of candidates) {
       if (evictedSlots.length === 0) break;
       if (seen.has(cand.id)) continue;
-      const key = (cand.source_id || cand.source_name) as string;
+      const key = sourceKeyOf(cand);
       if (!key || usedKeys.has(key)) continue;
       seen.add(cand.id);
       usedKeys.add(key);
@@ -600,10 +600,10 @@ Rules:
         id: cand.id,
         principle_name: cand.principle_name,
         source_id: cand.source_id,
-        source_title: cand.source_name,
+        source_title: sourceTitleOf(cand),
         source_url: null,
         source_type: cand.source_type,
-        why_relevant: `Adds a complementary angle from ${cand.source_name} (${cand.category}).`,
+        why_relevant: `Adds a complementary angle from ${sourceTitleOf(cand)} (${cand.category}).`,
         tier,
         full: cand,
       });
