@@ -309,12 +309,13 @@ export async function hybridRetrieve(
     for (const p of dedupedP) p.source_title = p.source_id ? (titleById.get(p.source_id) || p.source_name) : p.source_name;
     for (const c of dedupedC) c.source_title = c.source_id ? (titleById.get(c.source_id) || null) : null;
   }
+  const diversifiedP = enforceSourceDiversity(dedupedP, 2, 80);
 
   // Source-balanced ordering: round-robin one principle per source until
   // we've cycled through, then fill the rest. This guarantees the candidate
   // pool spans many books/videos before we hand it to the reranker/selector.
   const bySource = new Map<string, Principle[]>();
-  for (const p of dedupedP) {
+  for (const p of diversifiedP) {
     const key = sourceKeyOf(p);
     if (!bySource.has(key)) bySource.set(key, []);
     bySource.get(key)!.push(p);
