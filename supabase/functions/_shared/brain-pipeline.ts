@@ -658,7 +658,7 @@ export async function runPipeline(opts: {
     await hybridRetrieve(supabaseAdmin, userId, subqueries);
 
   const candidateSourceTitles = [...new Set(
-    principles.map((p) => p.source_name).filter((x): x is string => !!x)
+    principles.map((p) => sourceTitleOf(p)).filter((x): x is string => !!x)
   )];
   const chunkSourceCount = new Set(
     chunks.map((c) => c.source_id).filter((x): x is string => !!x)
@@ -667,7 +667,7 @@ export async function runPipeline(opts: {
   // Step 3
   const { top, topScore } = await rerank(apiKey, question, principles, session);
   const rerankedSourceCount = new Set(
-    top.map((p) => p.source_id || p.source_name).filter(Boolean) as string[]
+    top.map((p) => sourceKeyOf(p)).filter(Boolean) as string[]
   ).size;
 
   const baseDebug = {
@@ -729,10 +729,10 @@ export async function runPipeline(opts: {
       id: p.id,
       principle_name: p.principle_name,
       source_id: p.source_id,
-      source_title: p.source_name,
+      source_title: sourceTitleOf(p),
       source_url: null,
       source_type: p.source_type,
-      why_relevant: `Top reranked principle from ${p.source_name} for this situation.`,
+      why_relevant: `Top reranked principle from ${sourceTitleOf(p)} for this situation.`,
       tier: "primary" as const,
       full: p,
     }));
@@ -762,7 +762,7 @@ export async function runPipeline(opts: {
   const bySrc = new Map<string, Principle[]>();
   for (const p of top) {
     if (selectedIds.has(p.id)) continue;
-    const k = p.source_id || p.source_name || "__none__";
+    const k = sourceKeyOf(p);
     if (!bySrc.has(k)) bySrc.set(k, []);
     bySrc.get(k)!.push(p);
   }
