@@ -30,10 +30,12 @@ export type Principle = {
   what_i_learned: string;
   how_to_apply: string;
   source_name: string;
+  source_title?: string | null;
   source_id: string | null;
   category: string;
   source_type: string;
   relevance_score?: number;
+  similarity?: number;
   power_level?: number;
   exact_words_to_use?: string | null;
   the_deep_why?: string | null;
@@ -49,8 +51,10 @@ export type Chunk = {
   content: string;
   category: string;
   source_id: string | null;
+  source_title?: string | null;
   source_type: string;
   relevance_score?: number;
+  similarity?: number;
   _semantic?: boolean;
 };
 
@@ -98,6 +102,33 @@ export type PipelineOutput = {
   debug: RetrievalDebug;
   empty_vault_topic?: string;
 };
+
+function sourceTitleOf(item: { source_title?: string | null; source_name?: string | null; source_id?: string | null }): string {
+  return item.source_title || item.source_name || item.source_id || "Uploaded content";
+}
+
+function sourceKeyOf(item: { source_title?: string | null; source_name?: string | null; source_id?: string | null }): string {
+  return sourceTitleOf(item).trim().toLowerCase() || "unknown";
+}
+
+export function enforceSourceDiversity<T extends { source_title?: string | null; source_name?: string | null; source_id?: string | null; similarity?: number; relevance_score?: number }>(
+  principles: T[],
+  maxPerSource: number = 2,
+  limit: number = 12,
+): T[] {
+  const sourceCount: Record<string, number> = {};
+  const sorted = [...principles].sort((a, b) =>
+    (b.similarity || b.relevance_score || 0) - (a.similarity || a.relevance_score || 0)
+  );
+  const diversePrinciples: T[] = [];
+  for (const principle of sorted) {
+    const source = sourceKeyOf(principle);
+    sourceCount[source] = (sourceCount[source] || 0) + 1;
+    if (sourceCount[source] <= maxPerSource) diversePrinciples.push(principle);
+    if (diversePrinciples.length >= limit) break;
+  }
+  return diversePrinciples;
+}
 
 // ─── Gateway helpers ──────────────────────────────────────────────────
 
@@ -263,12 +294,29 @@ export async function hybridRetrieve(
   const dedupedP = deduplicatePrinciples(mergedP2, "relevance_score");
   const dedupedC = deduplicateChunks(mergedC, "relevance_score");
 
+  // Hydrate real source titles once, before diversity and prompt formatting.
+  // The response layer needs source_title per principle so it can cite books/videos accurately.
+  const allSourceIds = [...new Set([
+    ...dedupedP.map((p) => p.source_id),
+    ...dedupedC.map((c) => c.source_id),
+  ].filter((x): x is string => !!x))];
+  if (allSourceIds.length) {
+    const { data: kb } = await supabaseAdmin.from("knowledge_base_items")
+      .select("id, title, url, type")
+      .in("id", allSourceIds);
+    const titleById = new Map<string, string>();
+    (kb || []).forEach((k: any) => titleById.set(k.id, k.title));
+    for (const p of dedupedP) p.source_title = p.source_id ? (titleById.get(p.source_id) || p.source_name) : p.source_name;
+    for (const c of dedupedC) c.source_title = c.source_id ? (titleById.get(c.source_id) || null) : null;
+  }
+  const diversifiedP = enforceSourceDiversity(dedupedP, 2, 80);
+
   // Source-balanced ordering: round-robin one principle per source until
   // we've cycled through, then fill the rest. This guarantees the candidate
   // pool spans many books/videos before we hand it to the reranker/selector.
   const bySource = new Map<string, Principle[]>();
-  for (const p of dedupedP) {
-    const key = p.source_id || p.source_name || "__none__";
+  for (const p of diversifiedP) {
+    const key = sourceKeyOf(p);
     if (!bySource.has(key)) bySource.set(key, []);
     bySource.get(key)!.push(p);
   }
@@ -303,11 +351,12 @@ export async function rerank(
 ): Promise<{ top: Principle[]; topScore: number }> {
   if (candidates.length === 0) return { top: [], topScore: 0 };
   if (candidates.length <= 20) {
-    return { top: candidates, topScore: candidates[0]?.relevance_score ? candidates[0].relevance_score / 100 : 0.6 };
+    const diversified = enforceSourceDiversity(candidates, 2, 12);
+    return { top: diversified, topScore: diversified[0]?.relevance_score ? diversified[0].relevance_score / 100 : 0.6 };
   }
 
   const summary = candidates.map((p, i) =>
-    `${i}. id=${p.id} | source="${p.source_name}" | ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`
+    `${i}. id=${p.id} | source="${sourceTitleOf(p)}" | ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`
   ).join("\n");
 
   const result = await callTool(
@@ -347,18 +396,17 @@ export async function rerank(
     return { p, score };
   });
   scored.sort((a, b) => b.score - a.score);
-  // Diversity cap: at most 3 principles per source so one book can't dominate,
-  // but we keep more total so the selector has many sources to combine.
+  // Hard diversity cap: at most 2 principles per source so one book can't dominate.
   const perSourceCount = new Map<string, number>();
   const diverse: { p: Principle; score: number }[] = [];
   const overflow: { p: Principle; score: number }[] = [];
   for (const s of scored) {
-    const sid = s.p.source_id || s.p.source_name || "__none__";
+    const sid = sourceKeyOf(s.p);
     const c = perSourceCount.get(sid) || 0;
-    if (c < 3) { diverse.push(s); perSourceCount.set(sid, c + 1); }
+    if (c < 2) { diverse.push(s); perSourceCount.set(sid, c + 1); }
     else overflow.push(s);
   }
-  const merged = [...diverse, ...overflow].slice(0, 24);
+  const merged = diverse.length >= 8 ? diverse.slice(0, 12) : [...diverse, ...overflow].slice(0, 12);
   const top = merged.map((s) => s.p);
   return { top, topScore: scored[0]?.score ?? 0 };
 }
@@ -376,7 +424,7 @@ export async function selectPrinciples(
 
   const candidateBlock = candidates.map((p) => `--- principle id=${p.id} ---
 name: ${p.principle_name}
-source: "${p.source_name}" (${p.source_type})
+source: "${sourceTitleOf(p)}" (${p.source_type})
 category: ${p.category}
 what_i_learned: ${(p.what_i_learned || "").substring(0, 400)}
 how_to_apply: ${(p.how_to_apply || "").substring(0, 300)}
@@ -385,7 +433,7 @@ exact_words: ${(p.exact_words_to_use || "").substring(0, 200)}
 deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
 
   // Pre-compute available unique sources so we can ask for the right diversity
-  const uniqueSources = new Set(candidates.map((c) => c.source_id || c.source_name).filter(Boolean));
+  const uniqueSources = new Set(candidates.map((c) => sourceKeyOf(c)).filter(Boolean));
   const sourceDiversityHint = uniqueSources.size >= 3
     ? `Candidates span ${uniqueSources.size} different sources — your selection MUST include at least 3 different source titles. This is non-negotiable when the diversity exists.`
     : `Candidates only cover ${uniqueSources.size} source(s) — use what's available.`;
@@ -479,7 +527,7 @@ Rules:
         id: full.id,
         principle_name: full.principle_name,
         source_id: full.source_id,
-        source_title: full.source_name,
+        source_title: sourceTitleOf(full),
         source_url: null,
         source_type: full.source_type,
         why_relevant: typeof s.why_relevant === "string" ? s.why_relevant : "",
@@ -495,14 +543,14 @@ Rules:
   // If the model collapsed onto 1-2 sources but the candidate pool has more,
   // forcibly add top-ranked candidates from other sources as supporting tier.
   const selectedSourceKeys = new Set(
-    selected.map((s) => s.source_id || s.source_title).filter(Boolean) as string[]
+    selected.map((s) => sourceKeyOf(s)).filter(Boolean) as string[]
   );
   if (selectedSourceKeys.size < 3 && uniqueSources.size >= 3) {
     for (const cand of candidates) {
       if (selected.length >= 7) break;
       if (selectedSourceKeys.size >= 3 && selected.length >= 5) break;
       if (seen.has(cand.id)) continue;
-      const key = cand.source_id || cand.source_name;
+      const key = sourceKeyOf(cand);
       if (!key || selectedSourceKeys.has(key)) continue;
       seen.add(cand.id);
       selectedSourceKeys.add(key);
@@ -510,10 +558,10 @@ Rules:
         id: cand.id,
         principle_name: cand.principle_name,
         source_id: cand.source_id,
-        source_title: cand.source_name,
+        source_title: sourceTitleOf(cand),
         source_url: null,
         source_type: cand.source_type,
-        why_relevant: `Adds a complementary angle from ${cand.source_name} (${cand.category}).`,
+        why_relevant: `Adds a complementary angle from ${sourceTitleOf(cand)} (${cand.category}).`,
         tier: "supporting",
         full: cand,
       });
@@ -528,7 +576,7 @@ Rules:
     const kept: SelectedPrinciple[] = [];
     const evictedSlots: ("primary" | "supporting")[] = [];
     for (const s of selected) {
-      const key = (s.source_id || s.source_title || "__none__") as string;
+      const key = sourceKeyOf(s);
       const n = perSource.get(key) || 0;
       if (n < 2) {
         perSource.set(key, n + 1);
@@ -539,12 +587,12 @@ Rules:
       }
     }
     const usedKeys = new Set(
-      kept.map((s) => (s.source_id || s.source_title) as string).filter(Boolean)
+      kept.map((s) => sourceKeyOf(s)).filter(Boolean)
     );
     for (const cand of candidates) {
       if (evictedSlots.length === 0) break;
       if (seen.has(cand.id)) continue;
-      const key = (cand.source_id || cand.source_name) as string;
+      const key = sourceKeyOf(cand);
       if (!key || usedKeys.has(key)) continue;
       seen.add(cand.id);
       usedKeys.add(key);
@@ -553,10 +601,10 @@ Rules:
         id: cand.id,
         principle_name: cand.principle_name,
         source_id: cand.source_id,
-        source_title: cand.source_name,
+        source_title: sourceTitleOf(cand),
         source_url: null,
         source_type: cand.source_type,
-        why_relevant: `Adds a complementary angle from ${cand.source_name} (${cand.category}).`,
+        why_relevant: `Adds a complementary angle from ${sourceTitleOf(cand)} (${cand.category}).`,
         tier,
         full: cand,
       });
@@ -611,7 +659,7 @@ export async function runPipeline(opts: {
     await hybridRetrieve(supabaseAdmin, userId, subqueries);
 
   const candidateSourceTitles = [...new Set(
-    principles.map((p) => p.source_name).filter((x): x is string => !!x)
+    principles.map((p) => sourceTitleOf(p)).filter((x): x is string => !!x)
   )];
   const chunkSourceCount = new Set(
     chunks.map((c) => c.source_id).filter((x): x is string => !!x)
@@ -620,7 +668,7 @@ export async function runPipeline(opts: {
   // Step 3
   const { top, topScore } = await rerank(apiKey, question, principles, session);
   const rerankedSourceCount = new Set(
-    top.map((p) => p.source_id || p.source_name).filter(Boolean) as string[]
+    top.map((p) => sourceKeyOf(p)).filter(Boolean) as string[]
   ).size;
 
   const baseDebug = {
@@ -682,10 +730,10 @@ export async function runPipeline(opts: {
       id: p.id,
       principle_name: p.principle_name,
       source_id: p.source_id,
-      source_title: p.source_name,
+      source_title: sourceTitleOf(p),
       source_url: null,
       source_type: p.source_type,
-      why_relevant: `Top reranked principle from ${p.source_name} for this situation.`,
+      why_relevant: `Top reranked principle from ${sourceTitleOf(p)} for this situation.`,
       tier: "primary" as const,
       full: p,
     }));
@@ -715,7 +763,7 @@ export async function runPipeline(opts: {
   const bySrc = new Map<string, Principle[]>();
   for (const p of top) {
     if (selectedIds.has(p.id)) continue;
-    const k = p.source_id || p.source_name || "__none__";
+    const k = sourceKeyOf(p);
     if (!bySrc.has(k)) bySrc.set(k, []);
     bySrc.get(k)!.push(p);
   }
@@ -795,33 +843,42 @@ export function buildPrinciplesBlock(selected: SelectedPrinciple[]): string {
   return selected.map((s, i) => {
     const p = s.full;
     const tierLabel = s.tier === "primary" ? "PRIMARY" : "SUPPORTING";
-    return `### Principle ${i + 1} [${tierLabel}] — ${p.principle_name}  [id: ${p.id}]
-Source: "${s.source_title}" (${s.source_type})
+    return `[PRINCIPLE ${i + 1} — ${tierLabel}]
+SOURCE BOOK/VIDEO: "${s.source_title || sourceTitleOf(p)}"
+PRINCIPLE NAME: ${p.principle_name}
+CATEGORY: ${p.category}
+WHAT IT IS: ${p.what_i_learned || ""}
+THE DEEP WHY: ${p.the_deep_why || ""}
+EXACT WORDS TO USE: ${p.exact_words_to_use || ""}
+WHEN TO USE: ${p.when_to_use || ""}
+COMMON MISTAKE: ${p.common_mistake || ""}
+POWER LEVEL: ${p.power_level || 7}/10
+SOURCE TYPE: ${s.source_type}
+PRINCIPLE ID: ${p.id}
 Why selected: ${s.why_relevant}
-What it teaches: ${p.what_i_learned || ""}
 How to apply: ${p.how_to_apply || ""}
-When to use: ${p.when_to_use || "(unspecified)"}
 When NOT to use: ${p.when_not_to_use || "(unspecified)"}
-Exact words: ${p.exact_words_to_use || "(none)"}
-Deep why (psychology): ${p.the_deep_why || "(unspecified)"}
-Common mistake: ${p.common_mistake || "(unspecified)"}
-Real example: ${p.real_example_or_story || "(none)"}`;
+Real example: ${p.real_example_or_story || "(none)"}
+---`;
   }).join("\n\n");
 }
 
 export function buildChunksBlock(chunks: Chunk[]): string {
   if (!chunks.length) return "(none)";
-  return chunks.map((c, i) => `[chunk ${i + 1} | ${c.category}] ${(c.content || "").substring(0, 400)}`).join("\n\n");
+  return chunks.map((c, i) => `[CHUNK ${i + 1} | SOURCE: "${c.source_title || "Uploaded content"}" | ${c.category}] ${(c.content || "").substring(0, 400)}`).join("\n\n");
 }
 
 export function buildEvidenceBlock(principles: Principle[]): string {
   if (!principles.length) return "(none)";
   return principles.map((p, i) =>
-    `### Evidence ${i + 1} — ${p.principle_name}
-Source: "${p.source_name}" (${p.source_type}) | category: ${p.category}
+    `[EVIDENCE PRINCIPLE ${i + 1}]
+SOURCE BOOK/VIDEO: "${sourceTitleOf(p)}"
+PRINCIPLE NAME: ${p.principle_name}
+CATEGORY: ${p.category}
 What it teaches: ${(p.what_i_learned || "").substring(0, 280)}
 How to apply: ${(p.how_to_apply || "").substring(0, 240)}
 Exact words: ${(p.exact_words_to_use || "(none)").substring(0, 200)}
-Deep why: ${(p.the_deep_why || "(unspecified)").substring(0, 200)}`
+Deep why: ${(p.the_deep_why || "(unspecified)").substring(0, 200)}
+---`
   ).join("\n\n");
 }
