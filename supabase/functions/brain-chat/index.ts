@@ -64,6 +64,7 @@ function buildSystemPrompt(opts: {
   selectedBlock: string;
   evidenceBlock: string;
   chunksBlock: string;
+  userInput: string;
   workspaceProfile: string;
   recentExchanges: string;
   frameworkName: string;
@@ -71,7 +72,7 @@ function buildSystemPrompt(opts: {
   whySkeleton: string;
   openerHint: string;
 }) {
-  const { selectedBlock, evidenceBlock, chunksBlock, workspaceProfile, recentExchanges, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
+  const { selectedBlock, evidenceBlock, chunksBlock, userInput, workspaceProfile, recentExchanges, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
   const sourceList = sourceTitles.length ? sourceTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n") : "  (none)";
   return `You are an elite sales Brain. You have been given multiple principles from DIFFERENT books and videos in the user's vault.
 
@@ -138,7 +139,10 @@ ${evidenceBlock}
 === KNOWLEDGE VAULT: SUPPORTING CHUNKS FROM PDFS / VIDEOS ===
 ${chunksBlock}
 
-=== USER QUESTION / RECENT CONVERSATION ===
+=== USER QUESTION / CONVERSATION ===
+${userInput || "(no latest user input)"}
+
+=== RECENT CONVERSATION CONTEXT ===
 ${recentExchanges || "(this is the first turn)"}
 
 === WORKSPACE PROFILE ===
@@ -408,7 +412,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
       ...pipeline.evidence_principles.map((p) => p.source_title || p.source_name),
     ].filter((x): x is string => !!x))];
 
-    const distinctSources = distinctSourcesFor(pipeline.selected, pipeline.evidence_principles, 4);
+    const distinctSources = distinctSourcesFor(pipeline.selected, pipeline.evidence_principles, 5);
     const whySkeleton = buildWhySkeleton(distinctSources);
     const openerHint = buildOpenerHint(distinctSources);
 
@@ -416,6 +420,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
       selectedBlock: buildPrinciplesBlock(pipeline.selected),
       evidenceBlock: buildEvidenceBlock(pipeline.evidence_principles),
       chunksBlock: buildChunksBlock(pipeline.supporting_chunks),
+      userInput: hasImageAttachment ? `${userInstruction}\n\n${conversationText}` : (lastUserText || retrievalQuery),
       workspaceProfile,
       recentExchanges,
       frameworkName: pipeline.framework_name,
