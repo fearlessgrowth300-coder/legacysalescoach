@@ -542,7 +542,7 @@ Rules:
   // If the model collapsed onto 1-2 sources but the candidate pool has more,
   // forcibly add top-ranked candidates from other sources as supporting tier.
   const selectedSourceKeys = new Set(
-    selected.map((s) => s.source_id || s.source_title).filter(Boolean) as string[]
+    selected.map((s) => sourceKeyOf(s)).filter(Boolean) as string[]
   );
   if (selectedSourceKeys.size < 3 && uniqueSources.size >= 3) {
     for (const cand of candidates) {
@@ -575,7 +575,7 @@ Rules:
     const kept: SelectedPrinciple[] = [];
     const evictedSlots: ("primary" | "supporting")[] = [];
     for (const s of selected) {
-      const key = (s.source_id || s.source_title || "__none__") as string;
+      const key = sourceKeyOf(s);
       const n = perSource.get(key) || 0;
       if (n < 2) {
         perSource.set(key, n + 1);
@@ -586,7 +586,7 @@ Rules:
       }
     }
     const usedKeys = new Set(
-      kept.map((s) => (s.source_id || s.source_title) as string).filter(Boolean)
+      kept.map((s) => sourceKeyOf(s)).filter(Boolean)
     );
     for (const cand of candidates) {
       if (evictedSlots.length === 0) break;
