@@ -186,6 +186,11 @@ function buildOpenerHint(sources: string[]): string {
   return `"According to **<source>**, ..."`;
 }
 
+function namedSourcesInReply(content: string, sourceTitles: string[]): string[] {
+  const lower = content.toLowerCase();
+  return sourceTitles.filter((title) => lower.includes(title.toLowerCase()));
+}
+
 
 async function fetchWorkspaceProfile(supabaseAdmin: any, userId: string): Promise<string> {
   const [{ data: company }, { data: ws }] = await Promise.all([
