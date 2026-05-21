@@ -351,7 +351,7 @@ export async function rerank(
   if (candidates.length === 0) return { top: [], topScore: 0 };
   if (candidates.length <= 20) {
     const diversified = enforceSourceDiversity(candidates, 2, 12);
-    return { top: diversified, topScore: candidates[0]?.relevance_score ? candidates[0].relevance_score / 100 : 0.6 };
+    return { top: diversified, topScore: diversified[0]?.relevance_score ? diversified[0].relevance_score / 100 : 0.6 };
   }
 
   const summary = candidates.map((p, i) =>
