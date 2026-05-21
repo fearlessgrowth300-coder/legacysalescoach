@@ -477,6 +477,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
         const reader = aiResp.body!.getReader();
         const decoder = new TextDecoder();
         let buf = "";
+        let fullReply = "";
         const reEncoder = new TextEncoder();
         try {
           while (true) {
@@ -495,7 +496,9 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
                   const parsed = JSON.parse(json);
                   const c = parsed.choices?.[0]?.delta?.content;
                   if (typeof c === "string") {
-                    parsed.choices[0].delta.content = sanitize(c);
+                    const clean = sanitize(c);
+                    fullReply += clean;
+                    parsed.choices[0].delta.content = clean;
                     outBuf += `data: ${JSON.stringify(parsed)}\n`;
                     continue;
                   }
@@ -506,6 +509,10 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
             if (outBuf) controller.enqueue(reEncoder.encode(outBuf));
           }
           if (buf) controller.enqueue(reEncoder.encode(buf));
+          const cited = namedSourcesInReply(fullReply, sourceTitles);
+          if (sourceTitles.length >= 3 && cited.length < 3) {
+            console.warn("[brain-chat] single-source collapse", { available: sourceTitles, cited });
+          }
         } finally {
           controller.close();
         }
