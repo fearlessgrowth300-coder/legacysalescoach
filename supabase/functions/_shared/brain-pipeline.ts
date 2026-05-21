@@ -350,11 +350,12 @@ export async function rerank(
 ): Promise<{ top: Principle[]; topScore: number }> {
   if (candidates.length === 0) return { top: [], topScore: 0 };
   if (candidates.length <= 20) {
-    return { top: candidates, topScore: candidates[0]?.relevance_score ? candidates[0].relevance_score / 100 : 0.6 };
+    const diversified = enforceSourceDiversity(candidates, 2, 12);
+    return { top: diversified, topScore: candidates[0]?.relevance_score ? candidates[0].relevance_score / 100 : 0.6 };
   }
 
   const summary = candidates.map((p, i) =>
-    `${i}. id=${p.id} | source="${p.source_name}" | ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`
+    `${i}. id=${p.id} | source="${sourceTitleOf(p)}" | ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`
   ).join("\n");
 
   const result = await callTool(
@@ -394,18 +395,17 @@ export async function rerank(
     return { p, score };
   });
   scored.sort((a, b) => b.score - a.score);
-  // Diversity cap: at most 3 principles per source so one book can't dominate,
-  // but we keep more total so the selector has many sources to combine.
+  // Hard diversity cap: at most 2 principles per source so one book can't dominate.
   const perSourceCount = new Map<string, number>();
   const diverse: { p: Principle; score: number }[] = [];
   const overflow: { p: Principle; score: number }[] = [];
   for (const s of scored) {
-    const sid = s.p.source_id || s.p.source_name || "__none__";
+    const sid = sourceKeyOf(s.p);
     const c = perSourceCount.get(sid) || 0;
-    if (c < 3) { diverse.push(s); perSourceCount.set(sid, c + 1); }
+    if (c < 2) { diverse.push(s); perSourceCount.set(sid, c + 1); }
     else overflow.push(s);
   }
-  const merged = [...diverse, ...overflow].slice(0, 24);
+  const merged = diverse.length >= 8 ? diverse.slice(0, 12) : [...diverse, ...overflow].slice(0, 12);
   const top = merged.map((s) => s.p);
   return { top, topScore: scored[0]?.score ?? 0 };
 }
