@@ -294,12 +294,28 @@ export async function hybridRetrieve(
   const dedupedP = deduplicatePrinciples(mergedP2, "relevance_score");
   const dedupedC = deduplicateChunks(mergedC, "relevance_score");
 
+  // Hydrate real source titles once, before diversity and prompt formatting.
+  // The response layer needs source_title per principle so it can cite books/videos accurately.
+  const allSourceIds = [...new Set([
+    ...dedupedP.map((p) => p.source_id),
+    ...dedupedC.map((c) => c.source_id),
+  ].filter((x): x is string => !!x))];
+  if (allSourceIds.length) {
+    const { data: kb } = await supabaseAdmin.from("knowledge_base_items")
+      .select("id, title, url, type")
+      .in("id", allSourceIds);
+    const titleById = new Map<string, string>();
+    (kb || []).forEach((k: any) => titleById.set(k.id, k.title));
+    for (const p of dedupedP) p.source_title = p.source_id ? (titleById.get(p.source_id) || p.source_name) : p.source_name;
+    for (const c of dedupedC) c.source_title = c.source_id ? (titleById.get(c.source_id) || null) : null;
+  }
+
   // Source-balanced ordering: round-robin one principle per source until
   // we've cycled through, then fill the rest. This guarantees the candidate
   // pool spans many books/videos before we hand it to the reranker/selector.
   const bySource = new Map<string, Principle[]>();
   for (const p of dedupedP) {
-    const key = p.source_id || p.source_name || "__none__";
+    const key = sourceKeyOf(p);
     if (!bySource.has(key)) bySource.set(key, []);
     bySource.get(key)!.push(p);
   }
