@@ -30,10 +30,12 @@ export type Principle = {
   what_i_learned: string;
   how_to_apply: string;
   source_name: string;
+  source_title?: string | null;
   source_id: string | null;
   category: string;
   source_type: string;
   relevance_score?: number;
+  similarity?: number;
   power_level?: number;
   exact_words_to_use?: string | null;
   the_deep_why?: string | null;
@@ -49,8 +51,10 @@ export type Chunk = {
   content: string;
   category: string;
   source_id: string | null;
+  source_title?: string | null;
   source_type: string;
   relevance_score?: number;
+  similarity?: number;
   _semantic?: boolean;
 };
 
@@ -98,6 +102,33 @@ export type PipelineOutput = {
   debug: RetrievalDebug;
   empty_vault_topic?: string;
 };
+
+function sourceTitleOf(item: { source_title?: string | null; source_name?: string | null; source_id?: string | null }): string {
+  return item.source_title || item.source_name || item.source_id || "Uploaded content";
+}
+
+function sourceKeyOf(item: { source_title?: string | null; source_name?: string | null; source_id?: string | null }): string {
+  return sourceTitleOf(item).trim().toLowerCase() || "unknown";
+}
+
+export function enforceSourceDiversity<T extends { source_title?: string | null; source_name?: string | null; source_id?: string | null; similarity?: number; relevance_score?: number }>(
+  principles: T[],
+  maxPerSource: number = 2,
+  limit: number = 12,
+): T[] {
+  const sourceCount: Record<string, number> = {};
+  const sorted = [...principles].sort((a, b) =>
+    (b.similarity || b.relevance_score || 0) - (a.similarity || a.relevance_score || 0)
+  );
+  const diversePrinciples: T[] = [];
+  for (const principle of sorted) {
+    const source = sourceKeyOf(principle);
+    sourceCount[source] = (sourceCount[source] || 0) + 1;
+    if (sourceCount[source] <= maxPerSource) diversePrinciples.push(principle);
+    if (diversePrinciples.length >= limit) break;
+  }
+  return diversePrinciples;
+}
 
 // ─── Gateway helpers ──────────────────────────────────────────────────
 
