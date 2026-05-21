@@ -842,33 +842,42 @@ export function buildPrinciplesBlock(selected: SelectedPrinciple[]): string {
   return selected.map((s, i) => {
     const p = s.full;
     const tierLabel = s.tier === "primary" ? "PRIMARY" : "SUPPORTING";
-    return `### Principle ${i + 1} [${tierLabel}] — ${p.principle_name}  [id: ${p.id}]
-Source: "${s.source_title}" (${s.source_type})
+    return `[PRINCIPLE ${i + 1} — ${tierLabel}]
+SOURCE BOOK/VIDEO: "${s.source_title || sourceTitleOf(p)}"
+PRINCIPLE NAME: ${p.principle_name}
+CATEGORY: ${p.category}
+WHAT IT IS: ${p.what_i_learned || ""}
+THE DEEP WHY: ${p.the_deep_why || ""}
+EXACT WORDS TO USE: ${p.exact_words_to_use || ""}
+WHEN TO USE: ${p.when_to_use || ""}
+COMMON MISTAKE: ${p.common_mistake || ""}
+POWER LEVEL: ${p.power_level || 7}/10
+SOURCE TYPE: ${s.source_type}
+PRINCIPLE ID: ${p.id}
 Why selected: ${s.why_relevant}
-What it teaches: ${p.what_i_learned || ""}
 How to apply: ${p.how_to_apply || ""}
-When to use: ${p.when_to_use || "(unspecified)"}
 When NOT to use: ${p.when_not_to_use || "(unspecified)"}
-Exact words: ${p.exact_words_to_use || "(none)"}
-Deep why (psychology): ${p.the_deep_why || "(unspecified)"}
-Common mistake: ${p.common_mistake || "(unspecified)"}
-Real example: ${p.real_example_or_story || "(none)"}`;
+Real example: ${p.real_example_or_story || "(none)"}
+---`;
   }).join("\n\n");
 }
 
 export function buildChunksBlock(chunks: Chunk[]): string {
   if (!chunks.length) return "(none)";
-  return chunks.map((c, i) => `[chunk ${i + 1} | ${c.category}] ${(c.content || "").substring(0, 400)}`).join("\n\n");
+  return chunks.map((c, i) => `[CHUNK ${i + 1} | SOURCE: "${c.source_title || "Uploaded content"}" | ${c.category}] ${(c.content || "").substring(0, 400)}`).join("\n\n");
 }
 
 export function buildEvidenceBlock(principles: Principle[]): string {
   if (!principles.length) return "(none)";
   return principles.map((p, i) =>
-    `### Evidence ${i + 1} — ${p.principle_name}
-Source: "${p.source_name}" (${p.source_type}) | category: ${p.category}
+    `[EVIDENCE PRINCIPLE ${i + 1}]
+SOURCE BOOK/VIDEO: "${sourceTitleOf(p)}"
+PRINCIPLE NAME: ${p.principle_name}
+CATEGORY: ${p.category}
 What it teaches: ${(p.what_i_learned || "").substring(0, 280)}
 How to apply: ${(p.how_to_apply || "").substring(0, 240)}
 Exact words: ${(p.exact_words_to_use || "(none)").substring(0, 200)}
-Deep why: ${(p.the_deep_why || "(unspecified)").substring(0, 200)}`
+Deep why: ${(p.the_deep_why || "(unspecified)").substring(0, 200)}
+---`
   ).join("\n\n");
 }
