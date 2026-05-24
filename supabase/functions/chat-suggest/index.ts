@@ -690,8 +690,8 @@ serve(async (req) => {
     // 1. Pull WORKSPACE PERSONA from sales_brain (workspace-specific)
     const [
       { data: workspacePersonaRows },
-      { data: brainKnowledge },
-      { data: salesPrinciples },
+      brainKnowledge,
+      salesPrinciples,
       { data: brainInsights },
       { data: wsConvoChunks },
       { data: trainingExamples },
@@ -704,18 +704,20 @@ serve(async (req) => {
         .eq("workspace_id", prospect.workspace_id)
         .eq("source_type", "workspace_persona")
         .limit(1),
-      supabase.from("knowledge_chunks")
-        .select("id, content, category, source_type, trigger_phrases, source_id")
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ["core_knowledge", "content", "video", "pdf"])
-        .order("relevance_score", { ascending: false }),
-      supabase.from("sales_brain")
-        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score")
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ["core_knowledge", "sales_principle", "content", "video", "pdf"])
-        .order("relevance_score", { ascending: false, nullsFirst: false }),
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
       supabase.from("learned_insights")
         .select("insight, insight_type, source")
         .eq("user_id", user.id)
