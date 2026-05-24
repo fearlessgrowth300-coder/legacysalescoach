@@ -230,7 +230,10 @@ export async function hybridRetrieve(
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false, nullsFirst: false })
-      .limit(200),
+      // Fetch a broad static reservoir before source-diversity capping.
+      // A 200-row limit was still mostly Start With Why because many rows share
+      // relevance_score=100, starving lower-volume books before reranking.
+      .limit(1500),
     supabaseAdmin.from("knowledge_chunks")
       .select("id, content, category, source_id, source_type, relevance_score")
       .eq("user_id", userId).is("workspace_id", null)
