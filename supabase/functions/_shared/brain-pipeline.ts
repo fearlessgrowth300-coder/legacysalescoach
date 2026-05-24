@@ -273,6 +273,17 @@ export async function hybridRetrieve(
   }
   const enrichedSemP = flatSemP.map((p) => ({ ...(fullById.get(p.id) || {}), ...p }) as Principle);
 
+  // Add a source-wide reservoir so every uploaded book/video gets a chance to
+  // enter the diverse candidate pool before the AI reranker. This prevents one
+  // high-scoring source (often Start With Why) from occupying the whole context.
+  const byStaticSource = new Map<string, Principle[]>();
+  for (const p of (staticPrinciplesRaw || []) as Principle[]) {
+    const key = p.source_id || p.source_name || p.id;
+    if (!byStaticSource.has(key)) byStaticSource.set(key, []);
+    if (byStaticSource.get(key)!.length < 4) byStaticSource.get(key)!.push(p);
+  }
+  const sourceReservoir = [...byStaticSource.values()].flat();
+
   // Pull a few extra principles from sources surfaced by chunk retrieval
   // so PDFs/videos that hit on chunk-search but not principle-search still
   // contribute principles to the candidate pool.
@@ -290,7 +301,8 @@ export async function hybridRetrieve(
     chunkSourcePrinciples = (csp || []) as Principle[];
   }
 
-  const mergedP = mergeByIdPriority(enrichedSemP, chunkSourcePrinciples);
+  const mergedP0 = mergeByIdPriority(enrichedSemP, sourceReservoir);
+  const mergedP = mergeByIdPriority(mergedP0, chunkSourcePrinciples);
   const mergedP2 = mergeByIdPriority(mergedP, (staticPrinciplesRaw || []) as Principle[]);
   const mergedC = mergeByIdPriority(flatSemC, (staticChunksRaw || []) as Chunk[]);
 
