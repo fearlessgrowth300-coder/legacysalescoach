@@ -503,7 +503,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
               buf = buf.slice(idx + 1);
               if (line.startsWith("data: ")) {
                 const json = line.slice(6).trim();
-                if (json === "[DONE]") { outBuf += line + "\n"; continue; }
+                if (json === "[DONE]") continue;
                 try {
                   const parsed = JSON.parse(json);
                   const c = parsed.choices?.[0]?.delta?.content;
@@ -526,6 +526,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
             console.warn("[brain-chat] single-source collapse", { available: sourceTitles, cited });
             controller.enqueue(reEncoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: forcedSourceFooter } }] })}\n\n`));
           }
+          controller.enqueue(reEncoder.encode("data: [DONE]\n\n"));
         } finally {
           controller.close();
         }
