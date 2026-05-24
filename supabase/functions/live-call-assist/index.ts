@@ -139,14 +139,18 @@ serve(async (req) => {
       const embeddingStr = JSON.stringify(queryEmbedding);
       const [semP, semC] = await Promise.all([
         supabase.rpc("match_sales_brain", {
-          query_embedding: embeddingStr, match_count: 30, match_threshold: 0.3, p_user_id: user.id,
+          query_embedding: embeddingStr, match_count: 80, match_threshold: 0.3, p_user_id: null,
         }),
         supabase.rpc("match_knowledge_chunks", {
-          query_embedding: embeddingStr, match_count: 30, match_threshold: 0.3, p_user_id: user.id,
+          query_embedding: embeddingStr, match_count: 60, match_threshold: 0.3, p_user_id: null,
         }),
       ]);
-      semanticPrinciples = (semP.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-      semanticChunks = (semC.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+      semanticPrinciples = (semP.data || [])
+        .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type))
+        .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+      semanticChunks = (semC.data || [])
+        .filter((c: any) => c.source_type === "core_knowledge")
+        .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
     }
 
     // Merge, deduplicate, diversity re-rank
