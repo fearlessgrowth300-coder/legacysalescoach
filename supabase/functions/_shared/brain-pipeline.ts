@@ -15,6 +15,28 @@ const FAST_MODEL = "google/gemini-2.5-flash-lite";
 const REASONING_MODEL = "google/gemini-3-flash-preview";
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story";
+const CHUNK_SELECT = "id, content, category, source_id, source_type, relevance_score";
+const PAGE_SIZE = 1000;
+
+async function fetchAllRows<T>(
+  queryPage: (from: number, to: number) => Promise<{ data: T[] | null; error?: any }>,
+  maxRows = 10000,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; from < maxRows; from += PAGE_SIZE) {
+    const to = Math.min(from + PAGE_SIZE - 1, maxRows - 1);
+    const { data, error } = await queryPage(from, to);
+    if (error) {
+      console.warn("[brain-pipeline] paged vault fetch failed", error);
+      break;
+    }
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return rows;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────
 
