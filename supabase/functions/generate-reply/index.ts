@@ -136,22 +136,24 @@ serve(async (req) => {
     const embeddingPromise = generateEmbedding(brainQuery);
 
     const [
-      { data: allPrinciples },
-      { data: allChunks },
+      allPrinciples,
+      allChunks,
       { data: wsConvoChunks },
       { data: brainInsights },
       queryEmbedding,
     ] = await Promise.all([
-      supabase.from("sales_brain")
-        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score, power_level")
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false, nullsFirst: false }),
-      supabase.from("knowledge_chunks")
-        .select("id, content, category, source_type, trigger_phrases, source_id")
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ["core_knowledge", "content", "video", "pdf"])
-        .order("relevance_score", { ascending: false }),
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
       supabase.from("knowledge_chunks")
         .select("id, content, category, source_type, trigger_phrases, source_id, created_at")
         .eq("user_id", user.id).eq("workspace_id", prospect.workspace_id)
@@ -178,8 +180,8 @@ serve(async (req) => {
     }
 
     // Merge + deduplicate + diversity rerank
-    const mergedPrinciples = deduplicatePrinciples(mergeByIdPriority(semanticPrinciples, allPrinciples || []), "relevance_score");
-    const mergedChunks = deduplicateChunks(mergeByIdPriority(semanticChunks, allChunks || []), "relevance_score");
+    const mergedPrinciples = deduplicatePrinciples(mergeByIdPriority(semanticPrinciples, allPrinciples), "relevance_score");
+    const mergedChunks = deduplicateChunks(mergeByIdPriority(semanticChunks, allChunks), "relevance_score");
     const diversePrinciples = diversityRerank(mergedPrinciples, "source_id", 5);
     const diverseChunks = diversityRerank(mergedChunks, "source_id", 4);
 
