@@ -691,8 +691,8 @@ serve(async (req) => {
     const [
       { data: workspacePersonaRows },
       globalBrainKnowledge,
-      userBrainKnowledge,
       globalSalesPrinciples,
+      userBrainKnowledge,
       userSalesPrinciples,
       { data: brainInsights },
       { data: wsConvoChunks },
@@ -759,6 +759,8 @@ serve(async (req) => {
     ]);
 
     const personaData = workspacePersonaRows?.[0]?.metadata || null;
+    const brainKnowledge = mergeByIdPriority(globalBrainKnowledge, userBrainKnowledge);
+    const salesPrinciples = mergeByIdPriority(globalSalesPrinciples, userSalesPrinciples);
 
     // ─── SEMANTIC RPC CALLS (if embedding succeeded) ───
     let semanticPrinciples: any[] = [];
