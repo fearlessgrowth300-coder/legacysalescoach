@@ -15,6 +15,28 @@ function getCorsHeaders(req: Request) {
 }
 
 const MAX_MESSAGE_LENGTH = 4000;
+const PAGE_SIZE = 1000;
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score";
+const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, relevance_score";
+
+async function fetchAllRows<T>(
+  queryPage: (from: number, to: number) => Promise<{ data: T[] | null; error?: any }>,
+  maxRows = 10000,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; from < maxRows; from += PAGE_SIZE) {
+    const to = Math.min(from + PAGE_SIZE - 1, maxRows - 1);
+    const { data, error } = await queryPage(from, to);
+    if (error) {
+      console.warn("[chat-suggest] paged brain fetch failed", error);
+      break;
+    }
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return rows;
+}
 
 function buildFrameworkConstraints(parsedFramework: any): string {
   if (!parsedFramework) return "";
