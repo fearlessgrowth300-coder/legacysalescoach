@@ -421,6 +421,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
     const distinctSources = distinctSourcesFor(pipeline.selected, pipeline.evidence_principles, 5);
     const whySkeleton = buildWhySkeleton(distinctSources);
     const openerHint = buildOpenerHint(distinctSources);
+    const forcedSourceFooter = buildForcedSourceFooter(distinctSources.length >= 3 ? distinctSources : sourceTitles);
 
     let systemPrompt = buildSystemPrompt({
       selectedBlock: buildPrinciplesBlock(pipeline.selected),
@@ -523,6 +524,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
           const cited = namedSourcesInReply(fullReply, sourceTitles);
           if (sourceTitles.length >= 3 && cited.length < 3) {
             console.warn("[brain-chat] single-source collapse", { available: sourceTitles, cited });
+            controller.enqueue(reEncoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: forcedSourceFooter } }] })}\n\n`));
           }
         } finally {
           controller.close();
