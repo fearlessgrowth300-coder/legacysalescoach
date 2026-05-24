@@ -249,7 +249,13 @@ export async function hybridRetrieve(
   // source-diversity capping. Lovable Cloud caps a single request at 1000 rows;
   // this project has 4k+ principles, so a plain .limit(1500) was still not the
   // full Brain and allowed the highest-scoring source to crowd everything else.
-  const [staticPrinciplesRaw, staticChunksRaw] = await Promise.all([
+  const [globalPrinciples, userPrinciples, globalChunks, userChunks] = await Promise.all([
+    fetchAllRows<Principle>((from, to) => supabaseAdmin.from("sales_brain")
+      .select(PRINCIPLE_SELECT)
+      .is("workspace_id", null)
+      .in("source_type", ["core_knowledge", "sales_principle"])
+      .order("relevance_score", { ascending: false, nullsFirst: false })
+      .range(from, to)),
     fetchAllRows<Principle>((from, to) => supabaseAdmin.from("sales_brain")
       .select(PRINCIPLE_SELECT)
       .eq("user_id", userId).is("workspace_id", null)
@@ -258,11 +264,19 @@ export async function hybridRetrieve(
       .range(from, to)),
     fetchAllRows<Chunk>((from, to) => supabaseAdmin.from("knowledge_chunks")
       .select(CHUNK_SELECT)
+      .is("workspace_id", null)
+      .in("source_type", ["core_knowledge", "sales_principle"])
+      .order("relevance_score", { ascending: false })
+      .range(from, to), 3000),
+    fetchAllRows<Chunk>((from, to) => supabaseAdmin.from("knowledge_chunks")
+      .select(CHUNK_SELECT)
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false })
       .range(from, to), 3000),
   ]);
+  const staticPrinciplesRaw = mergeByIdPriority(globalPrinciples, userPrinciples);
+  const staticChunksRaw = mergeByIdPriority(globalChunks, userChunks);
 
   // Run semantic retrieval per sub-query
   const semPRuns: Principle[][] = [];
