@@ -628,6 +628,31 @@ Rules:
     selected.push(...kept);
   }
 
+  // Final safety net: if selection still has fewer than 3 sources, append the
+  // best unseen candidates from missing sources even when nothing was evicted.
+  if (uniqueSources.size >= 3) {
+    const selectedKeys = new Set(selected.map((s) => sourceKeyOf(s)).filter(Boolean));
+    for (const cand of candidates) {
+      if (selectedKeys.size >= 3 || selected.length >= 7) break;
+      if (seen.has(cand.id)) continue;
+      const key = sourceKeyOf(cand);
+      if (!key || selectedKeys.has(key)) continue;
+      seen.add(cand.id);
+      selectedKeys.add(key);
+      selected.push({
+        id: cand.id,
+        principle_name: cand.principle_name,
+        source_id: cand.source_id,
+        source_title: sourceTitleOf(cand),
+        source_url: null,
+        source_type: cand.source_type,
+        why_relevant: `Required cross-source support from ${sourceTitleOf(cand)} (${cand.category}).`,
+        tier: "supporting",
+        full: cand,
+      });
+    }
+  }
+
   return {
     selected,
     contradictions: Array.isArray(result.contradictions) ? result.contradictions : [],
