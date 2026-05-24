@@ -285,11 +285,15 @@ export async function hybridRetrieve(
     if (!emb) { semPRuns.push([]); semCRuns.push([]); return; }
     const embStr = JSON.stringify(emb);
     const [pRes, cRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 18, match_threshold: 0.22, p_user_id: userId }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 14, match_threshold: 0.22, p_user_id: userId }),
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 60, match_threshold: 0.22, p_user_id: null }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 40, match_threshold: 0.22, p_user_id: null }),
     ]);
-    semPRuns.push((pRes.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) })));
-    semCRuns.push((cRes.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) })));
+    semPRuns.push((pRes.data || [])
+      .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type))
+      .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) })));
+    semCRuns.push((cRes.data || [])
+      .filter((c: any) => c.source_type === "core_knowledge")
+      .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) })));
   }));
 
   // Pool semantic across sub-queries, then merge with static fallback
