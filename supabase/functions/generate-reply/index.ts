@@ -9,6 +9,28 @@ const corsHeaders = {
 };
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
+const PAGE_SIZE = 1000;
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score, power_level";
+const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, relevance_score";
+
+async function fetchAllRows<T>(
+  queryPage: (from: number, to: number) => Promise<{ data: T[] | null; error?: any }>,
+  maxRows = 10000,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; from < maxRows; from += PAGE_SIZE) {
+    const to = Math.min(from + PAGE_SIZE - 1, maxRows - 1);
+    const { data, error } = await queryPage(from, to);
+    if (error) {
+      console.warn("[generate-reply] paged brain fetch failed", error);
+      break;
+    }
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return rows;
+}
 
 function buildStyleFingerprint(styleVector: any): string {
   if (!styleVector) return "No style fingerprint available.";
@@ -114,22 +136,38 @@ serve(async (req) => {
     const embeddingPromise = generateEmbedding(brainQuery);
 
     const [
-      { data: allPrinciples },
-      { data: allChunks },
+      globalPrinciples,
+      userPrinciples,
+      globalChunks,
+      userChunks,
       { data: wsConvoChunks },
       { data: brainInsights },
       queryEmbedding,
     ] = await Promise.all([
-      supabase.from("sales_brain")
-        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score, power_level")
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle"])
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false, nullsFirst: false }),
-      supabase.from("knowledge_chunks")
-        .select("id, content, category, source_type, trigger_phrases, source_id")
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
+        .is("workspace_id", null)
+        .eq("source_type", "core_knowledge")
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ["core_knowledge", "content", "video", "pdf"])
-        .order("relevance_score", { ascending: false }),
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
       supabase.from("knowledge_chunks")
         .select("id, content, category, source_type, trigger_phrases, source_id, created_at")
         .eq("user_id", user.id).eq("workspace_id", prospect.workspace_id)
@@ -148,16 +186,22 @@ serve(async (req) => {
     if (queryEmbedding) {
       const embStr = JSON.stringify(queryEmbedding);
       const [semP, semC] = await Promise.all([
-        supabase.rpc("match_sales_brain", { query_embedding: embStr, match_count: 40, match_threshold: 0.3, p_user_id: user.id }),
-        supabase.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 40, match_threshold: 0.3, p_user_id: user.id }),
+        supabase.rpc("match_sales_brain", { query_embedding: embStr, match_count: 80, match_threshold: 0.3, p_user_id: null }),
+        supabase.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 60, match_threshold: 0.3, p_user_id: null }),
       ]);
-      semanticPrinciples = (semP.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-      semanticChunks = (semC.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+      semanticPrinciples = (semP.data || [])
+        .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type))
+        .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+      semanticChunks = (semC.data || [])
+        .filter((c: any) => c.source_type === "core_knowledge")
+        .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
     }
 
     // Merge + deduplicate + diversity rerank
-    const mergedPrinciples = deduplicatePrinciples(mergeByIdPriority(semanticPrinciples, allPrinciples || []), "relevance_score");
-    const mergedChunks = deduplicateChunks(mergeByIdPriority(semanticChunks, allChunks || []), "relevance_score");
+    const allPrinciples = mergeByIdPriority(globalPrinciples, userPrinciples);
+    const allChunks = mergeByIdPriority(globalChunks, userChunks);
+    const mergedPrinciples = deduplicatePrinciples(mergeByIdPriority(semanticPrinciples, allPrinciples), "relevance_score");
+    const mergedChunks = deduplicateChunks(mergeByIdPriority(semanticChunks, allChunks), "relevance_score");
     const diversePrinciples = diversityRerank(mergedPrinciples, "source_id", 5);
     const diverseChunks = diversityRerank(mergedChunks, "source_id", 4);
 

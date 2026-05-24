@@ -9,6 +9,28 @@ const corsHeaders = {
 };
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
+const PAGE_SIZE = 1000;
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_id, relevance_score";
+const CHUNK_SELECT = "id, content, category, source_id, relevance_score";
+
+async function fetchAllRows<T>(
+  queryPage: (from: number, to: number) => Promise<{ data: T[] | null; error?: any }>,
+  maxRows = 10000,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; from < maxRows; from += PAGE_SIZE) {
+    const to = Math.min(from + PAGE_SIZE - 1, maxRows - 1);
+    const { data, error } = await queryPage(from, to);
+    if (error) {
+      console.warn("[live-call-assist] paged brain fetch failed", error);
+      break;
+    }
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return rows;
+}
 
 function diversityRerank(items: any[], sourceKey: string, maxPerSource: number) {
   const bySource: Record<string, any[]> = {};
@@ -75,22 +97,38 @@ serve(async (req) => {
     const [
       { data: kbItems },
       { count: totalUploads },
-      { data: allPrinciples },
-      { data: allChunks },
+      globalPrinciples,
+      userPrinciples,
+      globalChunks,
+      userChunks,
       queryEmbedding,
     ] = await Promise.all([
       supabase.from("knowledge_base_items").select("id, title, type").eq("user_id", user.id),
       supabase.from("knowledge_base_items").select("id", { count: "exact", head: true }).eq("user_id", user.id),
-      supabase.from("sales_brain")
-        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_id, relevance_score")
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle"])
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false, nullsFirst: false }),
-      supabase.from("knowledge_chunks")
-        .select("id, content, category, source_id, relevance_score")
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
+        .is("workspace_id", null)
+        .eq("source_type", "core_knowledge")
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
-        .order("relevance_score", { ascending: false }),
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
       embeddingPromise,
     ]);
 
@@ -101,19 +139,25 @@ serve(async (req) => {
       const embeddingStr = JSON.stringify(queryEmbedding);
       const [semP, semC] = await Promise.all([
         supabase.rpc("match_sales_brain", {
-          query_embedding: embeddingStr, match_count: 30, match_threshold: 0.3, p_user_id: user.id,
+          query_embedding: embeddingStr, match_count: 80, match_threshold: 0.3, p_user_id: null,
         }),
         supabase.rpc("match_knowledge_chunks", {
-          query_embedding: embeddingStr, match_count: 30, match_threshold: 0.3, p_user_id: user.id,
+          query_embedding: embeddingStr, match_count: 60, match_threshold: 0.3, p_user_id: null,
         }),
       ]);
-      semanticPrinciples = (semP.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-      semanticChunks = (semC.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+      semanticPrinciples = (semP.data || [])
+        .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type))
+        .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+      semanticChunks = (semC.data || [])
+        .filter((c: any) => c.source_type === "core_knowledge")
+        .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
     }
 
     // Merge, deduplicate, diversity re-rank
-    const mergedPrinciples = mergeByIdPriority(semanticPrinciples, allPrinciples || []);
-    const mergedChunks = mergeByIdPriority(semanticChunks, allChunks || []);
+    const allPrinciples = mergeByIdPriority(globalPrinciples, userPrinciples);
+    const allChunks = mergeByIdPriority(globalChunks, userChunks);
+    const mergedPrinciples = mergeByIdPriority(semanticPrinciples, allPrinciples);
+    const mergedChunks = mergeByIdPriority(semanticChunks, allChunks);
     const dedupedPrinciples = deduplicatePrinciples(mergedPrinciples, "relevance_score");
     const dedupedChunks = deduplicateChunks(mergedChunks, "relevance_score");
     const diversePrinciples = diversityRerank(dedupedPrinciples, "source_id", 5);

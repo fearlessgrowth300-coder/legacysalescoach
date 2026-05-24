@@ -15,6 +15,28 @@ const FAST_MODEL = "google/gemini-2.5-flash-lite";
 const REASONING_MODEL = "google/gemini-3-flash-preview";
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story";
+const CHUNK_SELECT = "id, content, category, source_id, source_type, relevance_score";
+const PAGE_SIZE = 1000;
+
+async function fetchAllRows<T>(
+  queryPage: (from: number, to: number) => Promise<{ data: T[] | null; error?: any }>,
+  maxRows = 10000,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; from < maxRows; from += PAGE_SIZE) {
+    const to = Math.min(from + PAGE_SIZE - 1, maxRows - 1);
+    const { data, error } = await queryPage(from, to);
+    if (error) {
+      console.warn("[brain-pipeline] paged vault fetch failed", error);
+      break;
+    }
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return rows;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -223,24 +245,38 @@ export async function hybridRetrieve(
   );
   const embeddingUsed = embeddings.some((e) => !!e);
 
-  // Static fallback (top by relevance) — fetched once, not per sub-query
-  const [{ data: staticPrinciplesRaw }, { data: staticChunksRaw }] = await Promise.all([
-    supabaseAdmin.from("sales_brain")
-      .select("id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story")
+  // Static fallback — fetch the user's full principle vault in pages before
+  // source-diversity capping. Lovable Cloud caps a single request at 1000 rows;
+  // this project has 4k+ principles, so a plain .limit(1500) was still not the
+  // full Brain and allowed the highest-scoring source to crowd everything else.
+  const [globalPrinciples, userPrinciples, globalChunks, userChunks] = await Promise.all([
+    fetchAllRows<Principle>((from, to) => supabaseAdmin.from("sales_brain")
+      .select(PRINCIPLE_SELECT)
+      .is("workspace_id", null)
+      .in("source_type", ["core_knowledge", "sales_principle"])
+      .order("relevance_score", { ascending: false, nullsFirst: false })
+      .range(from, to)),
+    fetchAllRows<Principle>((from, to) => supabaseAdmin.from("sales_brain")
+      .select(PRINCIPLE_SELECT)
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false, nullsFirst: false })
-      // Fetch a broad static reservoir before source-diversity capping.
-      // A 200-row limit was still mostly Start With Why because many rows share
-      // relevance_score=100, starving lower-volume books before reranking.
-      .limit(1500),
-    supabaseAdmin.from("knowledge_chunks")
-      .select("id, content, category, source_id, source_type, relevance_score")
+      .range(from, to)),
+    fetchAllRows<Chunk>((from, to) => supabaseAdmin.from("knowledge_chunks")
+      .select(CHUNK_SELECT)
+      .is("workspace_id", null)
+      .in("source_type", ["core_knowledge", "sales_principle"])
+      .order("relevance_score", { ascending: false })
+      .range(from, to), 3000),
+    fetchAllRows<Chunk>((from, to) => supabaseAdmin.from("knowledge_chunks")
+      .select(CHUNK_SELECT)
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false })
-      .limit(60),
+      .range(from, to), 3000),
   ]);
+  const staticPrinciplesRaw = mergeByIdPriority(globalPrinciples, userPrinciples);
+  const staticChunksRaw = mergeByIdPriority(globalChunks, userChunks);
 
   // Run semantic retrieval per sub-query
   const semPRuns: Principle[][] = [];
@@ -249,11 +285,15 @@ export async function hybridRetrieve(
     if (!emb) { semPRuns.push([]); semCRuns.push([]); return; }
     const embStr = JSON.stringify(emb);
     const [pRes, cRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 18, match_threshold: 0.22, p_user_id: userId }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 14, match_threshold: 0.22, p_user_id: userId }),
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 60, match_threshold: 0.22, p_user_id: null }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 40, match_threshold: 0.22, p_user_id: null }),
     ]);
-    semPRuns.push((pRes.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) })));
-    semCRuns.push((cRes.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) })));
+    semPRuns.push((pRes.data || [])
+      .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type))
+      .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) })));
+    semCRuns.push((cRes.data || [])
+      .filter((c: any) => c.source_type === "core_knowledge")
+      .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) })));
   }));
 
   // Pool semantic across sub-queries, then merge with static fallback
@@ -263,11 +303,11 @@ export async function hybridRetrieve(
   // Need richer principle fields — fetch full row for any semantic principles missing them
   const semIds = new Set(flatSemP.map((p) => p.id));
   const fullById = new Map<string, Principle>();
-  (staticPrinciplesRaw || []).forEach((p: any) => fullById.set(p.id, p));
+  staticPrinciplesRaw.forEach((p: any) => fullById.set(p.id, p));
   const missing = [...semIds].filter((id) => !fullById.has(id));
   if (missing.length) {
     const { data: extras } = await supabaseAdmin.from("sales_brain")
-      .select("id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story")
+      .select(PRINCIPLE_SELECT)
       .in("id", missing);
     (extras || []).forEach((p: any) => fullById.set(p.id, p));
   }
@@ -277,7 +317,7 @@ export async function hybridRetrieve(
   // enter the diverse candidate pool before the AI reranker. This prevents one
   // high-scoring source (often Start With Why) from occupying the whole context.
   const byStaticSource = new Map<string, Principle[]>();
-  for (const p of (staticPrinciplesRaw || []) as Principle[]) {
+  for (const p of staticPrinciplesRaw as Principle[]) {
     const key = p.source_id || p.source_name || p.id;
     if (!byStaticSource.has(key)) byStaticSource.set(key, []);
     if (byStaticSource.get(key)!.length < 4) byStaticSource.get(key)!.push(p);
@@ -293,7 +333,7 @@ export async function hybridRetrieve(
   let chunkSourcePrinciples: Principle[] = [];
   if (chunkSourceIds.length) {
     const { data: csp } = await supabaseAdmin.from("sales_brain")
-      .select("id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story")
+      .select(PRINCIPLE_SELECT)
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_id", chunkSourceIds)
       .order("relevance_score", { ascending: false, nullsFirst: false })
@@ -303,8 +343,8 @@ export async function hybridRetrieve(
 
   const mergedP0 = mergeByIdPriority(enrichedSemP, sourceReservoir);
   const mergedP = mergeByIdPriority(mergedP0, chunkSourcePrinciples);
-  const mergedP2 = mergeByIdPriority(mergedP, (staticPrinciplesRaw || []) as Principle[]);
-  const mergedC = mergeByIdPriority(flatSemC, (staticChunksRaw || []) as Chunk[]);
+  const mergedP2 = mergeByIdPriority(mergedP, staticPrinciplesRaw as Principle[]);
+  const mergedC = mergeByIdPriority(flatSemC, staticChunksRaw as Chunk[]);
 
   const dedupedP = deduplicatePrinciples(mergedP2, "relevance_score");
   const dedupedC = deduplicateChunks(mergedC, "relevance_score");
@@ -352,7 +392,7 @@ export async function hybridRetrieve(
     chunks: dedupedC.slice(0, 50),
     embeddingUsed,
     semanticCount: enrichedSemP.length,
-    staticCount: (staticPrinciplesRaw || []).length,
+      staticCount: staticPrinciplesRaw.length,
   };
 }
 

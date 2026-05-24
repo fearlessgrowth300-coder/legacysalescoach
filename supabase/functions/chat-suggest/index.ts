@@ -15,6 +15,28 @@ function getCorsHeaders(req: Request) {
 }
 
 const MAX_MESSAGE_LENGTH = 4000;
+const PAGE_SIZE = 1000;
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score";
+const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, relevance_score";
+
+async function fetchAllRows<T>(
+  queryPage: (from: number, to: number) => Promise<{ data: T[] | null; error?: any }>,
+  maxRows = 10000,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; from < maxRows; from += PAGE_SIZE) {
+    const to = Math.min(from + PAGE_SIZE - 1, maxRows - 1);
+    const { data, error } = await queryPage(from, to);
+    if (error) {
+      console.warn("[chat-suggest] paged brain fetch failed", error);
+      break;
+    }
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return rows;
+}
 
 function buildFrameworkConstraints(parsedFramework: any): string {
   if (!parsedFramework) return "";
@@ -668,8 +690,10 @@ serve(async (req) => {
     // 1. Pull WORKSPACE PERSONA from sales_brain (workspace-specific)
     const [
       { data: workspacePersonaRows },
-      { data: brainKnowledge },
-      { data: salesPrinciples },
+      globalBrainKnowledge,
+      globalSalesPrinciples,
+      userBrainKnowledge,
+      userSalesPrinciples,
       { data: brainInsights },
       { data: wsConvoChunks },
       { data: trainingExamples },
@@ -682,18 +706,32 @@ serve(async (req) => {
         .eq("workspace_id", prospect.workspace_id)
         .eq("source_type", "workspace_persona")
         .limit(1),
-      supabase.from("knowledge_chunks")
-        .select("id, content, category, source_type, trigger_phrases, source_id")
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
+        .is("workspace_id", null)
+        .eq("source_type", "core_knowledge")
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle"])
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ["core_knowledge", "content", "video", "pdf"])
-        .order("relevance_score", { ascending: false }),
-      supabase.from("sales_brain")
-        .select("id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score")
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("source_type", ["core_knowledge", "sales_principle", "content", "video", "pdf"])
-        .order("relevance_score", { ascending: false, nullsFirst: false }),
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
       supabase.from("learned_insights")
         .select("insight, insight_type, source")
         .eq("user_id", user.id)
@@ -721,6 +759,8 @@ serve(async (req) => {
     ]);
 
     const personaData = workspacePersonaRows?.[0]?.metadata || null;
+    const brainKnowledge = mergeByIdPriority(globalBrainKnowledge, userBrainKnowledge);
+    const salesPrinciples = mergeByIdPriority(globalSalesPrinciples, userSalesPrinciples);
 
     // ─── SEMANTIC RPC CALLS (if embedding succeeded) ───
     let semanticPrinciples: any[] = [];
@@ -730,19 +770,23 @@ serve(async (req) => {
       const [semPrinciples, semChunks] = await Promise.all([
         supabase.rpc("match_sales_brain", {
           query_embedding: embeddingStr,
-          match_count: 40,
+          match_count: 80,
           match_threshold: 0.3,
-          p_user_id: user.id,
+          p_user_id: null,
         }),
         supabase.rpc("match_knowledge_chunks", {
           query_embedding: embeddingStr,
-          match_count: 40,
+          match_count: 60,
           match_threshold: 0.3,
-          p_user_id: user.id,
+          p_user_id: null,
         }),
       ]);
-      semanticPrinciples = (semPrinciples.data || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-      semanticChunks = (semChunks.data || []).map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+      semanticPrinciples = (semPrinciples.data || [])
+        .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type))
+        .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+      semanticChunks = (semChunks.data || [])
+        .filter((c: any) => c.source_type === "core_knowledge")
+        .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
     }
 
     // ─── MERGE SEMANTIC + STATIC, DEDUPLICATE ───
@@ -796,6 +840,24 @@ serve(async (req) => {
       return result;
     }
 
+    function sourceBalancedTake(items: any[], maxPerSource: number, limit: number) {
+      const sourceCounts: Record<string, number> = {};
+      const selected: any[] = [];
+      const overflow: any[] = [];
+      for (const item of items) {
+        const key = item.source_id || item.source_name || item.source_type || "unknown";
+        const count = sourceCounts[key] || 0;
+        if (count < maxPerSource) {
+          sourceCounts[key] = count + 1;
+          selected.push(item);
+        } else {
+          overflow.push(item);
+        }
+        if (selected.length >= limit) break;
+      }
+      return selected.length >= limit ? selected : [...selected, ...overflow].slice(0, limit);
+    }
+
     const queryTerms = brainQuery.toLowerCase().split(/\s+/).filter((t) => t.length > 3);
 
     // Diverse core chunks (max 4 per source)
@@ -843,7 +905,7 @@ serve(async (req) => {
       return { ...sp, matchScore: score };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-    const topPrinciples = scoredPrinciples.slice(0, principlesCap);
+    const topPrinciples = sourceBalancedTake(scoredPrinciples, 2, principlesCap);
 
     // Categorize sources for metadata
     const sourceTypes = new Set<string>();
