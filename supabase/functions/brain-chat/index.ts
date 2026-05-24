@@ -195,6 +195,12 @@ function namedSourcesInReply(content: string, sourceTitles: string[]): string[] 
   return sourceTitles.filter((title) => lower.includes(title.toLowerCase()));
 }
 
+function buildForcedSourceFooter(sourceTitles: string[]): string {
+  const required = sourceTitles.slice(0, Math.min(4, Math.max(3, sourceTitles.length)));
+  if (required.length < 3) return "";
+  return `\n\nSOURCE CHECK:\n${required.map((s, i) => `${i + 1}. (Source: "${s}")`).join("\n")}`;
+}
+
 
 async function fetchWorkspaceProfile(supabaseAdmin: any, userId: string): Promise<string> {
   const [{ data: company }, { data: ws }] = await Promise.all([
