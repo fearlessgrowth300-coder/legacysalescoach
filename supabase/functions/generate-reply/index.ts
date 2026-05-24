@@ -136,18 +136,32 @@ serve(async (req) => {
     const embeddingPromise = generateEmbedding(brainQuery);
 
     const [
-      allPrinciples,
-      allChunks,
+      globalPrinciples,
+      userPrinciples,
+      globalChunks,
+      userChunks,
       { data: wsConvoChunks },
       { data: brainInsights },
       queryEmbedding,
     ] = await Promise.all([
       fetchAllRows<any>((from, to) => supabase.from("sales_brain")
         .select(PRINCIPLE_SELECT)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle"])
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false, nullsFirst: false })
         .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
+        .is("workspace_id", null)
+        .eq("source_type", "core_knowledge")
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
       fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
@@ -180,6 +194,8 @@ serve(async (req) => {
     }
 
     // Merge + deduplicate + diversity rerank
+    const allPrinciples = mergeByIdPriority(globalPrinciples, userPrinciples);
+    const allChunks = mergeByIdPriority(globalChunks, userChunks);
     const mergedPrinciples = deduplicatePrinciples(mergeByIdPriority(semanticPrinciples, allPrinciples), "relevance_score");
     const mergedChunks = deduplicateChunks(mergeByIdPriority(semanticChunks, allChunks), "relevance_score");
     const diversePrinciples = diversityRerank(mergedPrinciples, "source_id", 5);
