@@ -97,18 +97,32 @@ serve(async (req) => {
     const [
       { data: kbItems },
       { count: totalUploads },
-      allPrinciples,
-      allChunks,
+      globalPrinciples,
+      userPrinciples,
+      globalChunks,
+      userChunks,
       queryEmbedding,
     ] = await Promise.all([
       supabase.from("knowledge_base_items").select("id, title, type").eq("user_id", user.id),
       supabase.from("knowledge_base_items").select("id", { count: "exact", head: true }).eq("user_id", user.id),
       fetchAllRows<any>((from, to) => supabase.from("sales_brain")
         .select(PRINCIPLE_SELECT)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle"])
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false, nullsFirst: false })
         .range(from, to)),
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
+        .is("workspace_id", null)
+        .eq("source_type", "core_knowledge")
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
       fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
@@ -136,6 +150,8 @@ serve(async (req) => {
     }
 
     // Merge, deduplicate, diversity re-rank
+    const allPrinciples = mergeByIdPriority(globalPrinciples, userPrinciples);
+    const allChunks = mergeByIdPriority(globalChunks, userChunks);
     const mergedPrinciples = mergeByIdPriority(semanticPrinciples, allPrinciples);
     const mergedChunks = mergeByIdPriority(semanticChunks, allChunks);
     const dedupedPrinciples = deduplicatePrinciples(mergedPrinciples, "relevance_score");
