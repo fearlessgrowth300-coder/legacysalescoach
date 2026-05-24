@@ -820,6 +820,24 @@ serve(async (req) => {
       return result;
     }
 
+    function sourceBalancedTake(items: any[], maxPerSource: number, limit: number) {
+      const sourceCounts: Record<string, number> = {};
+      const selected: any[] = [];
+      const overflow: any[] = [];
+      for (const item of items) {
+        const key = item.source_id || item.source_name || item.source_type || "unknown";
+        const count = sourceCounts[key] || 0;
+        if (count < maxPerSource) {
+          sourceCounts[key] = count + 1;
+          selected.push(item);
+        } else {
+          overflow.push(item);
+        }
+        if (selected.length >= limit) break;
+      }
+      return selected.length >= limit ? selected : [...selected, ...overflow].slice(0, limit);
+    }
+
     const queryTerms = brainQuery.toLowerCase().split(/\s+/).filter((t) => t.length > 3);
 
     // Diverse core chunks (max 4 per source)
@@ -867,7 +885,7 @@ serve(async (req) => {
       return { ...sp, matchScore: score };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-    const topPrinciples = scoredPrinciples.slice(0, principlesCap);
+    const topPrinciples = sourceBalancedTake(scoredPrinciples, 2, principlesCap);
 
     // Categorize sources for metadata
     const sourceTypes = new Set<string>();
