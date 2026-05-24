@@ -230,7 +230,10 @@ export async function hybridRetrieve(
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false, nullsFirst: false })
-      .limit(200),
+      // Fetch a broad static reservoir before source-diversity capping.
+      // A 200-row limit was still mostly Start With Why because many rows share
+      // relevance_score=100, starving lower-volume books before reranking.
+      .limit(1500),
     supabaseAdmin.from("knowledge_chunks")
       .select("id, content, category, source_id, source_type, relevance_score")
       .eq("user_id", userId).is("workspace_id", null)
@@ -270,6 +273,17 @@ export async function hybridRetrieve(
   }
   const enrichedSemP = flatSemP.map((p) => ({ ...(fullById.get(p.id) || {}), ...p }) as Principle);
 
+  // Add a source-wide reservoir so every uploaded book/video gets a chance to
+  // enter the diverse candidate pool before the AI reranker. This prevents one
+  // high-scoring source (often Start With Why) from occupying the whole context.
+  const byStaticSource = new Map<string, Principle[]>();
+  for (const p of (staticPrinciplesRaw || []) as Principle[]) {
+    const key = p.source_id || p.source_name || p.id;
+    if (!byStaticSource.has(key)) byStaticSource.set(key, []);
+    if (byStaticSource.get(key)!.length < 4) byStaticSource.get(key)!.push(p);
+  }
+  const sourceReservoir = [...byStaticSource.values()].flat();
+
   // Pull a few extra principles from sources surfaced by chunk retrieval
   // so PDFs/videos that hit on chunk-search but not principle-search still
   // contribute principles to the candidate pool.
@@ -287,7 +301,8 @@ export async function hybridRetrieve(
     chunkSourcePrinciples = (csp || []) as Principle[];
   }
 
-  const mergedP = mergeByIdPriority(enrichedSemP, chunkSourcePrinciples);
+  const mergedP0 = mergeByIdPriority(enrichedSemP, sourceReservoir);
+  const mergedP = mergeByIdPriority(mergedP0, chunkSourcePrinciples);
   const mergedP2 = mergeByIdPriority(mergedP, (staticPrinciplesRaw || []) as Principle[]);
   const mergedC = mergeByIdPriority(flatSemC, (staticChunksRaw || []) as Chunk[]);
 
@@ -611,6 +626,31 @@ Rules:
     }
     selected.length = 0;
     selected.push(...kept);
+  }
+
+  // Final safety net: if selection still has fewer than 3 sources, append the
+  // best unseen candidates from missing sources even when nothing was evicted.
+  if (uniqueSources.size >= 3) {
+    const selectedKeys = new Set(selected.map((s) => sourceKeyOf(s)).filter(Boolean));
+    for (const cand of candidates) {
+      if (selectedKeys.size >= 3 || selected.length >= 7) break;
+      if (seen.has(cand.id)) continue;
+      const key = sourceKeyOf(cand);
+      if (!key || selectedKeys.has(key)) continue;
+      seen.add(cand.id);
+      selectedKeys.add(key);
+      selected.push({
+        id: cand.id,
+        principle_name: cand.principle_name,
+        source_id: cand.source_id,
+        source_title: sourceTitleOf(cand),
+        source_url: null,
+        source_type: cand.source_type,
+        why_relevant: `Required cross-source support from ${sourceTitleOf(cand)} (${cand.category}).`,
+        tier: "supporting",
+        full: cand,
+      });
+    }
   }
 
   return {

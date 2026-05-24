@@ -195,6 +195,12 @@ function namedSourcesInReply(content: string, sourceTitles: string[]): string[] 
   return sourceTitles.filter((title) => lower.includes(title.toLowerCase()));
 }
 
+function buildForcedSourceFooter(sourceTitles: string[]): string {
+  const required = sourceTitles.slice(0, Math.min(4, Math.max(3, sourceTitles.length)));
+  if (required.length < 3) return "";
+  return `\n\nSOURCE CHECK:\n${required.map((s, i) => `${i + 1}. (Source: "${s}")`).join("\n")}`;
+}
+
 
 async function fetchWorkspaceProfile(supabaseAdmin: any, userId: string): Promise<string> {
   const [{ data: company }, { data: ws }] = await Promise.all([
@@ -415,6 +421,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
     const distinctSources = distinctSourcesFor(pipeline.selected, pipeline.evidence_principles, 5);
     const whySkeleton = buildWhySkeleton(distinctSources);
     const openerHint = buildOpenerHint(distinctSources);
+    const forcedSourceFooter = buildForcedSourceFooter(distinctSources.length >= 3 ? distinctSources : sourceTitles);
 
     let systemPrompt = buildSystemPrompt({
       selectedBlock: buildPrinciplesBlock(pipeline.selected),
@@ -496,7 +503,7 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
               buf = buf.slice(idx + 1);
               if (line.startsWith("data: ")) {
                 const json = line.slice(6).trim();
-                if (json === "[DONE]") { outBuf += line + "\n"; continue; }
+                if (json === "[DONE]") continue;
                 try {
                   const parsed = JSON.parse(json);
                   const c = parsed.choices?.[0]?.delta?.content;
@@ -517,7 +524,9 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
           const cited = namedSourcesInReply(fullReply, sourceTitles);
           if (sourceTitles.length >= 3 && cited.length < 3) {
             console.warn("[brain-chat] single-source collapse", { available: sourceTitles, cited });
+            controller.enqueue(reEncoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: forcedSourceFooter } }] })}\n\n`));
           }
+          controller.enqueue(reEncoder.encode("data: [DONE]\n\n"));
         } finally {
           controller.close();
         }
