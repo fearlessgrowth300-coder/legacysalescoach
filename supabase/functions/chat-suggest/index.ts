@@ -690,8 +690,10 @@ serve(async (req) => {
     // 1. Pull WORKSPACE PERSONA from sales_brain (workspace-specific)
     const [
       { data: workspacePersonaRows },
-      brainKnowledge,
-      salesPrinciples,
+      globalBrainKnowledge,
+      userBrainKnowledge,
+      globalSalesPrinciples,
+      userSalesPrinciples,
       { data: brainInsights },
       { data: wsConvoChunks },
       { data: trainingExamples },
@@ -704,6 +706,18 @@ serve(async (req) => {
         .eq("workspace_id", prospect.workspace_id)
         .eq("source_type", "workspace_persona")
         .limit(1),
+      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
+        .is("workspace_id", null)
+        .eq("source_type", "core_knowledge")
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000),
+      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle"])
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to)),
       fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
         .eq("user_id", user.id)
