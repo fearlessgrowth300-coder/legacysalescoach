@@ -78,6 +78,11 @@ function buildSystemPrompt(opts: {
 
 You are NOT a general AI assistant. Every claim is grounded in the user's vault. You are direct, confident, specific. You give word-for-word scripts. You explain the psychology. You never say "I think" or "maybe".
 
+SILENT THOUGHT PROTOCOL — run this before writing, but do not reveal private chain-of-thought:
+1. Read the text/chat and identify the hidden emotional state, objection, status frame, and conversation stage.
+2. Scan the selected principles AND additional evidence across different sources; combine the strongest 3-5 principles.
+3. Turn that synthesis into a decisive strategy, a ready-to-send reply, and a concise strategic breakdown.
+
 CRITICAL RULE: You MUST use MULTIPLE different sources in your response.
 - Use one source for the situation analysis.
 - Use a DIFFERENT source for the strategy.
@@ -102,18 +107,16 @@ ${whySkeleton}
 
 RESPONSE FORMAT — USE THIS STRUCTURE EXACTLY:
 
-SITUATION ANALYSIS:
-[Read the conversation/question. Name exactly what is happening psychologically. Cite the source that identifies this pattern.]
-(Source: "[Source 1]")
+[1-2 punchy paragraphs of direct feedback. Name what is happening psychologically and what move the user should make. Cite at least 2 different sources inline.]
 
 THE STRATEGY: [Give the strategy a powerful name]
 [Explain the strategy using a principle from a DIFFERENT source than above.]
 (Source: "[Source 2]")
 
-THE SCRIPT (Copy-Paste This):
+THE REPLY (Copy & Paste this):
 "[Word-for-word message the user can send immediately. No source names inside the quoted message.]"
 
-WHY THIS WORKS (Back each point with a DIFFERENT source):
+🔥 WHY THIS WORKS (Strategic Breakdown):
 
 ${whySkeleton}
 
@@ -338,38 +341,9 @@ serve(async (req) => {
         retrievalQuery = conversationText.slice(0, 600);
       }
     } else {
-      // ─── No image: build a retrieval brief from text ───
-      try {
-        const briefSystem = `You build a RETRIEVAL BRIEF for a sales-coaching vector database.
-Output a single dense paragraph (4-8 sentences) covering:
-- What the prospect actually said / the situation (paraphrase any screenshot conversation in plain text).
-- The user's goal or question.
-- The likely objection category (price, salary, trust, rapport, mindset, follow-up, closing, leadership, prospecting, psychology, framework, objection handling, etc.).
-- 8-15 keywords a sales book or video would use about this situation.
-Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to find the right principles in a vector DB.`;
-        const briefResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash",
-            temperature: 0.2,
-            max_tokens: 600,
-            messages: [
-              { role: "system", content: briefSystem },
-              { role: "user", content: `Recent chat:\n${recentForBrief || "(none)"}\n\nLatest user message: "${lastUserText || "(no text)"}"\n\nProduce the retrieval brief now.` },
-            ],
-          }),
-        });
-        if (briefResp.ok) {
-          const bd = await briefResp.json();
-          const brief = bd.choices?.[0]?.message?.content?.trim();
-          if (brief && brief.length > 30) {
-            retrievalQuery = `${lastUserText}\n\n[Retrieval brief]\n${brief}`;
-          }
-        }
-      } catch (e) {
-        console.warn("[brain-chat] retrieval brief failed, falling back to raw text:", e);
-      }
+      // Text/chat path: avoid a separate pre-LLM retrieval-brief call. The shared
+      // pipeline expands and scores against the full vault, so this keeps feedback fast.
+      retrievalQuery = `Latest user message / pasted chat:\n${lastUserText || "(no text)"}\n\nRecent context:\n${recentForBrief || "(none)"}\n\nSearch focus: prospect psychology, hidden objection, conversation stage, sales framework, exact reply script, strategic breakdown, source-diverse principles.`;
     }
 
     // ─── Layers 1+2 ───
@@ -444,9 +418,10 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
       method: "POST",
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-3.1-pro-preview",
-        max_tokens: 16000,
-        reasoning: { effort: "medium" },
+        model: "google/gemini-3-flash-preview",
+        max_tokens: 9000,
+        reasoning: { effort: "low" },
+        temperature: 0.45,
         messages: [{ role: "system", content: systemPrompt }, ...validated],
         stream: true,
       }),

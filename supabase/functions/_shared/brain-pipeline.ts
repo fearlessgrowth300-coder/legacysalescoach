@@ -80,6 +80,11 @@ export type Chunk = {
   _semantic?: boolean;
 };
 
+type VaultCacheEntry<T> = { expiresAt: number; rows: T[] };
+const VAULT_CACHE_TTL_MS = 90_000;
+let globalPrinciplesCache: VaultCacheEntry<Principle> | null = null;
+let globalChunksCache: VaultCacheEntry<Chunk> | null = null;
+
 export type SelectedPrinciple = {
   id: string;
   principle_name: string;
@@ -131,6 +136,27 @@ function sourceTitleOf(item: { source_title?: string | null; source_name?: strin
 
 function sourceKeyOf(item: { source_title?: string | null; source_name?: string | null; source_id?: string | null }): string {
   return sourceTitleOf(item).trim().toLowerCase() || "unknown";
+}
+
+function tokenize(text: string): string[] {
+  return text.toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
+}
+
+function localRelevanceScore(question: string, p: Principle): number {
+  const q = new Set(tokenize(question));
+  if (!q.size) return p.relevance_score ?? 0;
+  const fields = [p.principle_name, p.category, p.what_i_learned, p.how_to_apply, p.when_to_use, p.exact_words_to_use, p.the_deep_why]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  let score = (p.relevance_score ?? 0) * 0.15;
+  for (const term of q) {
+    if (fields.includes(term)) score += term.length > 5 ? 3 : 1.5;
+  }
+  return score;
 }
 
 export function enforceSourceDiversity<T extends { source_title?: string | null; source_name?: string | null; source_id?: string | null; similarity?: number; relevance_score?: number }>(
@@ -245,29 +271,45 @@ export async function hybridRetrieve(
   );
   const embeddingUsed = embeddings.some((e) => !!e);
 
+  const now = Date.now();
   // Static fallback — fetch the user's full principle vault in pages before
   // source-diversity capping. Lovable Cloud caps a single request at 1000 rows;
   // this project has 4k+ principles, so a plain .limit(1500) was still not the
   // full Brain and allowed the highest-scoring source to crowd everything else.
+  const globalPrinciplesPromise = globalPrinciplesCache && globalPrinciplesCache.expiresAt > now
+    ? Promise.resolve(globalPrinciplesCache.rows)
+    : fetchAllRows<Principle>((from, to) => supabaseAdmin.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle"])
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to))
+        .then((rows) => {
+          globalPrinciplesCache = { expiresAt: Date.now() + VAULT_CACHE_TTL_MS, rows };
+          return rows;
+        });
+  const globalChunksPromise = globalChunksCache && globalChunksCache.expiresAt > now
+    ? Promise.resolve(globalChunksCache.rows)
+    : fetchAllRows<Chunk>((from, to) => supabaseAdmin.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle"])
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000)
+        .then((rows) => {
+          globalChunksCache = { expiresAt: Date.now() + VAULT_CACHE_TTL_MS, rows };
+          return rows;
+        });
+
   const [globalPrinciples, userPrinciples, globalChunks, userChunks] = await Promise.all([
-    fetchAllRows<Principle>((from, to) => supabaseAdmin.from("sales_brain")
-      .select(PRINCIPLE_SELECT)
-      .is("workspace_id", null)
-      .in("source_type", ["core_knowledge", "sales_principle"])
-      .order("relevance_score", { ascending: false, nullsFirst: false })
-      .range(from, to)),
+    globalPrinciplesPromise,
     fetchAllRows<Principle>((from, to) => supabaseAdmin.from("sales_brain")
       .select(PRINCIPLE_SELECT)
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false, nullsFirst: false })
       .range(from, to)),
-    fetchAllRows<Chunk>((from, to) => supabaseAdmin.from("knowledge_chunks")
-      .select(CHUNK_SELECT)
-      .is("workspace_id", null)
-      .in("source_type", ["core_knowledge", "sales_principle"])
-      .order("relevance_score", { ascending: false })
-      .range(from, to), 3000),
+    globalChunksPromise,
     fetchAllRows<Chunk>((from, to) => supabaseAdmin.from("knowledge_chunks")
       .select(CHUNK_SELECT)
       .eq("user_id", userId).is("workspace_id", null)
@@ -317,10 +359,14 @@ export async function hybridRetrieve(
   // enter the diverse candidate pool before the AI reranker. This prevents one
   // high-scoring source (often Start With Why) from occupying the whole context.
   const byStaticSource = new Map<string, Principle[]>();
-  for (const p of staticPrinciplesRaw as Principle[]) {
+  const locallyRankedStatic = [...(staticPrinciplesRaw as Principle[])]
+    .map((p) => ({ p, score: localRelevanceScore(subqueries.join("\n"), p) }))
+    .sort((a, b) => b.score - a.score)
+    .map(({ p, score }) => ({ ...p, relevance_score: Math.max(p.relevance_score ?? 0, Math.round(score)) }));
+  for (const p of locallyRankedStatic) {
     const key = p.source_id || p.source_name || p.id;
     if (!byStaticSource.has(key)) byStaticSource.set(key, []);
-    if (byStaticSource.get(key)!.length < 4) byStaticSource.get(key)!.push(p);
+    if (byStaticSource.get(key)!.length < 3) byStaticSource.get(key)!.push(p);
   }
   const sourceReservoir = [...byStaticSource.values()].flat();
 
@@ -343,7 +389,7 @@ export async function hybridRetrieve(
 
   const mergedP0 = mergeByIdPriority(enrichedSemP, sourceReservoir);
   const mergedP = mergeByIdPriority(mergedP0, chunkSourcePrinciples);
-  const mergedP2 = mergeByIdPriority(mergedP, staticPrinciplesRaw as Principle[]);
+  const mergedP2 = mergeByIdPriority(mergedP, locallyRankedStatic as Principle[]);
   const mergedC = mergeByIdPriority(flatSemC, staticChunksRaw as Chunk[]);
 
   const dedupedP = deduplicatePrinciples(mergedP2, "relevance_score");
