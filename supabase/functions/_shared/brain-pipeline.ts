@@ -80,6 +80,11 @@ export type Chunk = {
   _semantic?: boolean;
 };
 
+type VaultCacheEntry<T> = { expiresAt: number; rows: T[] };
+const VAULT_CACHE_TTL_MS = 90_000;
+let globalPrinciplesCache: VaultCacheEntry<Principle> | null = null;
+let globalChunksCache: VaultCacheEntry<Chunk> | null = null;
+
 export type SelectedPrinciple = {
   id: string;
   principle_name: string;
