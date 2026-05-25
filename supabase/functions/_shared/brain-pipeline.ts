@@ -66,6 +66,7 @@ export type Principle = {
   common_mistake?: string | null;
   real_example_or_story?: string | null;
   _semantic?: boolean;
+  _retrieval_score?: number;
 };
 
 export type Chunk = {
@@ -138,25 +139,101 @@ function sourceKeyOf(item: { source_title?: string | null; source_name?: string 
   return sourceTitleOf(item).trim().toLowerCase() || "unknown";
 }
 
+const STOP_WORDS = new Set([
+  "about", "after", "again", "also", "been", "before", "being", "between", "could", "does", "doing", "from",
+  "have", "into", "just", "more", "most", "over", "same", "should", "some", "such", "than", "that", "their",
+  "them", "then", "there", "these", "they", "this", "what", "when", "where", "which", "while", "with", "would",
+  "your", "youre", "user", "latest", "message", "recent", "context", "search", "focus", "prospect", "psychology",
+  "hidden", "objection", "conversation", "stage", "sales", "framework", "exact", "reply", "script", "strategic",
+  "breakdown", "source", "diverse", "principles", "chat", "text",
+]);
+
 function tokenize(text: string): string[] {
   return text.toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .split(/\s+/)
-    .filter((w) => w.length > 2);
+    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+}
+
+function getTokenNgrams(tokens: string[], n: number): string[] {
+  const ngrams: string[] = [];
+  for (let i = 0; i <= tokens.length - n; i++) {
+    ngrams.push(tokens.slice(i, i + n).join(" "));
+  }
+  return ngrams;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function localRelevanceScore(question: string, p: Principle): number {
-  const q = new Set(tokenize(question));
-  if (!q.size) return p.relevance_score ?? 0;
-  const fields = [p.principle_name, p.category, p.what_i_learned, p.how_to_apply, p.when_to_use, p.exact_words_to_use, p.the_deep_why]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  let score = (p.relevance_score ?? 0) * 0.15;
-  for (const term of q) {
-    if (fields.includes(term)) score += term.length > 5 ? 3 : 1.5;
+  const qTokens = [...new Set(tokenize(question))];
+  if (!qTokens.length) return clamp(Math.round(((p.similarity || 0) * 60) + ((p.relevance_score || 0) * 0.4)), 0, 100);
+
+  const weightedFields = [
+    { text: p.principle_name, weight: 3.2 },
+    { text: p.how_to_apply, weight: 3 },
+    { text: p.exact_words_to_use, weight: 2.8 },
+    { text: p.when_to_use, weight: 2.4 },
+    { text: p.what_i_learned, weight: 2.2 },
+    { text: p.the_deep_why, weight: 1.8 },
+    { text: `${p.category || ""} ${p.source_name || ""}`, weight: 1.1 },
+  ];
+
+  let lexicalHits = 0;
+  let lexicalMax = 0;
+  const combinedText = weightedFields.map((field) => field.text || "").join(" ").toLowerCase();
+  for (const field of weightedFields) {
+    const tokenSet = new Set(tokenize(field.text || ""));
+    lexicalMax += qTokens.length * field.weight;
+    for (const token of qTokens) {
+      if (tokenSet.has(token)) lexicalHits += field.weight;
+    }
   }
-  return score;
+
+  const phraseBoost = getTokenNgrams(qTokens, 2)
+    .slice(0, 10)
+    .reduce((sum, phrase) => sum + (combinedText.includes(phrase) ? 0.06 : 0), 0);
+  const longTokenBoost = qTokens.reduce((sum, token) => sum + ((token.length >= 6 && combinedText.includes(token)) ? 0.025 : 0), 0);
+  const lexicalScore = lexicalMax > 0 ? clamp(lexicalHits / lexicalMax, 0, 1) * 0.48 : 0;
+  const semanticScore = clamp(((p.similarity || 0) - 0.16) / 0.74, 0, 1) * 0.32;
+  const priorScore = clamp((p.relevance_score || 0) / 100, 0, 1) * 0.16;
+
+  return Math.round(clamp((lexicalScore + semanticScore + priorScore + phraseBoost + longTokenBoost) * 100, 0, 100));
+}
+
+function hasStrongMessageFit(question: string, p: Principle, minScore: number = 30): boolean {
+  const score = p._retrieval_score ?? localRelevanceScore(question, p);
+  return score >= minScore || (p.similarity || 0) >= 0.42;
+}
+
+function sourceRoundRobin<T>(items: T[], getSource: (item: T) => string, limit: number, maxPerSource: number): T[] {
+  const grouped = new Map<string, T[]>();
+  for (const item of items) {
+    const key = getSource(item) || "unknown";
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(item);
+  }
+
+  const out: T[] = [];
+  const counts = new Map<string, number>();
+  let progressed = true;
+  while (out.length < limit && progressed) {
+    progressed = false;
+    for (const [key, queue] of grouped.entries()) {
+      const used = counts.get(key) || 0;
+      if (used >= maxPerSource) continue;
+      const next = queue.shift();
+      if (!next) continue;
+      out.push(next);
+      counts.set(key, used + 1);
+      progressed = true;
+      if (out.length >= limit) break;
+    }
+  }
+
+  return out;
 }
 
 export function enforceSourceDiversity<T extends { source_title?: string | null; source_name?: string | null; source_id?: string | null; similarity?: number; relevance_score?: number }>(
@@ -434,7 +511,7 @@ export async function hybridRetrieve(
   }
 
   return {
-    principles: balanced.slice(0, 80),
+    principles: balanced.slice(0, 120),
     chunks: dedupedC.slice(0, 50),
     embeddingUsed,
     semanticCount: enrichedSemP.length,
@@ -445,70 +522,39 @@ export async function hybridRetrieve(
 // ─── Step 3: Cross-encoder rerank → top 8 ─────────────────────────────
 
 export async function rerank(
-  apiKey: string,
+  _apiKey: string,
   question: string,
   candidates: Principle[],
   session: SessionContext,
 ): Promise<{ top: Principle[]; topScore: number }> {
   if (candidates.length === 0) return { top: [], topScore: 0 };
-  if (candidates.length <= 20) {
-    const diversified = enforceSourceDiversity(candidates, 2, 12);
-    return { top: diversified, topScore: diversified[0]?.relevance_score ? diversified[0].relevance_score / 100 : 0.6 };
-  }
-
-  const summary = candidates.map((p, i) =>
-    `${i}. id=${p.id} | source="${sourceTitleOf(p)}" | ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`
-  ).join("\n");
-
-  const result = await callTool(
-    apiKey,
-    FAST_MODEL,
-    `You score how relevant each candidate sales principle is to the user's question, on a 0.0-1.0 scale. Be decisive: most principles should score below 0.5; only the truly applicable ones above 0.7. Output one entry per candidate id.`,
-    `User question: "${question}"\n\nCandidates:\n${summary}\n\nScore every candidate.`,
-    "rerank_candidates",
-    {
-      type: "object",
-      properties: {
-        ranked: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: { id: { type: "string" }, score: { type: "number" } },
-            required: ["id", "score"],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ["ranked"],
-      additionalProperties: false,
-    },
-  );
-
-  const scoreMap = new Map<string, number>();
-  if (result?.ranked && Array.isArray(result.ranked)) {
-    for (const r of result.ranked) {
-      if (typeof r.id === "string" && typeof r.score === "number") scoreMap.set(r.id, r.score);
-    }
-  }
   const activeBoost = new Set(session.active_principle_ids || []);
   const scored = candidates.map((p) => {
-    const base = scoreMap.get(p.id) ?? (p.relevance_score ? p.relevance_score / 100 : 0.4);
-    const score = base + (activeBoost.has(p.id) ? 0.05 : 0);
-    return { p, score };
+    const base = localRelevanceScore(question, p) / 100;
+    const continuityBoost = activeBoost.has(p.id) ? 0.04 : 0;
+    const semanticBoost = p._semantic ? 0.03 : 0;
+    const score = clamp(base + continuityBoost + semanticBoost, 0, 1);
+    return {
+      p: {
+        ...p,
+        _retrieval_score: Math.round(score * 100),
+        relevance_score: Math.max(p.relevance_score ?? 0, Math.round(score * 100)),
+      },
+      score,
+    };
   });
   scored.sort((a, b) => b.score - a.score);
-  // Hard diversity cap: at most 2 principles per source so one book can't dominate.
-  const perSourceCount = new Map<string, number>();
-  const diverse: { p: Principle; score: number }[] = [];
-  const overflow: { p: Principle; score: number }[] = [];
-  for (const s of scored) {
-    const sid = sourceKeyOf(s.p);
-    const c = perSourceCount.get(sid) || 0;
-    if (c < 2) { diverse.push(s); perSourceCount.set(sid, c + 1); }
-    else overflow.push(s);
-  }
-  const merged = diverse.length >= 8 ? diverse.slice(0, 12) : [...diverse, ...overflow].slice(0, 12);
-  const top = merged.map((s) => s.p);
+  const keepThreshold = scored[0]?.score >= 0.6
+    ? Math.max(0.3, scored[0].score - 0.22)
+    : 0.28;
+  const relevant = scored.filter((entry, index) => index < 10 || entry.score >= keepThreshold || hasStrongMessageFit(question, entry.p, 32));
+  const firstPass = sourceRoundRobin(relevant, (entry) => sourceKeyOf(entry.p), 12, 1);
+  const usedIds = new Set(firstPass.map((entry) => entry.p.id));
+  const secondPool = relevant.filter((entry) => !usedIds.has(entry.p.id));
+  const secondPass = sourceRoundRobin(secondPool, (entry) => sourceKeyOf(entry.p), 18, 2);
+  const top = [...firstPass, ...secondPass]
+    .slice(0, 18)
+    .map((entry) => entry.p);
   return { top, topScore: scored[0]?.score ?? 0 };
 }
 
