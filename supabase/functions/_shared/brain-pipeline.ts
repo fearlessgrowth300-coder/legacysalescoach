@@ -46,6 +46,16 @@ export type SessionContext = {
   active_framework_name: string | null;
 };
 
+const RECENT_EXCHANGE_LIMIT = 4;
+const RECENT_EXCHANGE_CHAR_LIMIT = 280;
+const PRINCIPLES_BLOCK_CHAR_LIMIT = 2800;
+const EVIDENCE_BLOCK_CHAR_LIMIT = 2200;
+const CHUNKS_BLOCK_CHAR_LIMIT = 1200;
+
+function clampText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 export type Principle = {
   id: string;
   principle_name: string;
@@ -1132,10 +1142,10 @@ export async function buildSessionContext(
 
   // Recent exchanges from passed-in messages (excluding the current user turn at the end)
   const text = (c: any) => typeof c === "string" ? c : (Array.isArray(c) ? c.map((p: any) => p.text || "").join(" ") : "");
-  const trimmed = fallbackMessages.slice(-7, -1); // up to 6 prior, skip current
+  const trimmed = fallbackMessages.slice(-(RECENT_EXCHANGE_LIMIT + 1), -1);
   session.recent_exchanges = trimmed.map((m: any) => ({
     role: m.role === "assistant" ? "assistant" : "user",
-    content: text(m.content).substring(0, 600),
+    content: clampText(text(m.content), RECENT_EXCHANGE_CHAR_LIMIT),
   }));
 
   if (!conversationId) return session;
@@ -1164,7 +1174,7 @@ export async function buildSessionContext(
 // ─── Helper: build the rich principle block for Step 5 prompts ────────
 
 export function buildPrinciplesBlock(selected: SelectedPrinciple[]): string {
-  return selected.map((s, i) => {
+  return clampText(selected.map((s, i) => {
     const p = s.full;
     const tierLabel = s.tier === "primary" ? "PRIMARY" : "SUPPORTING";
     return `[PRINCIPLE ${i + 1} — ${tierLabel}]
@@ -1184,25 +1194,25 @@ How to apply: ${p.how_to_apply || ""}
 When NOT to use: ${p.when_not_to_use || "(unspecified)"}
 Real example: ${p.real_example_or_story || "(none)"}
 ---`;
-  }).join("\n\n");
+  }).join("\n\n"), PRINCIPLES_BLOCK_CHAR_LIMIT);
 }
 
 export function buildChunksBlock(chunks: Chunk[]): string {
   if (!chunks.length) return "(none)";
-  return chunks.map((c, i) => `[CHUNK ${i + 1} | SOURCE: "${c.source_title || "Uploaded content"}" | ${c.category}] ${(c.content || "").substring(0, 400)}`).join("\n\n");
+  return clampText(chunks.map((c, i) => `[CHUNK ${i + 1} | SOURCE: "${c.source_title || "Uploaded content"}" | ${c.category}] ${(c.content || "").substring(0, 220)}`).join("\n\n"), CHUNKS_BLOCK_CHAR_LIMIT);
 }
 
 export function buildEvidenceBlock(principles: Principle[]): string {
   if (!principles.length) return "(none)";
-  return principles.map((p, i) =>
+  return clampText(principles.map((p, i) =>
     `[EVIDENCE PRINCIPLE ${i + 1}]
 SOURCE BOOK/VIDEO: "${sourceTitleOf(p)}"
 PRINCIPLE NAME: ${p.principle_name}
 CATEGORY: ${p.category}
-What it teaches: ${(p.what_i_learned || "").substring(0, 280)}
-How to apply: ${(p.how_to_apply || "").substring(0, 240)}
-Exact words: ${(p.exact_words_to_use || "(none)").substring(0, 200)}
-Deep why: ${(p.the_deep_why || "(unspecified)").substring(0, 200)}
+What it teaches: ${(p.what_i_learned || "").substring(0, 170)}
+How to apply: ${(p.how_to_apply || "").substring(0, 160)}
+Exact words: ${(p.exact_words_to_use || "(none)").substring(0, 120)}
+Deep why: ${(p.the_deep_why || "(unspecified)").substring(0, 110)}
 ---`
-  ).join("\n\n");
+  ).join("\n\n"), EVIDENCE_BLOCK_CHAR_LIMIT);
 }

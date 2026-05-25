@@ -27,6 +27,11 @@ type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url
 type Conversation = { id: string; title: string; created_at: string; updated_at: string };
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/brain-chat`;
+const CHAT_CONTEXT_LIMIT = 8;
+
+function sliceRecentChatContext(history: Msg[], limit = CHAT_CONTEXT_LIMIT) {
+  return history.length > limit ? history.slice(-limit) : history;
+}
 
 async function streamChat({
   messages,
@@ -106,6 +111,11 @@ async function streamChat({
         if (json === "[DONE]") { done = true; receivedDone = true; break; }
         try {
           const parsed = JSON.parse(json);
+          if (parsed.error) {
+            onError(parsed.error);
+            done = true;
+            break;
+          }
           if (parsed.brain_meta) {
             onBrainMeta?.(parsed.brain_meta);
             continue;
@@ -682,7 +692,7 @@ export default function AiChat() {
     };
 
     // Build AI messages — use base64 data URIs directly (private bucket URLs won't work for edge fn)
-    const allMsgs = [...messages, userMsg];
+    const allMsgs = sliceRecentChatContext([...messages, userMsg]);
     const aiMessages: any[] = [];
     for (let idx = 0; idx < allMsgs.length; idx++) {
       const m = allMsgs[idx];
@@ -708,7 +718,6 @@ export default function AiChat() {
     }
 
     let assistantSoFar = "";
-    const questionText = text;
     const upsert = (chunk: string) => {
       setIsTyping(false);
       assistantSoFar += chunk;
@@ -729,7 +738,9 @@ export default function AiChat() {
         onDelta: upsert,
         onBrainMeta: (meta) => {
           lastBrainMeta = meta;
-          if (meta.selected_principles) {
+          setIsTyping(false);
+          if (meta.loading) return;
+          if (meta.selected_principles?.length) {
             setMessages(prev => {
               const last = prev[prev.length - 1];
               if (last?.role === "assistant") {
@@ -847,10 +858,11 @@ export default function AiChat() {
     };
 
     // Build AI messages with proper base64 images
-    const editedMsgIdx = truncated.length - 1;
+    const contextMessages = sliceRecentChatContext(truncated);
+    const editedMsgIdx = contextMessages.length - 1;
     const aiMessages: any[] = [];
-    for (let idx = 0; idx < truncated.length; idx++) {
-      const m = truncated[idx];
+    for (let idx = 0; idx < contextMessages.length; idx++) {
+      const m = contextMessages[idx];
       const isEditedMsg = idx === editedMsgIdx;
 
       let base64Imgs: string[] = [];
@@ -878,7 +890,6 @@ export default function AiChat() {
     }
 
     let assistantSoFar = "";
-    const questionText = editText;
     const upsert = (chunk: string) => {
       setIsTyping(false);
       assistantSoFar += chunk;
@@ -897,7 +908,9 @@ export default function AiChat() {
         onDelta: upsert,
         onBrainMeta: (meta) => {
           lastBrainMeta2 = meta;
-          if (meta.selected_principles) {
+          setIsTyping(false);
+          if (meta.loading) return;
+          if (meta.selected_principles?.length) {
             setMessages(prev => {
               const last = prev[prev.length - 1];
               if (last?.role === "assistant") return prev.map((m, i) => i === prev.length - 1 ? { ...m, selected_principles: meta.selected_principles, framework_name: meta.framework_name } : m);
