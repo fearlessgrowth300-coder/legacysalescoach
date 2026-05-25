@@ -250,29 +250,45 @@ export async function hybridRetrieve(
   );
   const embeddingUsed = embeddings.some((e) => !!e);
 
+  const now = Date.now();
   // Static fallback — fetch the user's full principle vault in pages before
   // source-diversity capping. Lovable Cloud caps a single request at 1000 rows;
   // this project has 4k+ principles, so a plain .limit(1500) was still not the
   // full Brain and allowed the highest-scoring source to crowd everything else.
+  const globalPrinciplesPromise = globalPrinciplesCache && globalPrinciplesCache.expiresAt > now
+    ? Promise.resolve(globalPrinciplesCache.rows)
+    : fetchAllRows<Principle>((from, to) => supabaseAdmin.from("sales_brain")
+        .select(PRINCIPLE_SELECT)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle"])
+        .order("relevance_score", { ascending: false, nullsFirst: false })
+        .range(from, to))
+        .then((rows) => {
+          globalPrinciplesCache = { expiresAt: Date.now() + VAULT_CACHE_TTL_MS, rows };
+          return rows;
+        });
+  const globalChunksPromise = globalChunksCache && globalChunksCache.expiresAt > now
+    ? Promise.resolve(globalChunksCache.rows)
+    : fetchAllRows<Chunk>((from, to) => supabaseAdmin.from("knowledge_chunks")
+        .select(CHUNK_SELECT)
+        .is("workspace_id", null)
+        .in("source_type", ["core_knowledge", "sales_principle"])
+        .order("relevance_score", { ascending: false })
+        .range(from, to), 3000)
+        .then((rows) => {
+          globalChunksCache = { expiresAt: Date.now() + VAULT_CACHE_TTL_MS, rows };
+          return rows;
+        });
+
   const [globalPrinciples, userPrinciples, globalChunks, userChunks] = await Promise.all([
-    fetchAllRows<Principle>((from, to) => supabaseAdmin.from("sales_brain")
-      .select(PRINCIPLE_SELECT)
-      .is("workspace_id", null)
-      .in("source_type", ["core_knowledge", "sales_principle"])
-      .order("relevance_score", { ascending: false, nullsFirst: false })
-      .range(from, to)),
+    globalPrinciplesPromise,
     fetchAllRows<Principle>((from, to) => supabaseAdmin.from("sales_brain")
       .select(PRINCIPLE_SELECT)
       .eq("user_id", userId).is("workspace_id", null)
       .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false, nullsFirst: false })
       .range(from, to)),
-    fetchAllRows<Chunk>((from, to) => supabaseAdmin.from("knowledge_chunks")
-      .select(CHUNK_SELECT)
-      .is("workspace_id", null)
-      .in("source_type", ["core_knowledge", "sales_principle"])
-      .order("relevance_score", { ascending: false })
-      .range(from, to), 3000),
+    globalChunksPromise,
     fetchAllRows<Chunk>((from, to) => supabaseAdmin.from("knowledge_chunks")
       .select(CHUNK_SELECT)
       .eq("user_id", userId).is("workspace_id", null)
