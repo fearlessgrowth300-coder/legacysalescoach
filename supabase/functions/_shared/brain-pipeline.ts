@@ -839,6 +839,128 @@ export async function extractTopic(apiKey: string, question: string): Promise<st
   return (typeof t === "string" && t.trim()) ? t.trim() : "this topic";
 }
 
+// ─── FAST pipeline (chat hot path) ────────────────────────────────────
+// Skips: expandQuery LLM, full-vault page scans, selectPrinciples LLM.
+// Uses: 1 embedding → 2 pgvector RPCs → local rerank → top-N as selected.
+// Designed to run well under the 2s CPU budget so chat never hits 546.
+export async function runPipelineFast(opts: {
+  supabaseAdmin: any;
+  userId: string;
+  question: string;
+  session: SessionContext;
+}): Promise<PipelineOutput> {
+  const { supabaseAdmin, userId, question, session } = opts;
+
+  // Single embedding over the trimmed question
+  const emb = await generateEmbedding(question.substring(0, 1500));
+  const embeddingUsed = !!emb;
+
+  let semP: Principle[] = [];
+  let semC: Chunk[] = [];
+  if (emb) {
+    const embStr = JSON.stringify(emb);
+    const [pRes, cRes] = await Promise.all([
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 60, match_threshold: 0.20, p_user_id: null }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 30, match_threshold: 0.20, p_user_id: null }),
+    ]);
+    semP = (pRes.data || [])
+      .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
+      .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+    semC = (cRes.data || [])
+      .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+  }
+
+  // Fallback if pgvector returned nothing: small static top-by-relevance pull (no full paging)
+  if (semP.length === 0) {
+    const { data } = await supabaseAdmin.from("sales_brain")
+      .select(PRINCIPLE_SELECT)
+      .is("workspace_id", null)
+      .in("source_type", ["core_knowledge", "sales_principle"])
+      .order("relevance_score", { ascending: false, nullsFirst: false })
+      .limit(120);
+    semP = (data || []) as Principle[];
+  }
+
+  // Hydrate source titles for selected pool only
+  const ids = [...new Set([...semP.map((p) => p.source_id), ...semC.map((c) => c.source_id)].filter((x): x is string => !!x))];
+  if (ids.length) {
+    const { data: kb } = await supabaseAdmin.from("knowledge_base_items").select("id, title, url, type").in("id", ids);
+    const titleById = new Map<string, string>();
+    (kb || []).forEach((k: any) => titleById.set(k.id, k.title));
+    for (const p of semP) p.source_title = p.source_id ? (titleById.get(p.source_id) || p.source_name) : p.source_name;
+    for (const c of semC) c.source_title = c.source_id ? (titleById.get(c.source_id) || null) : null;
+  }
+
+  // Local rerank: combine semantic similarity + lexical fit
+  const scored = semP.map((p) => ({ p, score: localRelevanceScore(question, p) }))
+    .sort((a, b) => b.score - a.score);
+
+  // Source-diverse top selection (round-robin, max 2 per source)
+  const bySrc = new Map<string, { p: Principle; score: number }[]>();
+  for (const s of scored) {
+    const k = sourceKeyOf(s.p);
+    if (!bySrc.has(k)) bySrc.set(k, []);
+    bySrc.get(k)!.push(s);
+  }
+  const balanced: { p: Principle; score: number }[] = [];
+  const queues = [...bySrc.values()];
+  let progressed = true;
+  while (balanced.length < 16 && progressed) {
+    progressed = false;
+    for (const q of queues) {
+      const counts = balanced.filter((b) => sourceKeyOf(b.p) === sourceKeyOf(q[0]?.p || ({} as any))).length;
+      if (counts >= 2) continue;
+      const n = q.shift();
+      if (n) { balanced.push(n); progressed = true; }
+      if (balanced.length >= 16) break;
+    }
+  }
+
+  const top = balanced.map((b) => ({ ...b.p, _retrieval_score: b.score }));
+  const topScore = (balanced[0]?.score || 0) / 100;
+
+  // Build SelectedPrinciple list directly — no LLM selection call
+  const selectedCount = Math.min(top.length, 6);
+  const selected: SelectedPrinciple[] = top.slice(0, selectedCount).map((p, i) => ({
+    id: p.id,
+    principle_name: p.principle_name,
+    source_id: p.source_id,
+    source_title: sourceTitleOf(p),
+    source_url: null,
+    source_type: p.source_type,
+    why_relevant: `Top-ranked match from ${sourceTitleOf(p)} for this situation.`,
+    tier: i < 3 ? "primary" : "supporting",
+    full: p,
+  }));
+
+  const candidateSourceTitles = [...new Set(top.map((p) => sourceTitleOf(p)).filter(Boolean))];
+  const evidence = top.slice(selectedCount, selectedCount + 12);
+
+  return {
+    selected,
+    contradictions: [],
+    framework_name: "",
+    supporting_chunks: semC.slice(0, 8),
+    evidence_principles: evidence,
+    debug: {
+      subqueries: [question.substring(0, 80)],
+      candidate_count: top.length,
+      reranked_count: top.length,
+      top_score: topScore,
+      embedding_used: embeddingUsed,
+      empty_vault: selected.length === 0,
+      semantic_principles_count: semP.length,
+      static_principles_count: 0,
+      candidate_source_count: candidateSourceTitles.length,
+      reranked_source_count: candidateSourceTitles.length,
+      selected_source_count: new Set(selected.map((s) => s.source_title)).size,
+      candidate_source_titles: candidateSourceTitles.slice(0, 25),
+      selected_source_titles: [...new Set(selected.map((s) => s.source_title))],
+      chunk_source_count: new Set(semC.map((c) => c.source_id)).size,
+    },
+  };
+}
+
 // ─── Orchestrator: full pipeline up through Layer 2 ───────────────────
 
 export async function runPipeline(opts: {
