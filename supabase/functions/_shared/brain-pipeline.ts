@@ -580,7 +580,9 @@ exact_words: ${(p.exact_words_to_use || "").substring(0, 200)}
 deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
 
   // Pre-compute available unique sources so we can ask for the right diversity
-  const uniqueSources = new Set(candidates.map((c) => sourceKeyOf(c)).filter(Boolean));
+  const relevantCandidates = candidates.filter((c) => hasStrongMessageFit(question, c, 30));
+  const relevantPool = relevantCandidates.length >= 3 ? relevantCandidates : candidates;
+  const uniqueSources = new Set(relevantPool.map((c) => sourceKeyOf(c)).filter(Boolean));
   const sourceDiversityHint = uniqueSources.size >= 3
     ? `Candidates span ${uniqueSources.size} different sources — your selection MUST include at least 3 different source titles. This is non-negotiable when the diversity exists.`
     : `Candidates only cover ${uniqueSources.size} source(s) — use what's available.`;
@@ -607,6 +609,8 @@ Rules:
   - Explain why each in one short sentence.
   - If two principles contradict (push hard vs pull back, etc.), pick a winner; the loser goes to neither tier.
   - Name the dominant framework.
+  - NEVER include a principle that only vaguely matches the message. Relevance beats diversity.
+  - Supporting principles must still be directly applicable to the current message or chat.
   - If NO principle genuinely fits, return primary: [] — do not stretch.${sessionLine}`,
     `User question: "${question}"\n\nCandidates:\n${candidateBlock}`,
     "select_principles",
@@ -686,6 +690,12 @@ Rules:
   pushTier(result.primary, "primary");
   pushTier(result.supporting || [], "supporting");
 
+  const filteredSelected = selected.filter((s, index) => index < 2 || hasStrongMessageFit(question, s.full, 30));
+  if (filteredSelected.length > 0) {
+    selected.length = 0;
+    selected.push(...filteredSelected);
+  }
+
   // ─── Source-diversity backfill ─────────────────────────────────────
   // If the model collapsed onto 1-2 sources but the candidate pool has more,
   // forcibly add top-ranked candidates from other sources as supporting tier.
@@ -693,7 +703,7 @@ Rules:
     selected.map((s) => sourceKeyOf(s)).filter(Boolean) as string[]
   );
   if (selectedSourceKeys.size < 3 && uniqueSources.size >= 3) {
-    for (const cand of candidates) {
+    for (const cand of relevantPool) {
       if (selected.length >= 7) break;
       if (selectedSourceKeys.size >= 3 && selected.length >= 5) break;
       if (seen.has(cand.id)) continue;
@@ -736,7 +746,7 @@ Rules:
     const usedKeys = new Set(
       kept.map((s) => sourceKeyOf(s)).filter(Boolean)
     );
-    for (const cand of candidates) {
+    for (const cand of relevantPool) {
       if (evictedSlots.length === 0) break;
       if (seen.has(cand.id)) continue;
       const key = sourceKeyOf(cand);
@@ -764,7 +774,7 @@ Rules:
   // best unseen candidates from missing sources even when nothing was evicted.
   if (uniqueSources.size >= 3) {
     const selectedKeys = new Set(selected.map((s) => sourceKeyOf(s)).filter(Boolean));
-    for (const cand of candidates) {
+    for (const cand of relevantPool) {
       if (selectedKeys.size >= 3 || selected.length >= 7) break;
       if (seen.has(cand.id)) continue;
       const key = sourceKeyOf(cand);
@@ -780,6 +790,23 @@ Rules:
         source_type: cand.source_type,
         why_relevant: `Required cross-source support from ${sourceTitleOf(cand)} (${cand.category}).`,
         tier: "supporting",
+        full: cand,
+      });
+    }
+  }
+
+  if (selected.length === 0 && relevantPool.length > 0) {
+    const fallback = sourceRoundRobin(relevantPool, sourceKeyOf, 4, 2);
+    for (const cand of fallback) {
+      selected.push({
+        id: cand.id,
+        principle_name: cand.principle_name,
+        source_id: cand.source_id,
+        source_title: sourceTitleOf(cand),
+        source_url: null,
+        source_type: cand.source_type,
+        why_relevant: `Strong direct match for the current message from ${sourceTitleOf(cand)}.`,
+        tier: selected.length < 2 ? "primary" : "supporting",
         full: cand,
       });
     }
