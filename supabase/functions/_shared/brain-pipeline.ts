@@ -359,10 +359,14 @@ export async function hybridRetrieve(
   // enter the diverse candidate pool before the AI reranker. This prevents one
   // high-scoring source (often Start With Why) from occupying the whole context.
   const byStaticSource = new Map<string, Principle[]>();
-  for (const p of staticPrinciplesRaw as Principle[]) {
+  const locallyRankedStatic = [...(staticPrinciplesRaw as Principle[])]
+    .map((p) => ({ p, score: localRelevanceScore(subqueries.join("\n"), p) }))
+    .sort((a, b) => b.score - a.score)
+    .map(({ p, score }) => ({ ...p, relevance_score: Math.max(p.relevance_score ?? 0, Math.round(score)) }));
+  for (const p of locallyRankedStatic) {
     const key = p.source_id || p.source_name || p.id;
     if (!byStaticSource.has(key)) byStaticSource.set(key, []);
-    if (byStaticSource.get(key)!.length < 4) byStaticSource.get(key)!.push(p);
+    if (byStaticSource.get(key)!.length < 3) byStaticSource.get(key)!.push(p);
   }
   const sourceReservoir = [...byStaticSource.values()].flat();
 
@@ -385,7 +389,7 @@ export async function hybridRetrieve(
 
   const mergedP0 = mergeByIdPriority(enrichedSemP, sourceReservoir);
   const mergedP = mergeByIdPriority(mergedP0, chunkSourcePrinciples);
-  const mergedP2 = mergeByIdPriority(mergedP, staticPrinciplesRaw as Principle[]);
+  const mergedP2 = mergeByIdPriority(mergedP, locallyRankedStatic as Principle[]);
   const mergedC = mergeByIdPriority(flatSemC, staticChunksRaw as Chunk[]);
 
   const dedupedP = deduplicatePrinciples(mergedP2, "relevance_score");
