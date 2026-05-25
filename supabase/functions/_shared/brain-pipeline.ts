@@ -886,9 +886,10 @@ export async function runPipeline(opts: {
 
   // Empty-vault gate — only fires when retrieval truly returned nothing useful.
   // Even one decent reranked principle is enough to attempt selection.
-  const STRONG = 0.45;
+  const STRONG = 0.34;
   const decent = top.filter((p) =>
     (typeof p.relevance_score === "number" && p.relevance_score >= STRONG * 100) ||
+    (p._retrieval_score ?? 0) >= 32 ||
     (p.relevance_score ?? 0) >= 4
   );
   if (top.length === 0 || (decent.length < 1 && topScore < 0.25)) {
@@ -959,8 +960,10 @@ export async function runPipeline(opts: {
   // response prompt can weave from many books/videos even when the strict
   // selector collapsed to one or two sources.
   const selectedIds = new Set(reasoning.selected.map((s) => s.id));
+  const evidenceSeed = top.filter((p) => hasStrongMessageFit(question, p, 28));
+  const evidenceCandidates = evidenceSeed.length >= 4 ? evidenceSeed : top;
   const bySrc = new Map<string, Principle[]>();
-  for (const p of top) {
+  for (const p of evidenceCandidates) {
     if (selectedIds.has(p.id)) continue;
     const k = sourceKeyOf(p);
     if (!bySrc.has(k)) bySrc.set(k, []);
