@@ -352,9 +352,8 @@ serve(async (req) => {
       retrievalQuery = `Latest user message / pasted chat:\n${lastUserText || "(no text)"}\n\nRecent context:\n${recentForBrief || "(none)"}\n\nSearch focus: prospect psychology, hidden objection, conversation stage, sales framework, exact reply script, strategic breakdown, source-diverse principles.`;
     }
 
-    // ─── Layers 1+2 ───
-    const pipeline = await runPipeline({
-      apiKey: LOVABLE_API_KEY,
+    // ─── Layers 1+2 (FAST path — keeps us under the 2s CPU budget) ───
+    const pipeline = await runPipelineFast({
       supabaseAdmin,
       userId: user.id,
       question: retrievalQuery,
