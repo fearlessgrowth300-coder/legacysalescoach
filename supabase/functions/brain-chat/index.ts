@@ -447,9 +447,10 @@ Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to f
       method: "POST",
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-3.1-pro-preview",
-        max_tokens: 16000,
-        reasoning: { effort: "medium" },
+        model: "google/gemini-3-flash-preview",
+        max_tokens: 9000,
+        reasoning: { effort: "low" },
+        temperature: 0.45,
         messages: [{ role: "system", content: systemPrompt }, ...validated],
         stream: true,
       }),
