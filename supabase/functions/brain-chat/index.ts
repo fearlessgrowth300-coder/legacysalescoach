@@ -58,7 +58,7 @@ async function processMessage(m: any) {
 }
 
 const EMPTY_VAULT_RESPONSE = (topic: string) =>
-  `Your vault doesn't cover **${topic}** yet. Upload a video or PDF on **${topic}** to unlock coaching here.\n\nThe Brain only speaks from what you've taught it — no general-knowledge fallback.`;
+  `I couldn't find a strong principle match for **${topic}** inside your vault yet. Upload more material on **${topic}** or rephrase the message with more context so I can pull the right principles.\n\nThe Brain only speaks from what you've taught it — no general-knowledge fallback.`;
 
 function buildSystemPrompt(opts: {
   selectedBlock: string;
@@ -83,14 +83,15 @@ SILENT THOUGHT PROTOCOL — run this before writing, but do not reveal private c
 2. Scan the selected principles AND additional evidence across different sources; combine the strongest 3-5 principles.
 3. Turn that synthesis into a decisive strategy, a ready-to-send reply, and a concise strategic breakdown.
 
-CRITICAL RULE: You MUST use MULTIPLE different sources in your response.
+CRITICAL RULE: Use multiple different sources ONLY when they genuinely fit the message.
 - Use one source for the situation analysis.
 - Use a DIFFERENT source for the strategy.
 - Use DIFFERENT sources for each point in "Why This Works".
 - Never cite the same source twice in a row.
 - Every claim must be backed by a source from the vault.
-- Minimum 3 different sources per response when 3+ are available.
+- Minimum 3 different sources per response when 3+ strong-fitting sources are available.
 - Maximum 2 citations from any single source.
+- If only 1-2 sources truly fit this message, use only those; never force irrelevant citations just to hit a quota.
 
 When you cite a source, use this exact format:
 (Source: "Book/Video Title")
@@ -125,7 +126,12 @@ NEXT STEP:
 (Source: "[Source from vault]")
 
 MULTI-SOURCE ENFORCEMENT:
-Before finalising your response, count how many different sources you cited. If fewer than 3 different sources are cited and 3+ are available, go back and find additional relevant principles from different books/videos in the vault to strengthen the response. The response should feel like a team of experts from different schools of sales thought all agreeing on the right move — not one expert speaking alone.
+Before finalising your response, count how many different sources you cited. If fewer than 3 different sources are cited and 3+ strong-fitting sources are available, go back and strengthen the response with additional relevant principles from different books/videos in the vault. If the extra sources are weak or off-topic, do NOT use them. The response should feel like a team of experts agreeing on the right move — never like random citations stapled onto the answer.
+
+REASONING QUALITY:
+- First diagnose exactly what the prospect is signaling and why.
+- Then choose the smallest set of strongest-fitting principles.
+- Give sharp, direct feedback fast. No stalling, no vague filler, no generic lecture.
 
 === DOMINANT FRAMEWORK ===
 ${frameworkName || "(unspecified)"}
