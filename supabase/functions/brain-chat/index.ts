@@ -341,38 +341,9 @@ serve(async (req) => {
         retrievalQuery = conversationText.slice(0, 600);
       }
     } else {
-      // ─── No image: build a retrieval brief from text ───
-      try {
-        const briefSystem = `You build a RETRIEVAL BRIEF for a sales-coaching vector database.
-Output a single dense paragraph (4-8 sentences) covering:
-- What the prospect actually said / the situation (paraphrase any screenshot conversation in plain text).
-- The user's goal or question.
-- The likely objection category (price, salary, trust, rapport, mindset, follow-up, closing, leadership, prospecting, psychology, framework, objection handling, etc.).
-- 8-15 keywords a sales book or video would use about this situation.
-Do NOT answer or coach. Do NOT speculate beyond evidence. This text is used to find the right principles in a vector DB.`;
-        const briefResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash",
-            temperature: 0.2,
-            max_tokens: 600,
-            messages: [
-              { role: "system", content: briefSystem },
-              { role: "user", content: `Recent chat:\n${recentForBrief || "(none)"}\n\nLatest user message: "${lastUserText || "(no text)"}"\n\nProduce the retrieval brief now.` },
-            ],
-          }),
-        });
-        if (briefResp.ok) {
-          const bd = await briefResp.json();
-          const brief = bd.choices?.[0]?.message?.content?.trim();
-          if (brief && brief.length > 30) {
-            retrievalQuery = `${lastUserText}\n\n[Retrieval brief]\n${brief}`;
-          }
-        }
-      } catch (e) {
-        console.warn("[brain-chat] retrieval brief failed, falling back to raw text:", e);
-      }
+      // Text/chat path: avoid a separate pre-LLM retrieval-brief call. The shared
+      // pipeline expands and scores against the full vault, so this keeps feedback fast.
+      retrievalQuery = `Latest user message / pasted chat:\n${lastUserText || "(no text)"}\n\nRecent context:\n${recentForBrief || "(none)"}\n\nSearch focus: prospect psychology, hidden objection, conversation stage, sales framework, exact reply script, strategic breakdown, source-diverse principles.`;
     }
 
     // ─── Layers 1+2 ───
