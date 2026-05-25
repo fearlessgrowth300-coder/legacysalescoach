@@ -138,6 +138,27 @@ function sourceKeyOf(item: { source_title?: string | null; source_name?: string 
   return sourceTitleOf(item).trim().toLowerCase() || "unknown";
 }
 
+function tokenize(text: string): string[] {
+  return text.toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
+}
+
+function localRelevanceScore(question: string, p: Principle): number {
+  const q = new Set(tokenize(question));
+  if (!q.size) return p.relevance_score ?? 0;
+  const fields = [p.principle_name, p.category, p.what_i_learned, p.how_to_apply, p.when_to_use, p.exact_words_to_use, p.the_deep_why]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  let score = (p.relevance_score ?? 0) * 0.15;
+  for (const term of q) {
+    if (fields.includes(term)) score += term.length > 5 ? 3 : 1.5;
+  }
+  return score;
+}
+
 export function enforceSourceDiversity<T extends { source_title?: string | null; source_name?: string | null; source_id?: string | null; similarity?: number; relevance_score?: number }>(
   principles: T[],
   maxPerSource: number = 2,
