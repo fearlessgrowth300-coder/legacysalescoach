@@ -2,7 +2,7 @@
 // Prevents near-identical chunks from wasting context window space
 
 function getWordNgrams(text: string, n: number): Set<string> {
-  const words = text.toLowerCase().replace(/[^\\w\\s]/g, "").split(/\s+/).filter(Boolean);
+  const words = text.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(Boolean);
   const ngrams = new Set<string>();
   for (let i = 0; i <= words.length - n; i++) {
     ngrams.add(words.slice(i, i + n).join(" "));
