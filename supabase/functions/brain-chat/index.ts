@@ -20,6 +20,14 @@ function getCorsHeaders(req: Request) {
 
 const MAX_MESSAGE_LENGTH = 30000;
 const MAX_MESSAGES = 2000;
+const MODEL_CONTEXT_MESSAGES = 8;
+const USER_INPUT_CHAR_LIMIT = 1800;
+const RECENT_EXCHANGES_CHAR_LIMIT = 900;
+const WORKSPACE_PROFILE_CHAR_LIMIT = 500;
+
+function clampText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
 
 async function imageToBase64(url: string): Promise<string | null> {
   try {
@@ -240,6 +248,7 @@ serve(async (req) => {
     if (messages.length > MAX_MESSAGES) return new Response(JSON.stringify({ error: "Too many messages" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
     const validated = await Promise.all(messages.map(processMessage));
+    const modelMessages = validated.slice(-MODEL_CONTEXT_MESSAGES);
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -252,7 +261,7 @@ serve(async (req) => {
     if (authError || !user) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
     // Extract last user message text + images for retrieval brief
-    const lastUserMsg = [...validated].reverse().find((m: any) => m.role === "user");
+    const lastUserMsg = [...modelMessages].reverse().find((m: any) => m.role === "user");
     const lastUserText = typeof lastUserMsg?.content === "string"
       ? lastUserMsg.content
       : (Array.isArray(lastUserMsg?.content) ? lastUserMsg.content.map((p: any) => p.text || "").join(" ") : "");
@@ -264,7 +273,7 @@ serve(async (req) => {
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     // Build session context (last 3 exchanges + previous-turn principles)
-    const session = await buildSessionContext(supabaseAdmin, conversation_id || null, validated);
+    const session = await buildSessionContext(supabaseAdmin, conversation_id || null, modelMessages);
 
     const recentForBrief = session.recent_exchanges.slice(-4)
       .map((e) => `${e.role}: ${e.content}`).join("\n");
@@ -349,7 +358,7 @@ serve(async (req) => {
     } else {
       // Text/chat path: avoid a separate pre-LLM retrieval-brief call. The shared
       // pipeline expands and scores against the full vault, so this keeps feedback fast.
-      retrievalQuery = `Latest user message / pasted chat:\n${lastUserText || "(no text)"}\n\nRecent context:\n${recentForBrief || "(none)"}\n\nSearch focus: prospect psychology, hidden objection, conversation stage, sales framework, exact reply script, strategic breakdown, source-diverse principles.`;
+      retrievalQuery = `Latest user message / pasted chat:\n${clampText(lastUserText || "(no text)", USER_INPUT_CHAR_LIMIT)}\n\nRecent context:\n${clampText(recentForBrief || "(none)", RECENT_EXCHANGES_CHAR_LIMIT)}\n\nSearch focus: prospect psychology, hidden objection, conversation stage, sales framework, exact reply script, strategic breakdown, source-diverse principles.`;
     }
 
     // ─── Layers 1+2 (FAST path — keeps us under the 2s CPU budget) ───
@@ -387,7 +396,7 @@ serve(async (req) => {
     }
 
     // ─── Step 5: Response generation ───
-    const workspaceProfile = await fetchWorkspaceProfile(supabaseAdmin, user.id);
+    const workspaceProfile = clampText(await fetchWorkspaceProfile(supabaseAdmin, user.id), WORKSPACE_PROFILE_CHAR_LIMIT);
     const recentExchanges = session.recent_exchanges
       .map((e) => `${e.role}: ${e.content}`).join("\n");
 
@@ -406,9 +415,9 @@ serve(async (req) => {
       selectedBlock: buildPrinciplesBlock(pipeline.selected),
       evidenceBlock: buildEvidenceBlock(pipeline.evidence_principles),
       chunksBlock: buildChunksBlock(pipeline.supporting_chunks),
-      userInput: hasImageAttachment ? `${userInstruction}\n\n${conversationText}` : (lastUserText || retrievalQuery),
+      userInput: hasImageAttachment ? clampText(`${userInstruction}\n\n${conversationText}`, USER_INPUT_CHAR_LIMIT) : clampText(lastUserText || retrievalQuery, USER_INPUT_CHAR_LIMIT),
       workspaceProfile,
-      recentExchanges,
+      recentExchanges: clampText(recentExchanges, RECENT_EXCHANGES_CHAR_LIMIT),
       frameworkName: pipeline.framework_name,
       sourceTitles,
       whySkeleton,
@@ -419,28 +428,6 @@ serve(async (req) => {
       systemPrompt += `\n\n=== SCREENSHOT CONVERSATION (extracted via OCR) ===\n${conversationText}\n\n=== USER INSTRUCTION ===\n"${userInstruction}"\n\nThe user pasted a real conversation as a screenshot. Read it carefully, diagnose what is happening, then follow the response style above. End your reply with a clear, copy-paste ready message the user can send to this prospect.`;
     }
 
-    const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        max_tokens: 9000,
-        reasoning: { effort: "low" },
-        temperature: 0.45,
-        messages: [{ role: "system", content: systemPrompt }, ...validated],
-        stream: true,
-      }),
-    });
-
-    if (!aiResp.ok) {
-      if (aiResp.status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      if (aiResp.status === 402) return new Response(JSON.stringify({ error: "Usage limit reached. Please add credits." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      const t = await aiResp.text();
-      console.error("AI gateway error:", aiResp.status, t);
-      return new Response(JSON.stringify({ error: "AI gateway error" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    // ─── Inject brain_meta first, then forward stream ───
     const brainMeta = {
       selected_principles: pipeline.selected.map((s) => ({
         id: s.id,
@@ -458,6 +445,7 @@ serve(async (req) => {
       debug: pipeline.debug,
     };
     const metaEvent = `data: ${JSON.stringify({ brain_meta: brainMeta })}\n\n`;
+    const loadingEvent = `data: ${JSON.stringify({ brain_meta: { loading: true } })}\n\n`;
 
     // Strip any [[cite:...]] / [^N] tokens — old-style replies use inline source naming only.
     const STRIP_RE = /\[\[cite:[^\]]*\]\]|\[\^[0-9]+\]/gi;
@@ -465,7 +453,34 @@ serve(async (req) => {
 
     const transformed = new ReadableStream({
       async start(controller) {
+        controller.enqueue(encoder.encode(loadingEvent));
         controller.enqueue(encoder.encode(metaEvent));
+        const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "google/gemini-3-flash-preview",
+            max_tokens: 2200,
+            reasoning: { effort: "minimal" },
+            temperature: 0.35,
+            messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
+            stream: true,
+          }),
+        });
+
+        if (!aiResp.ok || !aiResp.body) {
+          let message = "AI gateway error";
+          if (aiResp.status === 429) message = "Rate limit exceeded. Please try again.";
+          else if (aiResp.status === 402) message = "Usage limit reached. Please add credits.";
+          else {
+            const t = await aiResp.text().catch(() => "");
+            console.error("AI gateway error:", aiResp.status, t);
+          }
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+          return;
+        }
         const reader = aiResp.body!.getReader();
         const decoder = new TextDecoder();
         let buf = "";
