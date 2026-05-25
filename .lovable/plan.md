@@ -1,41 +1,47 @@
-# Fix: Brain replies still cite only one source
+## Goal
+Stop the 546 errors and make chat replies start quickly instead of hanging for a long time.
 
-## Diagnosis
+## What I found
+The chat request path is timing out in the backend:
+- `brain-chat` waits for the full retrieval pipeline before streaming anything.
+- `_shared/brain-pipeline.ts` currently pages through large vault datasets, generates embeddings for multiple subqueries, runs multiple semantic RPCs, then does extra enrichment and balancing work in the same request.
+- The backend logs show `CPU Time exceeded`, which lines up with the 546 errors and the long typing spinner.
 
-The vault has 30+ sources (Start with Why, 360 Leader, Psychology of Selling, Objection Crusher, Sell Like Crazy, etc.), and the pipeline already has a source-diversity backfill in `selectPrinciples`. The retrieval is fine — the **response model is ignoring** the soft instruction "name at least 3 different source titles." In the screenshot, all four WHY THIS WORKS bullets cite the same book.
+## Plan
+1. **Shrink the hot path in retrieval**
+   - Replace the full-vault page scans on every request with a lighter candidate strategy.
+   - Cap the number of subqueries/semantic runs used for live chat.
+   - Reduce expensive enrichment and source-balancing work before first response.
 
-Soft prompt rules don't work. We need to make multi-sourcing structurally impossible to skip.
+2. **Add a fast-response mode for `brain-chat`**
+   - Introduce a chat-specific pipeline mode optimized for speed.
+   - Keep strong relevance scoring, but use smaller candidate pools and earlier cutoffs.
+   - Preserve multi-source reasoning without forcing a huge preselection pass.
 
-## Changes
+3. **Start streaming sooner**
+   - Make `brain-chat` emit an immediate SSE event so the UI is not stuck waiting for the whole retrieval stack.
+   - Keep the final answer format intact, but remove unnecessary delay before the first token.
 
-### 1. `_shared/brain-pipeline.ts` — guarantee source diversity in `selected`
-- After the existing backfill, enforce: of the final `selected` list, **at most 2 principles may share a source**. If a third candidate from an already-used source would be added, swap it for the next reranked candidate from an unused source (drawing from `top`/`evidence`).
-- Goal: when there are ≥3 sources in candidates, `selected` always covers ≥3 distinct sources.
+4. **Guard against CPU-limit failures**
+   - Add hard limits and graceful fallbacks when retrieval is too expensive.
+   - If the deep pass cannot finish in time, fall back to the strongest smaller candidate set instead of dying with 546.
 
-### 2. `brain-chat/index.ts` — pre-render the WHY THIS WORKS skeleton
-Instead of asking the model to remember to cite multiple sources, build the bullet list ourselves with the source slot already filled, e.g.:
+5. **Validate the message path**
+   - Re-test the chat function and confirm the request no longer hits the CPU ceiling.
+   - Verify the response begins quickly and still cites relevant principles from the vault.
 
-```
-**WHY THIS WORKS:**
-- **[Tactic]:** [Reason in 1 sentence] — naming **Start with Why**.
-- **[Tactic]:** [Reason in 1 sentence] — naming **The 360 Degree Leader**.
-- **[Tactic]:** [Reason in 1 sentence] — naming **The Psychology of Selling**.
-- **[Tactic]:** [Reason in 1 sentence] — naming **Objection Crusher**.
-```
+## Technical details
+- **Primary files:**
+  - `supabase/functions/_shared/brain-pipeline.ts`
+  - `supabase/functions/brain-chat/index.ts`
+- **Likely implementation approach:**
+  - Add a lightweight retrieval profile for interactive chat.
+  - Reduce `fetchAllRows` dependence in live requests.
+  - Trim semantic calls and downstream candidate enrichment.
+  - Stream an early event before the full generation work completes.
+  - Keep the stronger, wider retrieval path available only where latency matters less.
 
-Inject this pre-assigned skeleton into the system prompt as `=== REQUIRED WHY-THIS-WORKS SLOTS ===`, with one slot per **distinct** source from `pipeline.selected` + top `evidence_principles` (max 4). Instruction: "Reproduce these bullets verbatim, replacing `[Tactic]` and `[Reason]` only. Do NOT change the source name. Do NOT drop bullets. Do NOT add more."
-
-Also for THE STRATEGY paragraph, require an inline "According to **{primarySourceA}** ... combined with **{primarySourceB}** ..." opener built from the first two distinct primary sources.
-
-### 3. Post-generation validator (lightweight)
-After streaming completes (or before, with non-streaming check on a short retry path), count distinct source titles named in the reply. If fewer than 3 distinct sources from `sourceTitles` appear AND ≥3 were available, log a `[brain-chat] single-source collapse` warning with the actual sources cited. (Keep the user-facing reply as-is for now; the warning lets us monitor whether the structural fix is holding.)
-
-## Why this fixes it
-
-- The model can no longer "forget" to cite multiple sources because the bullet skeleton is already written with the right source names.
-- Diversity capping in selection means even if the user asks something very Start-with-Why-shaped, only 2 of the selected principles can come from that book — the other slots force other books in.
-- No retrieval logic changes (it's already diverse). All changes are in selection cap + response prompt structure.
-
-## Files touched
-- `supabase/functions/_shared/brain-pipeline.ts` — add 2-per-source cap in `selectPrinciples`
-- `supabase/functions/brain-chat/index.ts` — pre-render WHY-skeleton + opener template, append validator log
+## Expected result
+- No more 546 timeout loop when sending a message.
+- Typing/streaming starts fast.
+- Replies still use relevant vault principles, but without the current 30+ minute wait.
