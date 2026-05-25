@@ -718,7 +718,6 @@ export default function AiChat() {
     }
 
     let assistantSoFar = "";
-    const questionText = text;
     const upsert = (chunk: string) => {
       setIsTyping(false);
       assistantSoFar += chunk;
@@ -891,7 +890,6 @@ export default function AiChat() {
     }
 
     let assistantSoFar = "";
-    const questionText = editText;
     const upsert = (chunk: string) => {
       setIsTyping(false);
       assistantSoFar += chunk;
