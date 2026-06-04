@@ -871,19 +871,14 @@ export async function runPipelineFast(opts: {
     const embStr = JSON.stringify(emb);
     // Search the user's uploaded vault first. The previous null-user search let
     // broad/global sources dominate, which made replies keep citing the same books.
-    const [userPRes, globalPRes, userCRes, globalCRes] = await Promise.all([
+    const [userPRes, userCRes] = await Promise.all([
       supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 320, match_threshold: 0.08, p_user_id: userId }),
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 80, match_threshold: 0.16, p_user_id: null }),
       supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 120, match_threshold: 0.08, p_user_id: userId }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 40, match_threshold: 0.16, p_user_id: null }),
     ]);
-    const userPrinciples = (userPRes.data || [])
-      .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type));
-    const globalPrinciples = (globalPRes.data || [])
-      .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type));
-    semP = mergeByIdPriority(userPrinciples, globalPrinciples)
+    semP = (userPRes.data || [])
+      .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
       .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-    semC = mergeByIdPriority(userCRes.data || [], globalCRes.data || [])
+    semC = (userCRes.data || [])
       .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
   }
 
