@@ -316,6 +316,7 @@ export default function AiChat() {
         role: m.role as "user" | "assistant",
         content: m.content,
         image_url: m.image_url,
+        image_urls: Array.isArray(m.metadata?.image_urls) ? m.metadata.image_urls : undefined,
         is_edited: m.is_edited,
         is_pinned: m.is_pinned,
         selected_principles: m.metadata?.selected_principles || undefined,
@@ -324,9 +325,12 @@ export default function AiChat() {
       // Resolve signed URLs for images
       const withSignedUrls = await Promise.all(
         mapped.map(async (m) => {
-          if (m.image_url && m.role === "user") {
-            const signed = await getSignedUrl(m.image_url);
-            return { ...m, image_url: signed };
+          if (m.role === "user") {
+            const storedUrls = m.image_urls?.length ? m.image_urls : (m.image_url ? [m.image_url] : []);
+            if (storedUrls.length) {
+              const signedUrls = await Promise.all(storedUrls.map(getSignedUrl));
+              return { ...m, image_url: signedUrls[0] || m.image_url, image_urls: signedUrls };
+            }
           }
           return m;
         })
@@ -658,7 +662,14 @@ export default function AiChat() {
 
     const { data: savedMsg } = await supabase
       .from("ai_chat_messages")
-      .insert({ conversation_id: convId, user_id: user.id, role: "user", content: userMsg.content, image_url: uploadedUrls[0] || null })
+      .insert({
+        conversation_id: convId,
+        user_id: user.id,
+        role: "user",
+        content: userMsg.content,
+        image_url: uploadedUrls[0] || null,
+        metadata: uploadedUrls.length ? { image_urls: uploadedUrls } : {},
+      })
       .select().single();
     if (savedMsg) {
       userMsg.id = savedMsg.id;
@@ -677,7 +688,19 @@ export default function AiChat() {
     // Helper: download image from private storage via authenticated supabase client
     const downloadImageAsBase64 = async (storageUrl: string): Promise<string | null> => {
       try {
-        const match = storageUrl.match(/chat-screenshots\/(.+)$/);
+        if (storageUrl.startsWith("data:")) return storageUrl;
+        if (storageUrl.includes("/storage/v1/object/sign/")) {
+          const resp = await fetch(storageUrl);
+          if (!resp.ok) return null;
+          const blob = await resp.blob();
+          return await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          });
+        }
+        const match = storageUrl.match(/chat-screenshots\/([^?]+)/);
         if (!match) return null;
         const path = match[1];
         const { data, error } = await supabase.storage.from("chat-screenshots").download(path);
@@ -696,14 +719,14 @@ export default function AiChat() {
     const aiMessages: any[] = [];
     for (let idx = 0; idx < allMsgs.length; idx++) {
       const m = allMsgs[idx];
-      const isCurrentMsg = idx === messages.length;
+      const isCurrentMsg = m === userMsg;
 
       let base64Imgs: string[] = [];
       if (isCurrentMsg && displayPreviews.length > 0) {
         base64Imgs = displayPreviews;
-      } else if (m.image_url && m.role === "user") {
-        const b64 = await downloadImageAsBase64(m.image_url);
-        if (b64) base64Imgs = [b64];
+      } else if (m.role === "user") {
+        const storedImages = m.image_urls?.length ? m.image_urls : (m.image_url ? [m.image_url] : []);
+        base64Imgs = (await Promise.all(storedImages.map(downloadImageAsBase64))).filter((b64): b64 is string => !!b64);
       }
 
       if (base64Imgs.length > 0 && m.role === "user") {
