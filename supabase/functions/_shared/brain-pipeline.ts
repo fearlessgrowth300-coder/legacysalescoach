@@ -951,7 +951,7 @@ export async function runPipelineFast(opts: {
   }));
 
   const candidateSourceTitles = [...new Set(top.map((p) => sourceTitleOf(p)).filter(Boolean))];
-  const evidence = top.slice(selectedCount, selectedCount + 12);
+  const evidence = top.slice(selectedCount, selectedCount + 16);
 
   return {
     selected,
