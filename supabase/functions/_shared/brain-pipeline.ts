@@ -48,9 +48,9 @@ export type SessionContext = {
 
 const RECENT_EXCHANGE_LIMIT = 4;
 const RECENT_EXCHANGE_CHAR_LIMIT = 280;
-const PRINCIPLES_BLOCK_CHAR_LIMIT = 2800;
-const EVIDENCE_BLOCK_CHAR_LIMIT = 2200;
-const CHUNKS_BLOCK_CHAR_LIMIT = 1200;
+const PRINCIPLES_BLOCK_CHAR_LIMIT = 5200;
+const EVIDENCE_BLOCK_CHAR_LIMIT = 4200;
+const CHUNKS_BLOCK_CHAR_LIMIT = 2000;
 
 function clampText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
