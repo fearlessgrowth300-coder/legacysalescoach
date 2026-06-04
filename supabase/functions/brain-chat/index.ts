@@ -463,6 +463,7 @@ serve(async (req) => {
       selectedBlock: buildPrinciplesBlock(pipeline.selected),
       evidenceBlock: buildEvidenceBlock(pipeline.evidence_principles),
       chunksBlock: buildChunksBlock(pipeline.supporting_chunks),
+      principleApplicationMap: buildPrincipleApplicationMap(pipeline.selected),
       userInput: hasImageAttachment ? clampText(`${userInstruction}\n\n${conversationText}`, USER_INPUT_CHAR_LIMIT) : clampText(lastUserText || retrievalQuery, USER_INPUT_CHAR_LIMIT),
       workspaceProfile,
       recentExchanges: clampText(recentExchanges, RECENT_EXCHANGES_CHAR_LIMIT),
