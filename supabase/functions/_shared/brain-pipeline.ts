@@ -907,7 +907,9 @@ export async function runPipelineFast(opts: {
   const scored = semP.map((p) => ({ p, score: localRelevanceScore(question, p) }))
     .sort((a, b) => b.score - a.score);
 
-  // Source-diverse top selection (round-robin, max 2 per source)
+  // Source-diverse top selection (round-robin, max 3 per source, broader pool)
+  const MAX_PER_SOURCE = 3;
+  const BALANCED_POOL = 28;
   const bySrc = new Map<string, { p: Principle; score: number }[]>();
   for (const s of scored) {
     const k = sourceKeyOf(s.p);
@@ -917,14 +919,16 @@ export async function runPipelineFast(opts: {
   const balanced: { p: Principle; score: number }[] = [];
   const queues = [...bySrc.values()];
   let progressed = true;
-  while (balanced.length < 16 && progressed) {
+  while (balanced.length < BALANCED_POOL && progressed) {
     progressed = false;
     for (const q of queues) {
-      const counts = balanced.filter((b) => sourceKeyOf(b.p) === sourceKeyOf(q[0]?.p || ({} as any))).length;
-      if (counts >= 2) continue;
+      if (!q.length) continue;
+      const srcKey = sourceKeyOf(q[0].p);
+      const counts = balanced.filter((b) => sourceKeyOf(b.p) === srcKey).length;
+      if (counts >= MAX_PER_SOURCE) continue;
       const n = q.shift();
       if (n) { balanced.push(n); progressed = true; }
-      if (balanced.length >= 16) break;
+      if (balanced.length >= BALANCED_POOL) break;
     }
   }
 
@@ -932,7 +936,8 @@ export async function runPipelineFast(opts: {
   const topScore = (balanced[0]?.score || 0) / 100;
 
   // Build SelectedPrinciple list directly — no LLM selection call
-  const selectedCount = Math.min(top.length, 6);
+  // 8 selected (3 primary + 5 supporting) covers more distinct sources
+  const selectedCount = Math.min(top.length, 8);
   const selected: SelectedPrinciple[] = top.slice(0, selectedCount).map((p, i) => ({
     id: p.id,
     principle_name: p.principle_name,
