@@ -869,16 +869,21 @@ export async function runPipelineFast(opts: {
   let semC: Chunk[] = [];
   if (emb) {
     const embStr = JSON.stringify(emb);
-    // pgvector kNN scans the ENTIRE principle table (all 4,244+) via the embedding index
-    // and returns the top matches. Wide match_count + low threshold = broad coverage.
-    const [pRes, cRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 250, match_threshold: 0.12, p_user_id: null }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 80, match_threshold: 0.12, p_user_id: null }),
+    // Search the user's uploaded vault first. The previous null-user search let
+    // broad/global sources dominate, which made replies keep citing the same books.
+    const [userPRes, globalPRes, userCRes, globalCRes] = await Promise.all([
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 320, match_threshold: 0.08, p_user_id: userId }),
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 80, match_threshold: 0.16, p_user_id: null }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 120, match_threshold: 0.08, p_user_id: userId }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 40, match_threshold: 0.16, p_user_id: null }),
     ]);
-    semP = (pRes.data || [])
-      .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
+    const userPrinciples = (userPRes.data || [])
+      .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type));
+    const globalPrinciples = (globalPRes.data || [])
+      .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type));
+    semP = mergeByIdPriority(userPrinciples, globalPrinciples)
       .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-    semC = (cRes.data || [])
+    semC = mergeByIdPriority(userCRes.data || [], globalCRes.data || [])
       .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
   }
 
@@ -945,7 +950,7 @@ export async function runPipelineFast(opts: {
     source_title: sourceTitleOf(p),
     source_url: null,
     source_type: p.source_type,
-    why_relevant: `Top-ranked match from ${sourceTitleOf(p)} for this situation.`,
+    why_relevant: `Uses "${p.principle_name}" from ${sourceTitleOf(p)} because it teaches: ${(p.how_to_apply || p.what_i_learned || "apply this principle to the current sales moment").slice(0, 220)}`,
     tier: i < 3 ? "primary" : "supporting",
     full: p,
   }));
