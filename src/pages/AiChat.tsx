@@ -913,9 +913,9 @@ export default function AiChat() {
           if (b64) base64Imgs.push(b64);
         }
         base64Imgs.push(...newImageBase64s);
-      } else if (m.image_url && m.role === "user") {
-        const b64 = await downloadImageAsBase64Edit(m.image_url);
-        if (b64) base64Imgs = [b64];
+      } else if (m.role === "user") {
+        const storedImages = m.image_urls?.length ? m.image_urls : (m.image_url ? [m.image_url] : []);
+        base64Imgs = (await Promise.all(storedImages.map(downloadImageAsBase64Edit))).filter((b64): b64 is string => !!b64);
       }
 
       if (base64Imgs.length > 0 && m.role === "user") {
