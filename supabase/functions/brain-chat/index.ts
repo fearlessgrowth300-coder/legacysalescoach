@@ -222,12 +222,12 @@ function distinctSourcesFor(
   return out.slice(0, max);
 }
 
-function buildWhySkeleton(sources: string[]): string {
-  if (sources.length === 0) {
-    return `"[Point name]": [Explain what this line is doing psychologically]\n(Source: "<source>")`;
+function buildWhySkeleton(items: { source_title?: string | null; principle_name?: string | null }[]): string {
+  if (items.length === 0) {
+    return `"[Point name]": [Explain what this line is doing psychologically using the named principle]\nPrinciple used: [Principle Name]\n(Source: "<source>")`;
   }
-  return sources
-    .map((s) => `"[Point name]": [Explain what this line is doing psychologically]\n(Source: "${s}")`)
+  return items
+    .map((item) => `"[Point name]": [Explain what this line is doing psychologically using ${item.principle_name || "this principle"}]\nPrinciple used: ${item.principle_name || "[Principle Name]"}\n(Source: "${item.source_title || "Uploaded content"}")`)
     .join("\n\n");
 }
 
@@ -336,7 +336,7 @@ serve(async (req) => {
       console.log("[brain-chat] image flow — running OCR on", lastUserImages.length, "image(s)");
       // OCR each image via the existing ocr-screenshot edge function
       const ocrTexts: string[] = [];
-      for (const img of lastUserImages.slice(0, 4)) {
+      for (const img of lastUserImages.slice(0, 10)) {
         try {
           let imageBase64 = "";
           let mimeType = "image/png";
@@ -455,7 +455,7 @@ serve(async (req) => {
     ].filter((x): x is string => !!x))];
 
     const distinctSources = distinctSourcesFor(pipeline.selected, pipeline.evidence_principles, 5);
-    const whySkeleton = buildWhySkeleton(distinctSources);
+    const whySkeleton = buildWhySkeleton(pipeline.selected.slice(0, 5));
     const openerHint = buildOpenerHint(distinctSources);
     const forcedSourceFooter = buildForcedSourceFooter(distinctSources.length >= 3 ? distinctSources : sourceTitles);
 
