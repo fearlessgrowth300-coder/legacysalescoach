@@ -233,12 +233,26 @@ function buildWhySkeleton(sources: string[]): string {
 
 function buildOpenerHint(sources: string[]): string {
   if (sources.length >= 2) {
-    return `"According to **${sources[0]}** combined with **${sources[1]}**, ..." (you may add a third source in the same sentence if it fits)`;
+    return `"I’m applying [Principle Name] from **${sources[0]}** together with [Principle Name] from **${sources[1]}** because..."`;
   }
   if (sources.length === 1) {
-    return `"According to **${sources[0]}**, ..."`;
+    return `"I’m applying [Principle Name] from **${sources[0]}** because..."`;
   }
-  return `"According to **<source>**, ..."`;
+  return `"I’m applying [Principle Name] from **<source>** because..."`;
+}
+
+function buildPrincipleApplicationMap(selected: any[]): string {
+  if (!selected.length) return "(none)";
+  return selected.map((s, i) => {
+    const p = s.full || {};
+    const teaching = p.how_to_apply || p.what_i_learned || s.why_relevant || "Apply this principle directly to the current sales moment.";
+    const why = p.the_deep_why || p.when_to_use || s.why_relevant || "It fits the prospect psychology in the message.";
+    return `${i + 1}. SOURCE: "${s.source_title || p.source_name || "Uploaded content"}"
+   PRINCIPLE PICKED: ${s.principle_name || p.principle_name}
+   WHAT THIS PRINCIPLE SAYS: ${clampText(String(teaching), 260)}
+   HOW TO APPLY IT HERE: ${clampText(String(why), 220)}
+   TIER: ${s.tier || "primary"}`;
+  }).join("\n\n");
 }
 
 function namedSourcesInReply(content: string, sourceTitles: string[]): string[] {
