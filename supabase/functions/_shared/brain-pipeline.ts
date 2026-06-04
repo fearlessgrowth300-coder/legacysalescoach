@@ -869,25 +869,41 @@ export async function runPipelineFast(opts: {
   let semC: Chunk[] = [];
   if (emb) {
     const embStr = JSON.stringify(emb);
-    // pgvector kNN scans the ENTIRE principle table (all 4,244+) via the embedding index
-    // and returns the top matches. Wide match_count + low threshold = broad coverage.
-    const [pRes, cRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 250, match_threshold: 0.12, p_user_id: null }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 80, match_threshold: 0.12, p_user_id: null }),
+    // Search the user's uploaded vault first. The previous null-user search let
+    // broad/global sources dominate, which made replies keep citing the same books.
+    const [userPRes, userCRes] = await Promise.all([
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 320, match_threshold: 0.08, p_user_id: userId }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 120, match_threshold: 0.08, p_user_id: userId }),
     ]);
-    semP = (pRes.data || [])
+    semP = (userPRes.data || [])
       .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
       .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-    semC = (cRes.data || [])
+    semC = (userCRes.data || [])
       .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+  }
+
+  // If a screenshot/chat matches a PDF or video chunk, bring that source's
+  // extracted principles into the candidate pool too. Otherwise the model sees
+  // chunk text from a source but not the named principle that should be applied.
+  const chunkMatchedSourceIds = [...new Set(semC.map((c) => c.source_id).filter((x): x is string => !!x))].slice(0, 12);
+  if (chunkMatchedSourceIds.length) {
+    const { data: sourcePrinciples } = await supabaseAdmin.from("sales_brain")
+      .select(PRINCIPLE_SELECT)
+      .eq("user_id", userId)
+      .is("workspace_id", null)
+      .in("source_id", chunkMatchedSourceIds)
+      .order("relevance_score", { ascending: false, nullsFirst: false })
+      .limit(120);
+    semP = mergeByIdPriority(semP, (sourcePrinciples || []) as Principle[]);
   }
 
   // Fallback if pgvector returned nothing: small static top-by-relevance pull (no full paging)
   if (semP.length === 0) {
     const { data } = await supabaseAdmin.from("sales_brain")
       .select(PRINCIPLE_SELECT)
+      .eq("user_id", userId)
       .is("workspace_id", null)
-      .in("source_type", ["core_knowledge", "sales_principle"])
+      .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false, nullsFirst: false })
       .limit(120);
     semP = (data || []) as Principle[];
@@ -945,7 +961,7 @@ export async function runPipelineFast(opts: {
     source_title: sourceTitleOf(p),
     source_url: null,
     source_type: p.source_type,
-    why_relevant: `Top-ranked match from ${sourceTitleOf(p)} for this situation.`,
+    why_relevant: `Uses "${p.principle_name}" from ${sourceTitleOf(p)} because it teaches: ${(p.how_to_apply || p.what_i_learned || "apply this principle to the current sales moment").slice(0, 220)}`,
     tier: i < 3 ? "primary" : "supporting",
     full: p,
   }));

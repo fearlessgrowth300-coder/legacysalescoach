@@ -72,6 +72,7 @@ function buildSystemPrompt(opts: {
   selectedBlock: string;
   evidenceBlock: string;
   chunksBlock: string;
+  principleApplicationMap: string;
   userInput: string;
   workspaceProfile: string;
   recentExchanges: string;
@@ -80,7 +81,7 @@ function buildSystemPrompt(opts: {
   whySkeleton: string;
   openerHint: string;
 }) {
-  const { selectedBlock, evidenceBlock, chunksBlock, userInput, workspaceProfile, recentExchanges, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
+  const { selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, workspaceProfile, recentExchanges, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
   const sourceList = sourceTitles.length ? sourceTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n") : "  (none)";
   return `You are an elite sales Brain. You have been given multiple principles from DIFFERENT books and videos in the user's vault.
 
@@ -131,7 +132,16 @@ When you cite a source, use this exact format:
 or when naming a principle:
 The [Principle Name] (from "[Book Title]")
 
+PRINCIPLE NAMING RULE — NON-NEGOTIABLE:
+- Never write a generic sentence like "According to Source A combined with Source B" by itself.
+- Every time you name a source, immediately name the exact principle picked from that source and explain what that principle says.
+- The user must be able to see: source → principle name → what it teaches → how it is applied to this exact message.
+- Use at least 3 named principles when 3+ strong principles are available.
+
 The STRATEGY paragraph MUST open with this multi-source angle: ${openerHint}
+
+=== EXACT PRINCIPLES YOU MUST APPLY ===
+${principleApplicationMap}
 
 === REQUIRED WHY-THIS-WORKS SOURCE SLOTS ===
 Under WHY THIS WORKS, use this exact source rotation. Replace only [Point name] and [Explain]. Do NOT change source titles, drop slots, or cite the same source twice in a row.
@@ -143,7 +153,7 @@ RESPONSE FORMAT — USE THIS STRUCTURE EXACTLY:
 [1-2 punchy paragraphs of direct feedback. Name what is happening psychologically and what move the user should make. Cite at least 2 different sources inline.]
 
 THE STRATEGY: [Give the strategy a powerful name]
-[Explain the strategy using a principle from a DIFFERENT source than above.]
+[Name the exact principle(s) you picked, what each one teaches, and how you are applying it to this message.]
 (Source: "[Source 2]")
 
 THE REPLY (Copy & Paste this):
@@ -212,23 +222,37 @@ function distinctSourcesFor(
   return out.slice(0, max);
 }
 
-function buildWhySkeleton(sources: string[]): string {
-  if (sources.length === 0) {
-    return `"[Point name]": [Explain what this line is doing psychologically]\n(Source: "<source>")`;
+function buildWhySkeleton(items: { source_title?: string | null; principle_name?: string | null }[]): string {
+  if (items.length === 0) {
+    return `"[Point name]": [Explain what this line is doing psychologically using the named principle]\nPrinciple used: [Principle Name]\n(Source: "<source>")`;
   }
-  return sources
-    .map((s) => `"[Point name]": [Explain what this line is doing psychologically]\n(Source: "${s}")`)
+  return items
+    .map((item) => `"[Point name]": [Explain what this line is doing psychologically using ${item.principle_name || "this principle"}]\nPrinciple used: ${item.principle_name || "[Principle Name]"}\n(Source: "${item.source_title || "Uploaded content"}")`)
     .join("\n\n");
 }
 
 function buildOpenerHint(sources: string[]): string {
   if (sources.length >= 2) {
-    return `"According to **${sources[0]}** combined with **${sources[1]}**, ..." (you may add a third source in the same sentence if it fits)`;
+    return `"I’m applying [Principle Name] from **${sources[0]}** together with [Principle Name] from **${sources[1]}** because..."`;
   }
   if (sources.length === 1) {
-    return `"According to **${sources[0]}**, ..."`;
+    return `"I’m applying [Principle Name] from **${sources[0]}** because..."`;
   }
-  return `"According to **<source>**, ..."`;
+  return `"I’m applying [Principle Name] from **<source>** because..."`;
+}
+
+function buildPrincipleApplicationMap(selected: any[]): string {
+  if (!selected.length) return "(none)";
+  return selected.map((s, i) => {
+    const p = s.full || {};
+    const teaching = p.how_to_apply || p.what_i_learned || s.why_relevant || "Apply this principle directly to the current sales moment.";
+    const why = p.the_deep_why || p.when_to_use || s.why_relevant || "It fits the prospect psychology in the message.";
+    return `${i + 1}. SOURCE: "${s.source_title || p.source_name || "Uploaded content"}"
+   PRINCIPLE PICKED: ${s.principle_name || p.principle_name}
+   WHAT THIS PRINCIPLE SAYS: ${clampText(String(teaching), 260)}
+   HOW TO APPLY IT HERE: ${clampText(String(why), 220)}
+   TIER: ${s.tier || "primary"}`;
+  }).join("\n\n");
 }
 
 function namedSourcesInReply(content: string, sourceTitles: string[]): string[] {
@@ -312,7 +336,7 @@ serve(async (req) => {
       console.log("[brain-chat] image flow — running OCR on", lastUserImages.length, "image(s)");
       // OCR each image via the existing ocr-screenshot edge function
       const ocrTexts: string[] = [];
-      for (const img of lastUserImages.slice(0, 4)) {
+      for (const img of lastUserImages.slice(0, 10)) {
         try {
           let imageBase64 = "";
           let mimeType = "image/png";
@@ -431,7 +455,7 @@ serve(async (req) => {
     ].filter((x): x is string => !!x))];
 
     const distinctSources = distinctSourcesFor(pipeline.selected, pipeline.evidence_principles, 5);
-    const whySkeleton = buildWhySkeleton(distinctSources);
+    const whySkeleton = buildWhySkeleton(pipeline.selected.slice(0, 5));
     const openerHint = buildOpenerHint(distinctSources);
     const forcedSourceFooter = buildForcedSourceFooter(distinctSources.length >= 3 ? distinctSources : sourceTitles);
 
@@ -439,6 +463,7 @@ serve(async (req) => {
       selectedBlock: buildPrinciplesBlock(pipeline.selected),
       evidenceBlock: buildEvidenceBlock(pipeline.evidence_principles),
       chunksBlock: buildChunksBlock(pipeline.supporting_chunks),
+      principleApplicationMap: buildPrincipleApplicationMap(pipeline.selected),
       userInput: hasImageAttachment ? clampText(`${userInstruction}\n\n${conversationText}`, USER_INPUT_CHAR_LIMIT) : clampText(lastUserText || retrievalQuery, USER_INPUT_CHAR_LIMIT),
       workspaceProfile,
       recentExchanges: clampText(recentExchanges, RECENT_EXCHANGES_CHAR_LIMIT),
