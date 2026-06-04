@@ -887,6 +887,21 @@ export async function runPipelineFast(opts: {
       .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
   }
 
+  // If a screenshot/chat matches a PDF or video chunk, bring that source's
+  // extracted principles into the candidate pool too. Otherwise the model sees
+  // chunk text from a source but not the named principle that should be applied.
+  const chunkMatchedSourceIds = [...new Set(semC.map((c) => c.source_id).filter((x): x is string => !!x))].slice(0, 12);
+  if (chunkMatchedSourceIds.length) {
+    const { data: sourcePrinciples } = await supabaseAdmin.from("sales_brain")
+      .select(PRINCIPLE_SELECT)
+      .eq("user_id", userId)
+      .is("workspace_id", null)
+      .in("source_id", chunkMatchedSourceIds)
+      .order("relevance_score", { ascending: false, nullsFirst: false })
+      .limit(120);
+    semP = mergeByIdPriority(semP, (sourcePrinciples || []) as Principle[]);
+  }
+
   // Fallback if pgvector returned nothing: small static top-by-relevance pull (no full paging)
   if (semP.length === 0) {
     const { data } = await supabaseAdmin.from("sales_brain")
