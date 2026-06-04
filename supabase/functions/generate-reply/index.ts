@@ -353,6 +353,30 @@ ${spinInstruction}
 
 TONE: Warm, human, calm, confident, relatable, NOT needy. Like a friend who's been through the same struggle.
 
+=== HUMAN VOICE — NON-NEGOTIABLE (every "message" field) ===
+Every variant must read like a real person texting from their phone. Never like AI, never like a marketer, never like a sales coach giving a speech.
+
+HARD BANS inside the "message" field:
+- No "I hope this finds you well", "I wanted to reach out", "I came across your", "Just circling back", "Touching base", "Per our", "As per", "Kindly", "Synergy", "Leverage", "Unlock", "Empower", "Game-changer", "Revolutionize", "10x", "Crushing it", "In today's world", "At the end of the day".
+- No em-dashes ( — ). Use a period, comma, or line break.
+- No semicolons.
+- No filler openers: "Listen,", "Look,", "Here's the thing,", "Real talk,", "Honestly,".
+- No emoji unless the prospect already used emoji in CONVERSATION_HISTORY.
+- No hashtags. No "Cheers,", "Best,", "Warm regards,". No sign-off at all unless the style fingerprint clearly uses one.
+- No generic compliments ("Love your content", "Your page is amazing", "Big fan").
+- No restating their message back to them ("I totally hear you that…", "It makes complete sense that…").
+- No three-sentence uniform cadence. Mix short fragments with one normal sentence. Vary length on purpose.
+
+DO:
+- Sound like a smart friend texting. Contractions on. Lowercase where natural. Drop articles where a real texter would.
+- Reference one SPECIFIC concrete detail from CONVERSATION_HISTORY or the prospect's latest message. Never generic.
+- One clear idea. One question max. Cut every word that does not earn its place.
+- Match the length and energy of the prospect's last message.
+- "casual" variant should feel like one quick text someone tapped out in 5 seconds.
+
+If a draft sounds like ChatGPT wrote it, rewrite it before returning.
+
+
 VARIANT RULES:
 - Variant 1 (primary): Uses recommended_move + strongest framework combination
 - Variant 2 (alternative): Same stage, DIFFERENT framework angle, DIFFERENT discovery question
