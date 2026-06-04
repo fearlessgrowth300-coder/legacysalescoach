@@ -845,7 +845,12 @@ export default function AiChat() {
 
     // Update the edited message in DB
     if (msg.id) {
-      await supabase.from("ai_chat_messages").update({ content: editText, is_edited: true, image_url: primaryUrl }).eq("id", msg.id);
+      await supabase.from("ai_chat_messages").update({
+        content: editText,
+        is_edited: true,
+        image_url: primaryUrl,
+        metadata: allImageUrls.length ? { image_urls: allImageUrls } : {},
+      }).eq("id", msg.id);
     }
     // Remove all messages after the edited one — use current messages state snapshot
     if (activeConvId) {
@@ -866,7 +871,19 @@ export default function AiChat() {
     // Helper to download stored images as base64 for AI
     const downloadImageAsBase64Edit = async (storageUrl: string): Promise<string | null> => {
       try {
-        const match = storageUrl.match(/chat-screenshots\/(.+)$/);
+        if (storageUrl.startsWith("data:")) return storageUrl;
+        if (storageUrl.includes("/storage/v1/object/sign/")) {
+          const resp = await fetch(storageUrl);
+          if (!resp.ok) return null;
+          const blob = await resp.blob();
+          return await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          });
+        }
+        const match = storageUrl.match(/chat-screenshots\/([^?]+)/);
         if (!match) return null;
         const path = match[1];
         const { data, error } = await supabase.storage.from("chat-screenshots").download(path);
