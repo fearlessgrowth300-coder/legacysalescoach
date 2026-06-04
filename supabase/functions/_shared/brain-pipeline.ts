@@ -869,9 +869,11 @@ export async function runPipelineFast(opts: {
   let semC: Chunk[] = [];
   if (emb) {
     const embStr = JSON.stringify(emb);
+    // pgvector kNN scans the ENTIRE principle table (all 4,244+) via the embedding index
+    // and returns the top matches. Wide match_count + low threshold = broad coverage.
     const [pRes, cRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 60, match_threshold: 0.20, p_user_id: null }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 30, match_threshold: 0.20, p_user_id: null }),
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 250, match_threshold: 0.12, p_user_id: null }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 80, match_threshold: 0.12, p_user_id: null }),
     ]);
     semP = (pRes.data || [])
       .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
