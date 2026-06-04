@@ -901,8 +901,9 @@ export async function runPipelineFast(opts: {
   if (semP.length === 0) {
     const { data } = await supabaseAdmin.from("sales_brain")
       .select(PRINCIPLE_SELECT)
+      .eq("user_id", userId)
       .is("workspace_id", null)
-      .in("source_type", ["core_knowledge", "sales_principle"])
+      .in("source_type", ALLOWED_SOURCE_TYPES)
       .order("relevance_score", { ascending: false, nullsFirst: false })
       .limit(120);
     semP = (data || []) as Principle[];
