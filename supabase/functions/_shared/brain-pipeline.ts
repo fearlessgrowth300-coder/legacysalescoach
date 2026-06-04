@@ -957,7 +957,7 @@ export async function runPipelineFast(opts: {
     selected,
     contradictions: [],
     framework_name: "",
-    supporting_chunks: semC.slice(0, 8),
+    supporting_chunks: semC.slice(0, 12),
     evidence_principles: evidence,
     debug: {
       subqueries: [question.substring(0, 80)],
