@@ -48,9 +48,9 @@ export type SessionContext = {
 
 const RECENT_EXCHANGE_LIMIT = 4;
 const RECENT_EXCHANGE_CHAR_LIMIT = 280;
-const PRINCIPLES_BLOCK_CHAR_LIMIT = 2800;
-const EVIDENCE_BLOCK_CHAR_LIMIT = 2200;
-const CHUNKS_BLOCK_CHAR_LIMIT = 1200;
+const PRINCIPLES_BLOCK_CHAR_LIMIT = 5200;
+const EVIDENCE_BLOCK_CHAR_LIMIT = 4200;
+const CHUNKS_BLOCK_CHAR_LIMIT = 2000;
 
 function clampText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
@@ -869,9 +869,11 @@ export async function runPipelineFast(opts: {
   let semC: Chunk[] = [];
   if (emb) {
     const embStr = JSON.stringify(emb);
+    // pgvector kNN scans the ENTIRE principle table (all 4,244+) via the embedding index
+    // and returns the top matches. Wide match_count + low threshold = broad coverage.
     const [pRes, cRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 60, match_threshold: 0.20, p_user_id: null }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 30, match_threshold: 0.20, p_user_id: null }),
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 250, match_threshold: 0.12, p_user_id: null }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 80, match_threshold: 0.12, p_user_id: null }),
     ]);
     semP = (pRes.data || [])
       .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
@@ -905,7 +907,9 @@ export async function runPipelineFast(opts: {
   const scored = semP.map((p) => ({ p, score: localRelevanceScore(question, p) }))
     .sort((a, b) => b.score - a.score);
 
-  // Source-diverse top selection (round-robin, max 2 per source)
+  // Source-diverse top selection (round-robin, max 3 per source, broader pool)
+  const MAX_PER_SOURCE = 3;
+  const BALANCED_POOL = 28;
   const bySrc = new Map<string, { p: Principle; score: number }[]>();
   for (const s of scored) {
     const k = sourceKeyOf(s.p);
@@ -915,14 +919,16 @@ export async function runPipelineFast(opts: {
   const balanced: { p: Principle; score: number }[] = [];
   const queues = [...bySrc.values()];
   let progressed = true;
-  while (balanced.length < 16 && progressed) {
+  while (balanced.length < BALANCED_POOL && progressed) {
     progressed = false;
     for (const q of queues) {
-      const counts = balanced.filter((b) => sourceKeyOf(b.p) === sourceKeyOf(q[0]?.p || ({} as any))).length;
-      if (counts >= 2) continue;
+      if (!q.length) continue;
+      const srcKey = sourceKeyOf(q[0].p);
+      const counts = balanced.filter((b) => sourceKeyOf(b.p) === srcKey).length;
+      if (counts >= MAX_PER_SOURCE) continue;
       const n = q.shift();
       if (n) { balanced.push(n); progressed = true; }
-      if (balanced.length >= 16) break;
+      if (balanced.length >= BALANCED_POOL) break;
     }
   }
 
@@ -930,7 +936,8 @@ export async function runPipelineFast(opts: {
   const topScore = (balanced[0]?.score || 0) / 100;
 
   // Build SelectedPrinciple list directly — no LLM selection call
-  const selectedCount = Math.min(top.length, 6);
+  // 8 selected (3 primary + 5 supporting) covers more distinct sources
+  const selectedCount = Math.min(top.length, 8);
   const selected: SelectedPrinciple[] = top.slice(0, selectedCount).map((p, i) => ({
     id: p.id,
     principle_name: p.principle_name,
@@ -944,13 +951,13 @@ export async function runPipelineFast(opts: {
   }));
 
   const candidateSourceTitles = [...new Set(top.map((p) => sourceTitleOf(p)).filter(Boolean))];
-  const evidence = top.slice(selectedCount, selectedCount + 12);
+  const evidence = top.slice(selectedCount, selectedCount + 16);
 
   return {
     selected,
     contradictions: [],
     framework_name: "",
-    supporting_chunks: semC.slice(0, 8),
+    supporting_chunks: semC.slice(0, 12),
     evidence_principles: evidence,
     debug: {
       subqueries: [question.substring(0, 80)],
