@@ -72,6 +72,7 @@ function buildSystemPrompt(opts: {
   selectedBlock: string;
   evidenceBlock: string;
   chunksBlock: string;
+  principleApplicationMap: string;
   userInput: string;
   workspaceProfile: string;
   recentExchanges: string;
@@ -80,7 +81,7 @@ function buildSystemPrompt(opts: {
   whySkeleton: string;
   openerHint: string;
 }) {
-  const { selectedBlock, evidenceBlock, chunksBlock, userInput, workspaceProfile, recentExchanges, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
+  const { selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, workspaceProfile, recentExchanges, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
   const sourceList = sourceTitles.length ? sourceTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n") : "  (none)";
   return `You are an elite sales Brain. You have been given multiple principles from DIFFERENT books and videos in the user's vault.
 
@@ -131,7 +132,16 @@ When you cite a source, use this exact format:
 or when naming a principle:
 The [Principle Name] (from "[Book Title]")
 
+PRINCIPLE NAMING RULE — NON-NEGOTIABLE:
+- Never write a generic sentence like "According to Source A combined with Source B" by itself.
+- Every time you name a source, immediately name the exact principle picked from that source and explain what that principle says.
+- The user must be able to see: source → principle name → what it teaches → how it is applied to this exact message.
+- Use at least 3 named principles when 3+ strong principles are available.
+
 The STRATEGY paragraph MUST open with this multi-source angle: ${openerHint}
+
+=== EXACT PRINCIPLES YOU MUST APPLY ===
+${principleApplicationMap}
 
 === REQUIRED WHY-THIS-WORKS SOURCE SLOTS ===
 Under WHY THIS WORKS, use this exact source rotation. Replace only [Point name] and [Explain]. Do NOT change source titles, drop slots, or cite the same source twice in a row.
@@ -143,7 +153,7 @@ RESPONSE FORMAT — USE THIS STRUCTURE EXACTLY:
 [1-2 punchy paragraphs of direct feedback. Name what is happening psychologically and what move the user should make. Cite at least 2 different sources inline.]
 
 THE STRATEGY: [Give the strategy a powerful name]
-[Explain the strategy using a principle from a DIFFERENT source than above.]
+[Name the exact principle(s) you picked, what each one teaches, and how you are applying it to this message.]
 (Source: "[Source 2]")
 
 THE REPLY (Copy & Paste this):
