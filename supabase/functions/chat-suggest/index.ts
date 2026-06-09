@@ -112,6 +112,35 @@ function buildFrameworkConstraints(parsedFramework: any): string {
   return sections.join("\n");
 }
 
+function buildFallbackFirstMessages(prospect: any, profileText: string) {
+  const name = (prospect?.name || "there").split(" ")[0] || "there";
+  const platform = prospect?.platform === "tiktok" ? "TikTok" : "Instagram";
+  const profileHint = (profileText || prospect?.detected_interests || "your page").replace(/\s+/g, " ").slice(0, 140);
+  return [
+    {
+      id: 1,
+      type: "primary",
+      text: `Hey ${name}, random but I noticed the way you talk about ${profileHint} — are you building this around your own story or more around content ideas right now?`,
+      whyThisWorks: "Uses a specific profile-based observation, then asks an easy identity question instead of pitching.",
+      frameworkUsed: "Pattern Interrupt + Identity-Based + Micro-Commitment",
+    },
+    {
+      id: 2,
+      type: "alternative",
+      text: `I might be wrong, but your ${platform} gives off the vibe that you're trying to turn what you already know into something bigger. Is that actually the goal?`,
+      whyThisWorks: "Feels human and slightly curious while inviting them to correct or confirm the read.",
+      frameworkUsed: "Curiosity Gap + Pain/Dream/Gap + Micro-Commitment",
+    },
+    {
+      id: 3,
+      type: "softer",
+      text: `This may be a weird question, but what got you into posting about this in the first place?`,
+      whyThisWorks: "Low-pressure opener that asks for their story, which is easier to answer than a business question.",
+      frameworkUsed: "StoryBrand + Rapport Opener + Open Loop",
+    },
+  ];
+}
+
 function buildStyleInstructions(styleVector: any): string {
   if (!styleVector) return "";
 
@@ -571,6 +600,110 @@ serve(async (req) => {
     if (!prospect) {
       return new Response(JSON.stringify({ error: "Prospect not found" }), {
         status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (mode === "first_message") {
+      const { data: workspace } = await supabase
+        .from("workspaces")
+        .select("name, niche_description, products_detected, profile_analysis, default_reply_mode")
+        .eq("id", prospect.workspace_id)
+        .eq("user_id", user.id)
+        .single();
+
+      const profileContext = [
+        `Prospect: ${prospect.name}`,
+        prospect.platform ? `Platform: ${prospect.platform}` : "",
+        prospect.detected_interests ? `Bio/interests: ${prospect.detected_interests}` : "",
+        prospect.instagram_url ? `Instagram: ${prospect.instagram_url}` : "",
+        prospect.tiktok_url ? `TikTok: ${prospect.tiktok_url}` : "",
+        prospect.suggested_comment ? `Comment already left: ${prospect.suggested_comment}` : "",
+        prospect.target_video_caption ? `Target video/post: ${prospect.target_video_caption}` : "",
+        message ? `Profile scrape summary: ${message}` : "",
+      ].filter(Boolean).join("\n").substring(0, 3500);
+
+      const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+      let parsed: any = null;
+
+      if (LOVABLE_API_KEY) {
+        const firstMessagePrompt = `Create 3 first DM openers for this ${prospect.platform === "tiktok" ? "TikTok" : "Instagram"} prospect.
+
+MY CONTEXT:
+Business: ${workspace?.name || "Business"}
+Niche: ${workspace?.niche_description || "digital marketing"}
+Products: ${workspace?.products_detected || "not specified"}
+
+PROSPECT PROFILE:
+${profileContext}
+
+Rules:
+- Return ONLY valid JSON.
+- Each opener must feel human, short, and specific.
+- No generic praise like "love your content".
+- No pitch, no "I can help", no corporate words.
+- Use one concrete detail from the profile/video/bio when available.
+- One question max per opener.
+- Make each opener under 2 sentences.
+
+JSON shape:
+{"suggestions":[{"id":1,"type":"primary","text":"...","whyThisWorks":"...","frameworkUsed":"..."},{"id":2,"type":"alternative","text":"...","whyThisWorks":"...","frameworkUsed":"..."},{"id":3,"type":"softer","text":"...","whyThisWorks":"...","frameworkUsed":"..."}],"pushyWarning":null,"detectedTone":"profile_based","questioningPattern":"situation","frameworkApplied":"Pattern Interrupt + Specific Observation + Micro-Commitment","prospectType":"unknown","brainChunksUsed":[],"prospectFears":[],"prospectDreams":[],"conversionTriggers":[]}`;
+
+        try {
+          const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${LOVABLE_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "google/gemini-2.5-flash-lite",
+              messages: [
+                { role: "system", content: "You write natural first DMs. Return valid JSON only." },
+                { role: "user", content: firstMessagePrompt },
+              ],
+              temperature: 0.75,
+            }),
+          });
+
+          if (aiRes.ok) {
+            const aiData = await aiRes.json();
+            const content = aiData.choices?.[0]?.message?.content || "";
+            const jsonMatch = content.match(/\{[\s\S]*\}/);
+            parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+          } else {
+            console.warn("first_message fast path AI error", aiRes.status, await aiRes.text());
+          }
+        } catch (error) {
+          console.warn("first_message fast path parse/generation failed", error);
+        }
+      }
+
+      if (!parsed?.suggestions?.length) {
+        parsed = {
+          suggestions: buildFallbackFirstMessages(prospect, profileContext),
+          pushyWarning: null,
+          detectedTone: "profile_based",
+          questioningPattern: "situation",
+          frameworkApplied: "Pattern Interrupt + Specific Observation + Micro-Commitment",
+          prospectType: "unknown",
+          brainChunksUsed: [],
+          prospectFears: [],
+          prospectDreams: [],
+          conversionTriggers: [],
+        };
+      }
+
+      await supabase.from("prospects").update({
+        suggested_first_message: JSON.stringify(parsed.suggestions),
+        conversation_stage: prospect.conversation_stage || "first_contact",
+      }).eq("id", prospectId).eq("user_id", user.id);
+
+      parsed.conversationStage = prospect.conversation_stage || "first_contact";
+      parsed.learningResult = null;
+      parsed.brainRetrieval = { chunksRetrieved: 0, uniqueSources: 0, sources: [], insightsRetrieved: 0 };
+
+      return new Response(JSON.stringify(parsed), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
