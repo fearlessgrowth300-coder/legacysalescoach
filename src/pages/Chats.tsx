@@ -495,6 +495,7 @@ export default function Chats() {
       if (newProspectIg) {
         setIsGeneratingFirst(true);
         try {
+          let profileSummary = `Instagram profile URL: ${newProspectIg}. Prospect name entered: ${newProspectName}.`;
           const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
             body: { username: newProspectIg },
           });
@@ -507,23 +508,24 @@ export default function Chats() {
               name: igData.fullName || newProspectName,
             } as any).eq("id", data.id);
 
-            // Generate first message using AI — pass full profile summary
-            const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
-              body: {
-                prospectId: data.id,
-                message: igData.summary || `Instagram profile: @${igData.username}. Bio: ${igData.biography || "N/A"}. Followers: ${igData.followersCount || "N/A"}. Category: ${igData.businessCategory || "N/A"}. Posts: ${igData.postsCount || 0}. ${igData.recentPosts?.map((p: any, i: number) => `Post ${i+1}: "${p.caption}" (${p.likes} likes)`).join(". ") || ""}`,
-                threadType: currentThreadType,
-                mode: "first_message",
-              },
-            });
-            if (suggestData?.suggestions) {
-              generatedSuggestions = suggestData.suggestions;
-              setFirstMessageSuggestions(suggestData.suggestions);
-              // Persist to prospect so auto-load effect can recover after navigation
-              await supabase.from("prospects").update({
-                suggested_first_message: JSON.stringify(suggestData.suggestions),
-              }).eq("id", data.id);
-            }
+            profileSummary = igData.summary || `Instagram profile: @${igData.username}. Bio: ${igData.biography || "N/A"}. Followers: ${igData.followersCount || "N/A"}. Category: ${igData.businessCategory || "N/A"}. Posts: ${igData.postsCount || 0}. ${igData.recentPosts?.map((p: any, i: number) => `Post ${i+1}: "${p.caption}" (${p.likes} likes)`).join(". ") || ""}`;
+          }
+
+          const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
+            body: {
+              prospectId: data.id,
+              message: profileSummary,
+              threadType: currentThreadType,
+              mode: "first_message",
+            },
+          });
+          if (suggestData?.suggestions) {
+            generatedSuggestions = suggestData.suggestions;
+            setFirstMessageSuggestions(suggestData.suggestions);
+            // Persist to prospect so auto-load effect can recover after navigation
+            await supabase.from("prospects").update({
+              suggested_first_message: JSON.stringify(suggestData.suggestions),
+            }).eq("id", data.id);
           }
         } catch (e) {
           console.error("Instagram auto-fetch error:", e);
