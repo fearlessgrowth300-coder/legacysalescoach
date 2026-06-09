@@ -71,6 +71,7 @@ export default function Chats() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
   const bulkScreenshotInputRef = useRef<HTMLInputElement>(null);
+  const autoFirstMessageAttempted = useRef<Record<string, boolean>>({});
 
   const getInitials = (name: string) => {
     return name.split(" ").map(w => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
@@ -176,6 +177,49 @@ export default function Chats() {
       }
     }
   }, [selectedProspectId, selectedProspect, messages]);
+
+  useEffect(() => {
+    if (!selectedProspectId || !selectedProspect || !messages || messages.length > 0 || suggestions.length > 0 || isGeneratingFirst) return;
+    if (autoFirstMessageAttempted.current[selectedProspectId]) return;
+
+    const prospect = selectedProspect as any;
+    if (prospect.suggested_first_message) return;
+    if (!prospect.instagram_url && !prospect.tiktok_url && !prospect.detected_interests) return;
+
+    autoFirstMessageAttempted.current[selectedProspectId] = true;
+    setIsGeneratingFirst(true);
+
+    const profileMessage = [
+      prospect.platform ? `Platform: ${prospect.platform}` : "",
+      prospect.name ? `Name: ${prospect.name}` : "",
+      prospect.detected_interests ? `Bio/interests: ${prospect.detected_interests}` : "",
+      prospect.instagram_url ? `Instagram URL: ${prospect.instagram_url}` : "",
+      prospect.tiktok_url ? `TikTok URL: ${prospect.tiktok_url}` : "",
+      prospect.target_video_caption ? `Target video/post: ${prospect.target_video_caption}` : "",
+      prospect.suggested_comment ? `Comment already used: ${prospect.suggested_comment}` : "",
+    ].filter(Boolean).join("\n");
+
+    supabase.functions.invoke("chat-suggest", {
+      body: {
+        prospectId: selectedProspectId,
+        message: profileMessage,
+        threadType: currentThreadType,
+        mode: "first_message",
+      },
+    }).then(({ data, error }) => {
+      if (error) throw error;
+      if (data?.suggestions?.length) {
+        setSuggestions(data.suggestions);
+        setPushyWarning(data.pushyWarning || null);
+        queryClient.invalidateQueries({ queryKey: ["selected-prospect", selectedProspectId] });
+        queryClient.invalidateQueries({ queryKey: ["prospects"] });
+      }
+    }).catch((error) => {
+      console.error("Auto first-message recovery failed:", error);
+    }).finally(() => {
+      setIsGeneratingFirst(false);
+    });
+  }, [selectedProspectId, selectedProspect, messages, suggestions.length, isGeneratingFirst, currentThreadType, queryClient]);
 
   useEffect(() => {
     scrollToBottom();
