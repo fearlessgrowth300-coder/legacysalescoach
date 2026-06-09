@@ -112,6 +112,35 @@ function buildFrameworkConstraints(parsedFramework: any): string {
   return sections.join("\n");
 }
 
+function buildFallbackFirstMessages(prospect: any, profileText: string) {
+  const name = (prospect?.name || "there").split(" ")[0] || "there";
+  const platform = prospect?.platform === "tiktok" ? "TikTok" : "Instagram";
+  const profileHint = (profileText || prospect?.detected_interests || "your page").replace(/\s+/g, " ").slice(0, 140);
+  return [
+    {
+      id: 1,
+      type: "primary",
+      text: `Hey ${name}, random but I noticed the way you talk about ${profileHint} — are you building this around your own story or more around content ideas right now?`,
+      whyThisWorks: "Uses a specific profile-based observation, then asks an easy identity question instead of pitching.",
+      frameworkUsed: "Pattern Interrupt + Identity-Based + Micro-Commitment",
+    },
+    {
+      id: 2,
+      type: "alternative",
+      text: `I might be wrong, but your ${platform} gives off the vibe that you're trying to turn what you already know into something bigger. Is that actually the goal?`,
+      whyThisWorks: "Feels human and slightly curious while inviting them to correct or confirm the read.",
+      frameworkUsed: "Curiosity Gap + Pain/Dream/Gap + Micro-Commitment",
+    },
+    {
+      id: 3,
+      type: "softer",
+      text: `This may be a weird question, but what got you into posting about this in the first place?`,
+      whyThisWorks: "Low-pressure opener that asks for their story, which is easier to answer than a business question.",
+      frameworkUsed: "StoryBrand + Rapport Opener + Open Loop",
+    },
+  ];
+}
+
 function buildStyleInstructions(styleVector: any): string {
   if (!styleVector) return "";
 
