@@ -144,30 +144,31 @@ serve(async (req) => {
       { data: brainInsights },
       queryEmbedding,
     ] = await Promise.all([
-      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+      supabase.from("sales_brain")
         .select(PRINCIPLE_SELECT)
         .is("workspace_id", null)
         .in("source_type", ["core_knowledge", "sales_principle"])
         .order("relevance_score", { ascending: false, nullsFirst: false })
-        .range(from, to)),
-      fetchAllRows<any>((from, to) => supabase.from("sales_brain")
+        .limit(150).then(r => r.data || []),
+      supabase.from("sales_brain")
         .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false, nullsFirst: false })
-        .range(from, to)),
-      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .limit(200).then(r => r.data || []),
+      supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
         .is("workspace_id", null)
         .eq("source_type", "core_knowledge")
         .order("relevance_score", { ascending: false })
-        .range(from, to), 3000),
-      fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
+        .limit(150).then(r => r.data || []),
+      supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ["core_knowledge", "content", "video", "pdf"])
         .order("relevance_score", { ascending: false })
-        .range(from, to), 3000),
+        .limit(200).then(r => r.data || []),
+
       supabase.from("knowledge_chunks")
         .select("id, content, category, source_type, trigger_phrases, source_id, created_at")
         .eq("user_id", user.id).eq("workspace_id", prospect.workspace_id)
