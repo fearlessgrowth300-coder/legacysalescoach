@@ -1038,7 +1038,37 @@ JSON shape:
       return { ...sp, matchScore: score };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-    const topPrinciples = sourceBalancedTake(scoredPrinciples, 2, principlesCap);
+    let topPrinciples = sourceBalancedTake(scoredPrinciples, 2, principlesCap);
+
+    // ─── ANTI-REPETITION ROTATION ───
+    // The AI gravitates to the first few principles it sees. Rotate the pool
+    // on every call so different (still-relevant) principles surface to the top,
+    // and shuffle the tail so the same 2-3 sources don't dominate every reply.
+    if (topPrinciples.length > 6) {
+      const head = topPrinciples.slice(0, 4); // keep top semantic matches first
+      const tail = topPrinciples.slice(4);
+      // Fisher-Yates shuffle of tail
+      for (let i = tail.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [tail[i], tail[j]] = [tail[j], tail[i]];
+      }
+      // Rotate head by a random offset so a different "primary" principle leads
+      const offset = Math.floor(Math.random() * head.length);
+      const rotatedHead = [...head.slice(offset), ...head.slice(0, offset)];
+      topPrinciples = [...rotatedHead, ...tail];
+    }
+
+    // Build a unique-source roster the AI MUST distribute across the 3 suggestions
+    const uniqueSourceRoster: string[] = [];
+    const seenSources = new Set<string>();
+    for (const p of topPrinciples) {
+      const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : (p.source_name || "unknown");
+      if (!seenSources.has(src)) {
+        seenSources.add(src);
+        uniqueSourceRoster.push(`"${src}" → ${p.principle_name}`);
+      }
+      if (uniqueSourceRoster.length >= 12) break;
+    }
 
     // Categorize sources for metadata
     const sourceTypes = new Set<string>();
