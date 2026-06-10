@@ -1261,13 +1261,19 @@ C) WHERE THEY ARE in the funnel (opener, rapport, pain, offer, close)
 D) WHAT WOULD ACTUALLY MOVE THEM — the ONE psychological lever that fits THIS specific buyer (not a generic principle)
 Then pick principles that match THIS buyer type, NOT the same go-to principles you always reach for.
 
-=== HARD DIVERSITY RULE — NON-NEGOTIABLE ===
+=== HARD DIVERSITY + GROUNDING RULE — NON-NEGOTIABLE ===
 The 3 suggestions MUST come from 3 DIFFERENT source files AND 3 DIFFERENT principles.
-DO NOT use "Income and Personal Development Link", "Patience Coupled with Urgency", or "Future Self Action Close" in more than ONE suggestion.
-DO NOT use the same source file (e.g. "Go Pro 7 Steps") for more than ONE of the three suggestions.
-Pick from this fresh source roster — distribute across at least 3 different sources:
+You MUST pick from the ranked roster below. It is ordered by how well each principle matches THIS specific incoming message — top of the list = strongest match. Prefer the top entries unless they truly don't fit the buyer type.
+
+For every suggestion, in "whyThisWorks" you MUST:
+  1) Name the SOURCE in quotes.
+  2) Name the exact PRINCIPLE.
+  3) Quote or paraphrase the SPECIFIC LEARNING from that principle (the "WHAT IT SAYS" line) and explain in one sentence HOW you applied it to this message.
+Never say only "According to <Source> combined with <Source>" without stating the principle's actual lesson.
+
+RANKED ROSTER (best match to the incoming message first):
 ${diversitySourceList}
-If a roster item doesn't fit this buyer type, skip it and pick a different one — but you MUST end up with 3 different sources and 3 different principles.
+If a roster item doesn't fit this buyer type, skip it and pick the next-best one — but you MUST end up with 3 different sources and 3 different principles, each grounded in its real lesson above.
 
 MULTI-FRAMEWORK REQUIREMENTS:
 Every reply MUST layer AT LEAST 2 frameworks from different layers:
