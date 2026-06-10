@@ -991,83 +991,79 @@ JSON shape:
       return selected.length >= limit ? selected : [...selected, ...overflow].slice(0, limit);
     }
 
-    const queryTerms = brainQuery.toLowerCase().split(/\s+/).filter((t) => t.length > 3);
+    // ─── MESSAGE-FOCUSED RELEVANCE SCORING ───
+    // Score against the INCOMING MESSAGE itself (what they just said) — not
+    // a rotation, not random. Whichever principle/chunk actually matches the
+    // message wins. We combine: (a) semantic similarity from pgvector,
+    // (b) keyword overlap with the prospect's last message, (c) overlap with
+    // recent thread context as a tiebreaker.
+    const messageTerms = (message || "").toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .split(/\s+/)
+      .filter((t) => t.length > 3);
+    const contextTerms = last3Messages.toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .split(/\s+/)
+      .filter((t) => t.length > 3);
 
-    // Diverse core chunks (max 4 per source)
+    function scoreAgainstMessage(text: string, semanticScore: number): number {
+      const lower = text.toLowerCase();
+      let score = semanticScore * 5; // semantic similarity is the strongest signal
+      for (const term of messageTerms) if (lower.includes(term)) score += 4; // direct hit on incoming message
+      for (const term of contextTerms) if (lower.includes(term)) score += 1; // recent thread context
+      return score;
+    }
+
+    // Diverse core chunks (max 4 per source) then re-score against the message
     const diverseCoreChunks = diversityRerank(dedupedCoreChunks, "source_id", 4);
-
-    // Score workspace chunks with higher priority weight
     const scoredWorkspaceChunks = (wsConvoChunks || []).map((chunk: any, idx: number) => {
-      const text = `${chunk.content || ""} ${chunk.trigger_phrases || ""}`.toLowerCase();
-      let score = 6 - Math.min(idx, 5); // recency bias for workspace memory
-      queryTerms.forEach((term) => {
-        if (text.includes(term)) score += 2;
-      });
-      return { ...chunk, matchScore: score };
+      const text = `${chunk.content || ""} ${chunk.trigger_phrases || ""}`;
+      const recency = Math.max(0, 6 - idx);
+      const matchScore = scoreAgainstMessage(text, 0) + recency;
+      return { ...chunk, matchScore };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-    // Score core chunks separately
     const scoredCoreChunks = diverseCoreChunks.map((chunk: any) => {
-      const text = `${chunk.content || ""} ${chunk.trigger_phrases || ""}`.toLowerCase();
-      let score = 0;
-      queryTerms.forEach((term) => {
-        if (text.includes(term)) score += 1;
-      });
-      return { ...chunk, matchScore: score };
+      const text = `${chunk.content || ""} ${chunk.trigger_phrases || ""}`;
+      const sem = chunk._semantic ? (chunk.relevance_score || 0) / 100 : 0;
+      return { ...chunk, matchScore: scoreAgainstMessage(text, sem) };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-    // Force workspace-first retrieval so friend replies stay in user style/framework
-    const workspaceFirst = scoredWorkspaceChunks.slice(0, 25);
-    
+    const workspaceFirst = scoredWorkspaceChunks.slice(0, 20);
+
     // Dynamic retrieval caps: scale with total KB items
     const kbCount = kbItems?.length || 0;
     const chunksCap = Math.min(Math.max(35, kbCount * 8), 150);
     const principlesCap = Math.min(Math.max(60, kbCount * 10), 200);
-    
+
     const remainingSlots = Math.max(chunksCap - workspaceFirst.length, 15);
     const topChunks = [...workspaceFirst, ...scoredCoreChunks.slice(0, remainingSlots)].slice(0, chunksCap);
 
-    // Diverse principles (max 5 per source), then score to current query
-    const diversePrinciples = diversityRerank(dedupedPrinciples, "source_id", 5);
-    const scoredPrinciples = diversePrinciples.map((sp: any) => {
-      const text = `${sp.principle_name || ""} ${sp.what_i_learned || ""} ${sp.how_to_apply || ""}`.toLowerCase();
-      let score = 0;
-      queryTerms.forEach((term) => {
-        if (text.includes(term)) score += 1;
-      });
-      return { ...sp, matchScore: score };
+    // Score EVERY principle against the incoming message. No rotation, no shuffle.
+    const scoredPrinciples = dedupedPrinciples.map((sp: any) => {
+      const text = `${sp.principle_name || ""} ${sp.what_i_learned || ""} ${sp.how_to_apply || ""} ${sp.when_to_use || ""} ${sp.exact_words_to_use || ""}`;
+      const sem = sp._semantic ? (sp.relevance_score || 0) / 100 : 0;
+      return { ...sp, matchScore: scoreAgainstMessage(text, sem) };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-    let topPrinciples = sourceBalancedTake(scoredPrinciples, 2, principlesCap);
+    // Keep diverse sources (≤2 per source) but ordered strictly by message relevance.
+    const topPrinciples = sourceBalancedTake(scoredPrinciples, 2, principlesCap);
 
-    // ─── ANTI-REPETITION ROTATION ───
-    // The AI gravitates to the first few principles it sees. Rotate the pool
-    // on every call so different (still-relevant) principles surface to the top,
-    // and shuffle the tail so the same 2-3 sources don't dominate every reply.
-    if (topPrinciples.length > 6) {
-      const head = topPrinciples.slice(0, 4); // keep top semantic matches first
-      const tail = topPrinciples.slice(4);
-      // Fisher-Yates shuffle of tail
-      for (let i = tail.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [tail[i], tail[j]] = [tail[j], tail[i]];
-      }
-      // Rotate head by a random offset so a different "primary" principle leads
-      const offset = Math.floor(Math.random() * head.length);
-      const rotatedHead = [...head.slice(offset), ...head.slice(0, offset)];
-      topPrinciples = [...rotatedHead, ...tail];
-    }
-
-    // Build a unique-source roster the AI MUST distribute across the 3 suggestions
+    // Build a unique-source roster ranked by relevance — one entry per source,
+    // showing the BEST-MATCHING principle + a snippet so the AI can ground the
+    // reply in the actual learning (not just the source name).
     const uniqueSourceRoster: string[] = [];
     const seenSources = new Set<string>();
     for (const p of topPrinciples) {
       const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : (p.source_name || "unknown");
-      if (!seenSources.has(src)) {
-        seenSources.add(src);
-        uniqueSourceRoster.push(`"${src}" → ${p.principle_name}`);
-      }
-      if (uniqueSourceRoster.length >= 12) break;
+      if (seenSources.has(src)) continue;
+      seenSources.add(src);
+      const learning = (p.what_i_learned || "").replace(/\s+/g, " ").trim().substring(0, 220);
+      const apply = (p.how_to_apply || "").replace(/\s+/g, " ").trim().substring(0, 160);
+      uniqueSourceRoster.push(
+        `"${src}" → PRINCIPLE: ${p.principle_name}\n      WHAT IT SAYS: ${learning}${apply ? `\n      HOW TO APPLY: ${apply}` : ""}`
+      );
+      if (uniqueSourceRoster.length >= 10) break;
     }
 
     // Categorize sources for metadata
