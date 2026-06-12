@@ -16,8 +16,26 @@ function getCorsHeaders(req: Request) {
 
 const MAX_MESSAGE_LENGTH = 4000;
 const PAGE_SIZE = 1000;
-const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score";
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
 const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, relevance_score";
+const MAX_SOURCE_COVERAGE_FILES = 32;
+
+const STOP_TERMS = new Set([
+  "about", "after", "again", "also", "because", "being", "could", "doing", "from", "have", "here", "into", "just", "like", "more", "most", "much", "need", "only", "over", "really", "same", "should", "that", "their", "them", "then", "there", "these", "they", "thing", "this", "those", "through", "very", "want", "were", "what", "when", "where", "which", "with", "would", "your", "youre", "you", "she", "her", "him", "his", "was", "are", "the", "and", "for", "not", "but", "all", "can", "how", "why", "who", "its", "it"
+]);
+
+function extractMeaningfulTerms(text: string, maxTerms = 48): string[] {
+  const counts = new Map<string, number>();
+  for (const raw of (text || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)) {
+    const term = raw.trim();
+    if (term.length < 4 || STOP_TERMS.has(term)) continue;
+    counts.set(term, (counts.get(term) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+    .slice(0, maxTerms)
+    .map(([term]) => term);
+}
 
 async function fetchAllRows<T>(
   queryPage: (from: number, to: number) => Promise<{ data: T[] | null; error?: any }>,
