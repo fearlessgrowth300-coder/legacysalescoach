@@ -462,7 +462,11 @@ VARIANT RULES:
 - Variant 2 (alternative): Same stage, DIFFERENT framework angle, DIFFERENT discovery question
 - Variant 3 (casual): Shortest, most natural, single powerful question + one framework technique
 
-MANDATORY CITATION (NON-NEGOTIABLE): Every variant MUST cite the EXACT principle from SALES_BRAIN_PRINCIPLES that it leans on, plus its source. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES — never invent. Prefer the highest-Power principle that fits.
+MANDATORY CITATION + DIVERSITY (NON-NEGOTIABLE): Every variant MUST cite the EXACT principle from SALES_BRAIN_PRINCIPLES that it leans on, plus its source. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES — never invent.
+- The 3 variants MUST use 3 DIFFERENT source files and 3 DIFFERENT principle names whenever at least 3 sources are present in SALES_BRAIN_PRINCIPLES.
+- Do NOT keep defaulting to OBJECTION CRUSHER or Go Pro. Pick the principle whose actual lesson best matches the latest prospect message and buyer psychology.
+- In why_this_works, state the principle's actual lesson and how you applied it. Never only say "from Source A combined with Source B".
+- Final check before returning JSON: if two variants share the same cited_source_name or cited_principle_name, rewrite the weaker one using the next matching source from SALES_BRAIN_PRINCIPLES.
 
 Return JSON only:
 { "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "...", "principle_applied": "...", "cited_principle_name": "<exact principle_name from SALES_BRAIN_PRINCIPLES>", "cited_source_name": "<exact Source from SALES_BRAIN_PRINCIPLES>", "why_this_works": "References technique from your Brain: [Principle Name] — [Why it applies]. Frameworks used: [list]", "warmth_prediction": <number>, "frameworks_used": ["SPIN-Implication", "PAS", "Voss-Mirroring"] }] }${styleModifierInstruction}`;
