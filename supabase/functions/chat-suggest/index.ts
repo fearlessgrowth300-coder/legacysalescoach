@@ -911,30 +911,32 @@ JSON shape:
 
     const personaData = workspacePersonaRows?.[0]?.metadata || null;
     const sourceCoverageIds = (kbItems || []).map((k: any) => k.id).filter(Boolean).slice(0, MAX_SOURCE_COVERAGE_FILES);
-    let sourceCoverageKnowledge: any[] = [];
-    let sourceCoveragePrinciples: any[] = [];
-    if (sourceCoverageIds.length > 0) {
-      const [coverageChunks, coveragePrinciples] = await Promise.all([
+    const [sourceCoverageKnowledgeNested, sourceCoveragePrinciplesNested] = await Promise.all([
+      Promise.all(sourceCoverageIds.map((sourceId: string) =>
         supabase.from("knowledge_chunks")
           .select(CHUNK_SELECT)
           .eq("user_id", user.id)
           .is("workspace_id", null)
-          .in("source_id", sourceCoverageIds)
+          .eq("source_id", sourceId)
           .in("source_type", ["core_knowledge", "content", "video", "pdf", "sales_principle"])
           .order("relevance_score", { ascending: false, nullsFirst: false })
-          .limit(260),
+          .limit(4)
+          .then((r: any) => r.data || [])
+      )),
+      Promise.all(sourceCoverageIds.map((sourceId: string) =>
         supabase.from("sales_brain")
           .select(PRINCIPLE_SELECT)
           .eq("user_id", user.id)
           .is("workspace_id", null)
-          .in("source_id", sourceCoverageIds)
+          .eq("source_id", sourceId)
           .in("source_type", ["core_knowledge", "sales_principle", "content", "video", "pdf"])
           .order("relevance_score", { ascending: false, nullsFirst: false })
-          .limit(320),
-      ]);
-      sourceCoverageKnowledge = coverageChunks.data || [];
-      sourceCoveragePrinciples = coveragePrinciples.data || [];
-    }
+          .limit(5)
+          .then((r: any) => r.data || [])
+      )),
+    ]);
+    const sourceCoverageKnowledge = sourceCoverageKnowledgeNested.flat();
+    const sourceCoveragePrinciples = sourceCoveragePrinciplesNested.flat();
 
     const brainKnowledge = mergeByIdPriority(sourceCoverageKnowledge, mergeByIdPriority(userBrainKnowledge, globalBrainKnowledge));
     const salesPrinciples = mergeByIdPriority(sourceCoveragePrinciples, mergeByIdPriority(userSalesPrinciples, globalSalesPrinciples));
@@ -1041,14 +1043,8 @@ JSON shape:
     // message wins. We combine: (a) semantic similarity from pgvector,
     // (b) keyword overlap with the prospect's last message, (c) overlap with
     // recent thread context as a tiebreaker.
-    const messageTerms = (message || "").toLowerCase()
-      .replace(/[^\w\s]/g, " ")
-      .split(/\s+/)
-      .filter((t) => t.length > 3);
-    const contextTerms = last3Messages.toLowerCase()
-      .replace(/[^\w\s]/g, " ")
-      .split(/\s+/)
-      .filter((t) => t.length > 3);
+    const messageTerms = extractMeaningfulTerms(message);
+    const contextTerms = extractMeaningfulTerms(last3Messages);
 
     function scoreAgainstMessage(text: string, semanticScore: number): number {
       const lower = text.toLowerCase();
