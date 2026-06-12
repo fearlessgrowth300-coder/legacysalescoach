@@ -910,8 +910,34 @@ JSON shape:
     ]);
 
     const personaData = workspacePersonaRows?.[0]?.metadata || null;
-    const brainKnowledge = mergeByIdPriority(globalBrainKnowledge, userBrainKnowledge);
-    const salesPrinciples = mergeByIdPriority(globalSalesPrinciples, userSalesPrinciples);
+    const sourceCoverageIds = (kbItems || []).map((k: any) => k.id).filter(Boolean).slice(0, MAX_SOURCE_COVERAGE_FILES);
+    let sourceCoverageKnowledge: any[] = [];
+    let sourceCoveragePrinciples: any[] = [];
+    if (sourceCoverageIds.length > 0) {
+      const [coverageChunks, coveragePrinciples] = await Promise.all([
+        supabase.from("knowledge_chunks")
+          .select(CHUNK_SELECT)
+          .eq("user_id", user.id)
+          .is("workspace_id", null)
+          .in("source_id", sourceCoverageIds)
+          .in("source_type", ["core_knowledge", "content", "video", "pdf", "sales_principle"])
+          .order("relevance_score", { ascending: false, nullsFirst: false })
+          .limit(260),
+        supabase.from("sales_brain")
+          .select(PRINCIPLE_SELECT)
+          .eq("user_id", user.id)
+          .is("workspace_id", null)
+          .in("source_id", sourceCoverageIds)
+          .in("source_type", ["core_knowledge", "sales_principle", "content", "video", "pdf"])
+          .order("relevance_score", { ascending: false, nullsFirst: false })
+          .limit(320),
+      ]);
+      sourceCoverageKnowledge = coverageChunks.data || [];
+      sourceCoveragePrinciples = coveragePrinciples.data || [];
+    }
+
+    const brainKnowledge = mergeByIdPriority(sourceCoverageKnowledge, mergeByIdPriority(userBrainKnowledge, globalBrainKnowledge));
+    const salesPrinciples = mergeByIdPriority(sourceCoveragePrinciples, mergeByIdPriority(userSalesPrinciples, globalSalesPrinciples));
 
     // ─── SEMANTIC RPC CALLS (if embedding succeeded) ───
     let semanticPrinciples: any[] = [];
@@ -921,22 +947,22 @@ JSON shape:
       const [semPrinciples, semChunks] = await Promise.all([
         supabase.rpc("match_sales_brain", {
           query_embedding: embeddingStr,
-          match_count: 80,
-          match_threshold: 0.3,
-          p_user_id: null,
+          match_count: 220,
+          match_threshold: 0.12,
+          p_user_id: user.id,
         }),
         supabase.rpc("match_knowledge_chunks", {
           query_embedding: embeddingStr,
-          match_count: 60,
-          match_threshold: 0.3,
-          p_user_id: null,
+          match_count: 160,
+          match_threshold: 0.12,
+          p_user_id: user.id,
         }),
       ]);
       semanticPrinciples = (semPrinciples.data || [])
-        .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type))
+        .filter((p: any) => ["core_knowledge", "sales_principle", "content", "video", "pdf"].includes(p.source_type))
         .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
       semanticChunks = (semChunks.data || [])
-        .filter((c: any) => c.source_type === "core_knowledge")
+        .filter((c: any) => ["core_knowledge", "content", "video", "pdf", "sales_principle"].includes(c.source_type))
         .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
     }
 
