@@ -16,8 +16,26 @@ function getCorsHeaders(req: Request) {
 
 const MAX_MESSAGE_LENGTH = 4000;
 const PAGE_SIZE = 1000;
-const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score";
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
 const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, relevance_score";
+const MAX_SOURCE_COVERAGE_FILES = 32;
+
+const STOP_TERMS = new Set([
+  "about", "after", "again", "also", "because", "being", "could", "doing", "from", "have", "here", "into", "just", "like", "more", "most", "much", "need", "only", "over", "really", "same", "should", "that", "their", "them", "then", "there", "these", "they", "thing", "this", "those", "through", "very", "want", "were", "what", "when", "where", "which", "with", "would", "your", "youre", "you", "she", "her", "him", "his", "was", "are", "the", "and", "for", "not", "but", "all", "can", "how", "why", "who", "its", "it"
+]);
+
+function extractMeaningfulTerms(text: string, maxTerms = 48): string[] {
+  const counts = new Map<string, number>();
+  for (const raw of (text || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)) {
+    const term = raw.trim();
+    if (term.length < 4 || STOP_TERMS.has(term)) continue;
+    counts.set(term, (counts.get(term) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+    .slice(0, maxTerms)
+    .map(([term]) => term);
+}
 
 async function fetchAllRows<T>(
   queryPage: (from: number, to: number) => Promise<{ data: T[] | null; error?: any }>,
@@ -892,8 +910,36 @@ JSON shape:
     ]);
 
     const personaData = workspacePersonaRows?.[0]?.metadata || null;
-    const brainKnowledge = mergeByIdPriority(globalBrainKnowledge, userBrainKnowledge);
-    const salesPrinciples = mergeByIdPriority(globalSalesPrinciples, userSalesPrinciples);
+    const sourceCoverageIds = (kbItems || []).map((k: any) => k.id).filter(Boolean).slice(0, MAX_SOURCE_COVERAGE_FILES);
+    const [sourceCoverageKnowledgeNested, sourceCoveragePrinciplesNested] = await Promise.all([
+      Promise.all(sourceCoverageIds.map((sourceId: string) =>
+        supabase.from("knowledge_chunks")
+          .select(CHUNK_SELECT)
+          .eq("user_id", user.id)
+          .is("workspace_id", null)
+          .eq("source_id", sourceId)
+          .in("source_type", ["core_knowledge", "content", "video", "pdf", "sales_principle"])
+          .order("relevance_score", { ascending: false, nullsFirst: false })
+          .limit(4)
+          .then((r: any) => r.data || [])
+      )),
+      Promise.all(sourceCoverageIds.map((sourceId: string) =>
+        supabase.from("sales_brain")
+          .select(PRINCIPLE_SELECT)
+          .eq("user_id", user.id)
+          .is("workspace_id", null)
+          .eq("source_id", sourceId)
+          .in("source_type", ["core_knowledge", "sales_principle", "content", "video", "pdf"])
+          .order("relevance_score", { ascending: false, nullsFirst: false })
+          .limit(5)
+          .then((r: any) => r.data || [])
+      )),
+    ]);
+    const sourceCoverageKnowledge = sourceCoverageKnowledgeNested.flat();
+    const sourceCoveragePrinciples = sourceCoveragePrinciplesNested.flat();
+
+    const brainKnowledge = mergeByIdPriority(sourceCoverageKnowledge, mergeByIdPriority(userBrainKnowledge, globalBrainKnowledge));
+    const salesPrinciples = mergeByIdPriority(sourceCoveragePrinciples, mergeByIdPriority(userSalesPrinciples, globalSalesPrinciples));
 
     // ─── SEMANTIC RPC CALLS (if embedding succeeded) ───
     let semanticPrinciples: any[] = [];
@@ -903,22 +949,22 @@ JSON shape:
       const [semPrinciples, semChunks] = await Promise.all([
         supabase.rpc("match_sales_brain", {
           query_embedding: embeddingStr,
-          match_count: 80,
-          match_threshold: 0.3,
-          p_user_id: null,
+          match_count: 220,
+          match_threshold: 0.12,
+          p_user_id: user.id,
         }),
         supabase.rpc("match_knowledge_chunks", {
           query_embedding: embeddingStr,
-          match_count: 60,
-          match_threshold: 0.3,
-          p_user_id: null,
+          match_count: 160,
+          match_threshold: 0.12,
+          p_user_id: user.id,
         }),
       ]);
       semanticPrinciples = (semPrinciples.data || [])
-        .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type))
+        .filter((p: any) => ["core_knowledge", "sales_principle", "content", "video", "pdf"].includes(p.source_type))
         .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
       semanticChunks = (semChunks.data || [])
-        .filter((c: any) => c.source_type === "core_knowledge")
+        .filter((c: any) => ["core_knowledge", "content", "video", "pdf", "sales_principle"].includes(c.source_type))
         .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
     }
 
@@ -997,14 +1043,8 @@ JSON shape:
     // message wins. We combine: (a) semantic similarity from pgvector,
     // (b) keyword overlap with the prospect's last message, (c) overlap with
     // recent thread context as a tiebreaker.
-    const messageTerms = (message || "").toLowerCase()
-      .replace(/[^\w\s]/g, " ")
-      .split(/\s+/)
-      .filter((t) => t.length > 3);
-    const contextTerms = last3Messages.toLowerCase()
-      .replace(/[^\w\s]/g, " ")
-      .split(/\s+/)
-      .filter((t) => t.length > 3);
+    const messageTerms = extractMeaningfulTerms(message);
+    const contextTerms = extractMeaningfulTerms(last3Messages);
 
     function scoreAgainstMessage(text: string, semanticScore: number): number {
       const lower = text.toLowerCase();
