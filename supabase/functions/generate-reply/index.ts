@@ -194,30 +194,99 @@ serve(async (req) => {
       embeddingPromise,
     ]);
 
+    const kbMap: Record<string, string> = {};
+    (kbItems || []).forEach((k: any) => { kbMap[k.id] = k.title; });
+
+    const sourceCoverageIds = (kbItems || []).map((k: any) => k.id).filter(Boolean).slice(0, MAX_SOURCE_COVERAGE_FILES);
+    const [sourceCoveragePrinciplesNested, sourceCoverageChunksNested] = await Promise.all([
+      Promise.all(sourceCoverageIds.map((sourceId: string) =>
+        supabase.from("sales_brain")
+          .select(PRINCIPLE_SELECT)
+          .eq("user_id", user.id)
+          .is("workspace_id", null)
+          .eq("source_id", sourceId)
+          .in("source_type", ALLOWED_SOURCE_TYPES)
+          .order("relevance_score", { ascending: false, nullsFirst: false })
+          .limit(5)
+          .then((r: any) => r.data || [])
+      )),
+      Promise.all(sourceCoverageIds.map((sourceId: string) =>
+        supabase.from("knowledge_chunks")
+          .select(CHUNK_SELECT)
+          .eq("user_id", user.id)
+          .is("workspace_id", null)
+          .eq("source_id", sourceId)
+          .in("source_type", ALLOWED_SOURCE_TYPES)
+          .order("relevance_score", { ascending: false, nullsFirst: false })
+          .limit(4)
+          .then((r: any) => r.data || [])
+      )),
+    ]);
+    const sourceCoveragePrinciples = sourceCoveragePrinciplesNested.flat();
+    const sourceCoverageChunks = sourceCoverageChunksNested.flat();
+
     // Semantic search
     let semanticPrinciples: any[] = [];
     let semanticChunks: any[] = [];
     if (queryEmbedding) {
       const embStr = JSON.stringify(queryEmbedding);
       const [semP, semC] = await Promise.all([
-        supabase.rpc("match_sales_brain", { query_embedding: embStr, match_count: 80, match_threshold: 0.3, p_user_id: null }),
-        supabase.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 60, match_threshold: 0.3, p_user_id: null }),
+        supabase.rpc("match_sales_brain", { query_embedding: embStr, match_count: 260, match_threshold: 0.12, p_user_id: user.id }),
+        supabase.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 180, match_threshold: 0.12, p_user_id: user.id }),
       ]);
       semanticPrinciples = (semP.data || [])
-        .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type))
+        .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
         .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
       semanticChunks = (semC.data || [])
-        .filter((c: any) => c.source_type === "core_knowledge")
+        .filter((c: any) => ALLOWED_SOURCE_TYPES.includes(c.source_type))
         .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
     }
 
-    // Merge + deduplicate + diversity rerank
-    const allPrinciples = mergeByIdPriority(globalPrinciples, userPrinciples);
-    const allChunks = mergeByIdPriority(globalChunks, userChunks);
+    // Merge + deduplicate + message-focused source-balanced ranking
+    const allPrinciples = mergeByIdPriority(sourceCoveragePrinciples, mergeByIdPriority(userPrinciples, globalPrinciples));
+    const allChunks = mergeByIdPriority(sourceCoverageChunks, mergeByIdPriority(userChunks, globalChunks));
     const mergedPrinciples = deduplicatePrinciples(mergeByIdPriority(semanticPrinciples, allPrinciples), "relevance_score");
     const mergedChunks = deduplicateChunks(mergeByIdPriority(semanticChunks, allChunks), "relevance_score");
-    const diversePrinciples = diversityRerank(mergedPrinciples, "source_id", 5);
-    const diverseChunks = diversityRerank(mergedChunks, "source_id", 4);
+
+    const messageTerms = extractMeaningfulTerms(`${message} ${last3}`);
+    function sourceNameFor(item: any) {
+      return item.source_id && kbMap[item.source_id] ? kbMap[item.source_id] : (item.source_name || item.source_type || "unknown");
+    }
+    function scoreAgainstMessage(text: string, semanticScore: number): number {
+      const lower = (text || "").toLowerCase();
+      let score = semanticScore * 8;
+      for (const term of messageTerms) if (lower.includes(term)) score += 5;
+      return score;
+    }
+    function sourceBalancedTake(items: any[], maxPerSource: number, limit: number) {
+      const counts: Record<string, number> = {};
+      const selected: any[] = [];
+      const overflow: any[] = [];
+      for (const item of items) {
+        const key = sourceNameFor(item);
+        const count = counts[key] || 0;
+        if (count < maxPerSource) {
+          counts[key] = count + 1;
+          selected.push(item);
+        } else {
+          overflow.push(item);
+        }
+        if (selected.length >= limit) break;
+      }
+      return selected.length >= limit ? selected : [...selected, ...overflow].slice(0, limit);
+    }
+
+    const scoredPrinciples = mergedPrinciples.map((p: any) => {
+      const text = `${p.principle_name || ""} ${p.what_i_learned || ""} ${p.how_to_apply || ""} ${p.when_to_use || ""} ${p.exact_words_to_use || ""} ${p.the_deep_why || ""}`;
+      const sem = p._semantic ? (p.relevance_score || 0) / 100 : 0;
+      return { ...p, matchScore: scoreAgainstMessage(text, sem) };
+    }).sort((a: any, b: any) => b.matchScore - a.matchScore);
+
+    const scoredChunks = diversityRerank(mergedChunks, "source_id", 2).map((c: any) => {
+      const text = `${c.content || ""} ${c.trigger_phrases || ""}`;
+      const sem = c._semantic ? (c.relevance_score || 0) / 100 : 0;
+      return { ...c, matchScore: scoreAgainstMessage(text, sem) };
+    }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
     const kbCount = kbItems?.length || 0;
     const principlesCap = Math.min(Math.max(60, kbCount * 10), 200);
@@ -226,11 +295,8 @@ serve(async (req) => {
     // Workspace-first retrieval
     const wsFirst = (wsConvoChunks || []).slice(0, 25);
     const remaining = Math.max(chunksCap - wsFirst.length, 15);
-    const topChunks = [...wsFirst, ...diverseChunks.slice(0, remaining)].slice(0, chunksCap);
-    const topPrinciples = diversePrinciples.slice(0, principlesCap);
-
-    const kbMap: Record<string, string> = {};
-    (kbItems || []).forEach((k: any) => { kbMap[k.id] = k.title; });
+    const topChunks = [...wsFirst, ...sourceBalancedTake(scoredChunks, 3, remaining)].slice(0, chunksCap);
+    const topPrinciples = sourceBalancedTake(scoredPrinciples, 2, principlesCap);
 
     // Format brain principles for prompt
     const principlesText = topPrinciples.length > 0
