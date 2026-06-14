@@ -409,11 +409,23 @@ serve(async (req) => {
       retrievalQuery = `Latest user message / pasted chat:\n${clampText(lastUserText || "(no text)", USER_INPUT_CHAR_LIMIT)}\n\nRecent context:\n${clampText(recentForBrief || "(none)", RECENT_EXCHANGES_CHAR_LIMIT)}\n\nSearch focus: prospect psychology, hidden objection, conversation stage, sales framework, exact reply script, strategic breakdown, source-diverse principles.`;
     }
 
+    // Clean text for the semantic embedding — the user's ACTUAL message (or, for
+    // screenshots, the extracted situation sentence), never the boilerplate
+    // retrieval template. This is what makes each question pull different,
+    // genuinely relevant principles instead of the same ones every time.
+    const cleanMsg = (lastUserText || "").trim();
+    const embedQuery = hasImageAttachment
+      ? retrievalQuery // already a clean 1-sentence situation description
+      : (cleanMsg.length >= 12
+          ? cleanMsg
+          : clampText(`${cleanMsg}\n\n${recentForBrief}`.trim(), 800));
+
     // ─── Layers 1+2 (FAST path — keeps us under the 2s CPU budget) ───
     const pipeline = await runPipelineFast({
       supabaseAdmin,
       userId: user.id,
       question: retrievalQuery,
+      embedQuery,
       session,
     });
 

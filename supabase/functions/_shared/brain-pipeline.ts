@@ -857,12 +857,24 @@ export async function runPipelineFast(opts: {
   supabaseAdmin: any;
   userId: string;
   question: string;
+  /**
+   * Clean text to build the semantic embedding from — should be the user's
+   * actual message (and minimal real context), NOT the boilerplate retrieval
+   * template. The template is identical on every turn, so embedding it makes
+   * every search land on the same vectors → same principles every time.
+   * `question` is still used for lexical/keyword scoring (its boilerplate words
+   * are already filtered out via STOP_WORDS).
+   */
+  embedQuery?: string;
   session: SessionContext;
 }): Promise<PipelineOutput> {
   const { supabaseAdmin, userId, question, session } = opts;
+  const embedText = (opts.embedQuery && opts.embedQuery.trim().length > 0)
+    ? opts.embedQuery
+    : question;
 
-  // Single embedding over the trimmed question
-  const emb = await generateEmbedding(question.substring(0, 1500));
+  // Single embedding over the clean message (not the templated wrapper)
+  const emb = await generateEmbedding(embedText.substring(0, 1500));
   const embeddingUsed = !!emb;
 
   let semP: Principle[] = [];
