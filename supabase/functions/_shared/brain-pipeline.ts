@@ -594,7 +594,7 @@ deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
   const relevantPool = relevantCandidates.length >= 3 ? relevantCandidates : candidates;
   const uniqueSources = new Set(relevantPool.map((c) => sourceKeyOf(c)).filter(Boolean));
   const sourceDiversityHint = uniqueSources.size >= 3
-    ? `Candidates span ${uniqueSources.size} different sources — your selection MUST include at least 3 different source titles. This is non-negotiable when the diversity exists.`
+    ? `Candidates span ${uniqueSources.size} different sources. Weave 2-3 of them WHEN they genuinely fit — but relevance comes first. Never swap a better-fitting principle for a weaker one just to add a source.`
     : `Candidates only cover ${uniqueSources.size} source(s) — use what's available.`;
 
   const sessionLine = session.active_framework_name
@@ -610,10 +610,10 @@ Pick TWO TIERS:
   • PRIMARY (2-5): the principles that MUST drive the answer. These define the core strategy. Pick AT LEAST 2 when the candidates support it.
   • SUPPORTING (1-4): principles that reinforce, contrast, add a tactical layer, or supply scripts. They strengthen the primaries.
 
-CRITICAL DIVERSITY RULE:
+SOURCE STRATEGY — RELEVANCE FIRST:
   - ${sourceDiversityHint}
-  - Pick principles from AT LEAST 3 DIFFERENT source titles whenever the candidates allow it. The user uploaded many books/videos and expects the reply to weave them together — not parrot a single source.
-  - Prefer principles whose categories complement each other (e.g. mindset + objection handling + closing) over three from the same category.
+  - The single most important thing is picking the principles that BEST fit this exact message. A precise answer drawn from one or two sources beats a scattered answer stitched from five.
+  - When several sources fit equally well, prefer weaving 2-3 of them and complementary categories (e.g. mindset + objection handling + closing) — but only when they truly apply. Do not parrot a single source when better-fitting options exist, and never force an off-topic source in.
 
 Rules:
   - Explain why each in one short sentence.
@@ -712,10 +712,10 @@ Rules:
   const selectedSourceKeys = new Set(
     selected.map((s) => sourceKeyOf(s)).filter(Boolean) as string[]
   );
-  if (selectedSourceKeys.size < 3 && uniqueSources.size >= 3) {
+  if (selectedSourceKeys.size < 2 && uniqueSources.size >= 3) {
     for (const cand of relevantPool) {
       if (selected.length >= 7) break;
-      if (selectedSourceKeys.size >= 3 && selected.length >= 5) break;
+      if (selectedSourceKeys.size >= 2 && selected.length >= 5) break;
       if (seen.has(cand.id)) continue;
       const key = sourceKeyOf(cand);
       if (!key || selectedSourceKeys.has(key)) continue;
@@ -735,9 +735,10 @@ Rules:
     }
   }
 
-  // ─── HARD 2-per-source cap ─────────────────────────────────────────
-  // Evict any 3rd+ principle from the same source; swap in the top-ranked
-  // candidate from a source not yet represented. Guarantees multi-source mix.
+  // ─── SOFT 3-per-source cap ─────────────────────────────────────────
+  // Evict any 4th+ principle from the same source; swap in the top-ranked
+  // candidate from a source not yet represented. Prevents a single source from
+  // monopolising the reply, while still allowing up to 3 strong picks from it.
   if (uniqueSources.size >= 3) {
     const perSource = new Map<string, number>();
     const kept: SelectedPrinciple[] = [];
@@ -745,7 +746,7 @@ Rules:
     for (const s of selected) {
       const key = sourceKeyOf(s);
       const n = perSource.get(key) || 0;
-      if (n < 2) {
+      if (n < 3) {
         perSource.set(key, n + 1);
         kept.push(s);
       } else {
@@ -780,12 +781,13 @@ Rules:
     selected.push(...kept);
   }
 
-  // Final safety net: if selection still has fewer than 3 sources, append the
-  // best unseen candidates from missing sources even when nothing was evicted.
+  // Final safety net: ensure the reply isn't trapped on a single source. If it
+  // still has fewer than 2 sources, append the best unseen candidate from another
+  // source — but we no longer force a 3rd source when relevance doesn't support it.
   if (uniqueSources.size >= 3) {
     const selectedKeys = new Set(selected.map((s) => sourceKeyOf(s)).filter(Boolean));
     for (const cand of relevantPool) {
-      if (selectedKeys.size >= 3 || selected.length >= 7) break;
+      if (selectedKeys.size >= 2 || selected.length >= 7) break;
       if (seen.has(cand.id)) continue;
       const key = sourceKeyOf(cand);
       if (!key || selectedKeys.has(key)) continue;
@@ -866,9 +868,17 @@ export async function runPipelineFast(opts: {
    * are already filtered out via STOP_WORDS).
    */
   embedQuery?: string;
+  /**
+   * When provided, the fast path runs the AI reasoning selection (selectPrinciples)
+   * so the model actually reads the message and picks the best-fitting principles —
+   * wrapped in a timeout so it can never blow the edge CPU budget. Falls back to the
+   * local relevance+power selection if reasoning is slow or unavailable.
+   */
+  apiKey?: string;
   session: SessionContext;
 }): Promise<PipelineOutput> {
   const { supabaseAdmin, userId, question, session } = opts;
+  const apiKey = opts.apiKey;
   const embedText = (opts.embedQuery && opts.embedQuery.trim().length > 0)
     ? opts.embedQuery
     : question;
@@ -931,60 +941,89 @@ export async function runPipelineFast(opts: {
     for (const c of semC) c.source_title = c.source_id ? (titleById.get(c.source_id) || null) : null;
   }
 
-  // Local rerank: combine semantic similarity + lexical fit
-  const scored = semP.map((p) => ({ p, score: localRelevanceScore(question, p) }))
+  // Local rerank: relevance (semantic + lexical) BOOSTED by proven power_level.
+  // Power lifts principles the books/videos rated highly (8-10/10) without ever
+  // overriding relevance — it only nudges already-relevant matches up.
+  const scoreOf = (p: Principle): number => {
+    const base = localRelevanceScore(question, p);
+    const power = typeof p.power_level === "number" ? p.power_level : 6;
+    const powerBoost = clamp(power - 5, 0, 5) * 2; // +0 (avg) … +10 (10/10)
+    return clamp(base + powerBoost, 0, 100);
+  };
+  const scored = semP.map((p) => ({ p, score: scoreOf(p) }))
     .sort((a, b) => b.score - a.score);
 
-  // Source-diverse top selection (round-robin, max 3 per source, broader pool)
-  const MAX_PER_SOURCE = 3;
-  const BALANCED_POOL = 28;
-  const bySrc = new Map<string, { p: Principle; score: number }[]>();
-  for (const s of scored) {
-    const k = sourceKeyOf(s.p);
-    if (!bySrc.has(k)) bySrc.set(k, []);
-    bySrc.get(k)!.push(s);
-  }
+  // Relevance-first ordering with a SOFT source cap. We keep the strongest-fitting
+  // principles in score order; a single source may contribute up to SOFT_SOURCE_CAP
+  // so it can't fully monopolise, but we never drop a better match to force variety.
+  const SOFT_SOURCE_CAP = 4;
+  const POOL = 28;
+  const perSrc = new Map<string, number>();
   const balanced: { p: Principle; score: number }[] = [];
-  const queues = [...bySrc.values()];
-  let progressed = true;
-  while (balanced.length < BALANCED_POOL && progressed) {
-    progressed = false;
-    for (const q of queues) {
-      if (!q.length) continue;
-      const srcKey = sourceKeyOf(q[0].p);
-      const counts = balanced.filter((b) => sourceKeyOf(b.p) === srcKey).length;
-      if (counts >= MAX_PER_SOURCE) continue;
-      const n = q.shift();
-      if (n) { balanced.push(n); progressed = true; }
-      if (balanced.length >= BALANCED_POOL) break;
+  for (const s of scored) {
+    if (balanced.length >= POOL) break;
+    const k = sourceKeyOf(s.p);
+    const used = perSrc.get(k) || 0;
+    if (used >= SOFT_SOURCE_CAP) continue;
+    perSrc.set(k, used + 1);
+    balanced.push(s);
+  }
+  // If the cap left the pool short (few distinct sources), top up purely by score.
+  if (balanced.length < POOL) {
+    const have = new Set(balanced.map((b) => b.p.id));
+    for (const s of scored) {
+      if (balanced.length >= POOL) break;
+      if (!have.has(s.p.id)) { balanced.push(s); have.add(s.p.id); }
     }
   }
 
   const top = balanced.map((b) => ({ ...b.p, _retrieval_score: b.score }));
   const topScore = (balanced[0]?.score || 0) / 100;
 
-  // Build SelectedPrinciple list directly — no LLM selection call
-  // 8 selected (3 primary + 5 supporting) covers more distinct sources
-  const selectedCount = Math.min(top.length, 8);
-  const selected: SelectedPrinciple[] = top.slice(0, selectedCount).map((p, i) => ({
-    id: p.id,
-    principle_name: p.principle_name,
-    source_id: p.source_id,
-    source_title: sourceTitleOf(p),
-    source_url: null,
-    source_type: p.source_type,
-    why_relevant: `Uses "${p.principle_name}" from ${sourceTitleOf(p)} because it teaches: ${(p.how_to_apply || p.what_i_learned || "apply this principle to the current sales moment").slice(0, 220)}`,
-    tier: i < 3 ? "primary" : "supporting",
-    full: p,
-  }));
+  // ─── Smart selection: let the model actually read the message and pick ───
+  // Runs only for substantial messages, capped by a timeout so it can never
+  // blow the edge CPU budget. Falls back to the local relevance+power pick.
+  let selected: SelectedPrinciple[] = [];
+  let framework_name = "";
+  let usedReasoning = false;
+  const reasoningQuestion = embedText.trim() || question;
+  const substantial = reasoningQuestion.trim().length >= 12;
+  if (apiKey && substantial && top.length >= 3) {
+    const reasoning = await Promise.race([
+      selectPrinciples(apiKey, reasoningQuestion, top.slice(0, 18), session),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    if (reasoning && reasoning.selected.length >= 2) {
+      selected = reasoning.selected.slice(0, 8);
+      framework_name = reasoning.framework_name || "";
+      usedReasoning = true;
+    }
+  }
+
+  if (!usedReasoning) {
+    // Local fallback: top 8 by relevance+power (3 primary + 5 supporting)
+    const selectedCount = Math.min(top.length, 8);
+    selected = top.slice(0, selectedCount).map((p, i) => ({
+      id: p.id,
+      principle_name: p.principle_name,
+      source_id: p.source_id,
+      source_title: sourceTitleOf(p),
+      source_url: null,
+      source_type: p.source_type,
+      why_relevant: `Uses "${p.principle_name}" from ${sourceTitleOf(p)} because it teaches: ${(p.how_to_apply || p.what_i_learned || "apply this principle to the current sales moment").slice(0, 220)}`,
+      tier: i < 3 ? "primary" : "supporting",
+      full: p,
+    }));
+  }
 
   const candidateSourceTitles = [...new Set(top.map((p) => sourceTitleOf(p)).filter(Boolean))];
-  const evidence = top.slice(selectedCount, selectedCount + 16);
+  const selectedIds = new Set(selected.map((s) => s.id));
+  const evidence = top.filter((p) => !selectedIds.has(p.id)).slice(0, 16);
 
   return {
     selected,
     contradictions: [],
-    framework_name: "",
+    framework_name,
     supporting_chunks: semC.slice(0, 12),
     evidence_principles: evidence,
     debug: {

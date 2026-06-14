@@ -426,6 +426,7 @@ serve(async (req) => {
       userId: user.id,
       question: retrievalQuery,
       embedQuery,
+      apiKey: LOVABLE_API_KEY,
       session,
     });
 
