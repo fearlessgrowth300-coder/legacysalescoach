@@ -1349,7 +1349,31 @@ export default function KnowledgeBase() {
                   )}
                   {item.status === "ready" && (
                     <>
-                      {getInsightCountForItem(item.id) === 0 && (
+                      {retryProgress[item.id] ? (
+                        <div className="mt-3 pt-3 border-t space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Loader2 className="h-4 w-4 animate-spin text-amber-500 shrink-0" />
+                              <span className="text-xs font-medium truncate">
+                                {retryProgress[item.id].phase === "fetching" && "Fetching transcript…"}
+                                {retryProgress[item.id].phase === "extracting" && "Extracting principles…"}
+                                {retryProgress[item.id].phase === "saving" && "Saving to brain…"}
+                                {retryProgress[item.id].phase === "done" && "Done"}
+                              </span>
+                            </div>
+                            <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">
+                              {retryProgress[item.id].count} principles · {Math.floor((Date.now() - retryProgress[item.id].startedAt) / 1000)}s
+                            </span>
+                          </div>
+                          <Progress
+                            value={retryProgress[item.id].phase === "done" ? 100 : undefined}
+                            className={retryProgress[item.id].phase === "done" ? "h-1.5" : "h-1.5 animate-pulse"}
+                          />
+                          {retryProgress[item.id].note && (
+                            <p className="text-[11px] text-muted-foreground">{retryProgress[item.id].note}</p>
+                          )}
+                        </div>
+                      ) : getInsightCountForItem(item.id) === 0 && (
                         <div className="mt-3 pt-3 border-t flex items-center justify-between gap-2">
                           <p className="text-xs text-muted-foreground">
                             No principles extracted yet.
@@ -1370,6 +1394,7 @@ export default function KnowledgeBase() {
                           </Button>
                         </div>
                       )}
+
                       <div
                         className="mt-3 pt-3 border-t cursor-pointer hover:bg-accent/50 rounded-b-lg transition-colors -mx-3 -mb-3 sm:-mx-6 sm:-mb-4 px-3 pb-3 sm:px-6 sm:pb-4"
                         onClick={async () => {
