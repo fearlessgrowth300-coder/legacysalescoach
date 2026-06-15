@@ -119,16 +119,20 @@ export default function BrainStats() {
   const handleRepairSearch = async () => {
     if (isRepairing) return;
     setIsRepairing(true);
-    toast.info("Repairing search — adding meaning-vectors to your principles. This can take a minute...");
+    toast.info("Repairing search — adding meaning-vectors to your principles...");
     try {
       let totalBrain = 0;
       let totalChunks = 0;
-      for (let i = 0; i < 200; i++) {
-        const { data, error } = await supabase.functions.invoke("reprocess-brain", {
-          body: { mode: "backfill" },
-        });
+      for (let i = 0; i < 60; i++) {
+        // Dedicated, NON-DESTRUCTIVE function only. Never call reprocess-brain here.
+        const { data, error } = await supabase.functions.invoke("backfill-embeddings");
         if (error) throw error;
         if (data?.error) throw new Error(data.error);
+        // SAFETY: only a real backfill response has a boolean `done`. If we get
+        // anything else, stop immediately — never loop a non-backfill response.
+        if (typeof data?.done !== "boolean") {
+          throw new Error("Backfill isn't deployed yet. No changes were made — try again later.");
+        }
         totalBrain += data.updatedBrain || 0;
         totalChunks += data.updatedChunks || 0;
         const remaining = (data.remainingBrain || 0) + (data.remainingChunks || 0);
