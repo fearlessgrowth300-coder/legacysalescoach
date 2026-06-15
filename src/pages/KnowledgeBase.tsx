@@ -567,8 +567,48 @@ export default function KnowledgeBase() {
     onError: (e: any) => toast.error(e.message || "Failed to delete all"),
   });
 
+  // Live re-extraction progress (per item id)
+  const [retryProgress, setRetryProgress] = useState<
+    Record<string, { phase: "fetching" | "extracting" | "saving" | "done"; count: number; startedAt: number; note?: string }>
+  >({});
+
+  // Poll sales_brain count for items that are actively re-extracting so the
+  // UI shows principles arriving in real time.
+  useEffect(() => {
+    const ids = Object.keys(retryProgress).filter((id) => retryProgress[id].phase !== "done");
+    if (ids.length === 0) return;
+    const t = setInterval(async () => {
+      for (const id of ids) {
+        const { count } = await supabase
+          .from("sales_brain")
+          .select("id", { count: "exact", head: true })
+          .eq("source_id", id);
+        setRetryProgress((p) => {
+          const cur = p[id];
+          if (!cur) return p;
+          const newCount = count || 0;
+          const nextPhase = newCount > 0 ? "extracting" : cur.phase;
+          return { ...p, [id]: { ...cur, count: newCount, phase: nextPhase } };
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
+    }, 2000);
+    return () => clearInterval(t);
+  }, [Object.keys(retryProgress).filter((id) => retryProgress[id].phase !== "done").join(",")]);
+
   const retryItem = useMutation({
     mutationFn: async (item: any) => {
+      // Show progress immediately — fetching transcript for URLs, extracting for PDFs
+      setRetryProgress((p) => ({
+        ...p,
+        [item.id]: {
+          phase: item.type === "pdf" ? "extracting" : "fetching",
+          count: 0,
+          startedAt: Date.now(),
+          note: item.type === "pdf" ? "Reading PDF…" : "Fetching YouTube transcript…",
+        },
+      }));
+
       // Wipe stale derived data so re-extraction produces fresh principles
       // (otherwise dedup may suppress new inserts for the same source).
       await Promise.all([
@@ -581,6 +621,13 @@ export default function KnowledgeBase() {
         .from("knowledge_base_items")
         .update({ status: "processing", book_brief: null })
         .eq("id", item.id);
+
+      // Move to extracting phase once we hand off to the edge function.
+      setRetryProgress((p) =>
+        p[item.id]
+          ? { ...p, [item.id]: { ...p[item.id], phase: "extracting", note: "Extracting principles…" } }
+          : p,
+      );
 
       // Re-invoke processing. Do NOT pass manualTranscript for URLs so the
       // edge function re-fetches the YouTube transcript fresh.
@@ -600,18 +647,37 @@ export default function KnowledgeBase() {
       if (result.error || result.data?.error) {
         throw new Error(result.data?.error || result.error?.message || "Processing failed");
       }
-      return result;
+      return { result, itemId: item.id };
     },
-    onSuccess: (result: any) => {
+    onSuccess: ({ result, itemId }: any) => {
       const count = result?.data?.learnings?.length ?? 0;
+      setRetryProgress((p) =>
+        p[itemId]
+          ? { ...p, [itemId]: { ...p[itemId], phase: "done", count: count || p[itemId].count, note: "Done" } }
+          : p,
+      );
+      // Auto-clear the inline indicator after a beat
+      setTimeout(() => {
+        setRetryProgress((p) => {
+          const { [itemId]: _gone, ...rest } = p;
+          return rest;
+        });
+      }, 3000);
       toast.success(count > 0 ? `Extracted ${count} principles` : "Re-extraction queued — refreshing…");
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
       queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
       queryClient.invalidateQueries({ queryKey: ["brain-total"] });
       startPolling();
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (e: any, item: any) => {
+      setRetryProgress((p) => {
+        const { [item.id]: _gone, ...rest } = p;
+        return rest;
+      });
+      toast.error(e.message);
+    },
   });
+
 
   const getStatusIcon = (status: string) => {
     if (status === "ready") return <CheckCircle2 className="h-4 w-4 text-green-500" />;
