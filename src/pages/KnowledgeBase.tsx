@@ -569,10 +569,21 @@ export default function KnowledgeBase() {
 
   const retryItem = useMutation({
     mutationFn: async (item: any) => {
-      // Reset status to processing
-      await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", item.id);
-      
-      // Re-invoke processing
+      // Wipe stale derived data so re-extraction produces fresh principles
+      // (otherwise dedup may suppress new inserts for the same source).
+      await Promise.all([
+        supabase.from("sales_brain").delete().eq("source_id", item.id),
+        supabase.from("knowledge_chunks").delete().eq("source_id", item.id),
+      ]);
+
+      // Reset status + clear any cached book_brief so the pipeline starts clean
+      await supabase
+        .from("knowledge_base_items")
+        .update({ status: "processing", book_brief: null })
+        .eq("id", item.id);
+
+      // Re-invoke processing. Do NOT pass manualTranscript for URLs so the
+      // edge function re-fetches the YouTube transcript fresh.
       const body: any = { itemId: item.id, type: item.type };
       if (item.type === "pdf" && item.file_path) {
         body.filePath = item.file_path;
@@ -591,10 +602,12 @@ export default function KnowledgeBase() {
       }
       return result;
     },
-    onSuccess: () => {
-      toast.success("Retrying processing...");
+    onSuccess: (result: any) => {
+      const count = result?.data?.learnings?.length ?? 0;
+      toast.success(count > 0 ? `Extracted ${count} principles` : "Re-extraction queued — refreshing…");
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
       queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
+      queryClient.invalidateQueries({ queryKey: ["brain-total"] });
       startPolling();
     },
     onError: (e: any) => toast.error(e.message),
