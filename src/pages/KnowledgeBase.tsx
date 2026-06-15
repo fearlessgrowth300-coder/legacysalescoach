@@ -170,24 +170,32 @@ export default function KnowledgeBase() {
   const loadAllLearnings = async () => {
     setAllLearningsLoading(true);
     try {
-      const pageSize = 1000;
+      const pageSize = 500;
       let from = 0;
       const collected: any[] = [];
-      while (from < 10000) {
-        const { data, error } = await supabase
+      while (from < 20000) {
+        let query = supabase
           .from("sales_brain")
           .select(LEARNING_COLUMNS)
           .order("created_at", { ascending: false })
           .range(from, from + pageSize - 1);
-        if (error) throw error;
+        if (user?.id) query = query.eq("user_id", user.id);
+        const { data, error } = await query;
+        if (error) {
+          console.error("loadAllLearnings page error:", error);
+          throw error;
+        }
         if (!data || data.length === 0) break;
         collected.push(...data);
         if (data.length < pageSize) break;
         from += pageSize;
       }
+      console.log(`loadAllLearnings: loaded ${collected.length} principles`);
       setAllLearnings(collected);
     } catch (e: any) {
+      console.error("loadAllLearnings failed:", e);
       toast.error(e.message || "Failed to load learnings");
+      setAllLearnings([]);
     } finally {
       setAllLearningsLoading(false);
     }
