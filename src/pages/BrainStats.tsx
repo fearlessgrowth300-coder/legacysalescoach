@@ -18,6 +18,7 @@ export default function BrainStats() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [isReprocessing, setIsReprocessing] = useState(false);
+  const [isRepairing, setIsRepairing] = useState(false);
 
   const { data: chunks, isLoading } = useQuery({
     queryKey: ["brain-chunks"],
@@ -112,6 +113,37 @@ export default function BrainStats() {
     }
   };
 
+  // Repair Search: backfill missing embeddings so semantic search works.
+  // Non-destructive — only adds vectors to existing principles/chunks. Loops the
+  // edge function (which processes a batch per call) until it reports done.
+  const handleRepairSearch = async () => {
+    if (isRepairing) return;
+    setIsRepairing(true);
+    toast.info("Repairing search — adding meaning-vectors to your principles. This can take a minute...");
+    try {
+      let totalBrain = 0;
+      let totalChunks = 0;
+      for (let i = 0; i < 200; i++) {
+        const { data, error } = await supabase.functions.invoke("backfill-embeddings");
+        if (error) throw error;
+        if (data?.error) throw new Error(data.error);
+        totalBrain += data.updatedBrain || 0;
+        totalChunks += data.updatedChunks || 0;
+        const remaining = (data.remainingBrain || 0) + (data.remainingChunks || 0);
+        if (remaining > 0) {
+          toast.info(`Embedding... ${totalBrain} principles done, ${remaining} to go`);
+        }
+        if (data.done) break;
+      }
+      toast.success(`Search repaired! Embedded ${totalBrain} principles + ${totalChunks} chunks. Try the AI chat now.`);
+      queryClient.invalidateQueries({ queryKey: ["brain-chunks"] });
+    } catch (e: any) {
+      toast.error(e.message || "Repair failed");
+    } finally {
+      setIsRepairing(false);
+    }
+  };
+
   const byCategory: Record<string, number> = {};
   chunks?.forEach((c) => { byCategory[c.category] = (byCategory[c.category] || 0) + 1; });
 
@@ -154,20 +186,34 @@ export default function BrainStats() {
           </h1>
           <p className="text-sm text-muted-foreground">See how smart your Sales AI has become</p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleReprocessBrain}
-          disabled={isReprocessing}
-          className="shrink-0"
-        >
-          {isReprocessing ? (
-            <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4 mr-1.5" />
-          )}
-          {isReprocessing ? "Re-processing..." : "Re-process Brain"}
-        </Button>
+        <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+          <Button
+            variant="default"
+            size="sm"
+            onClick={handleRepairSearch}
+            disabled={isRepairing || isReprocessing}
+          >
+            {isRepairing ? (
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+            ) : (
+              <Zap className="h-4 w-4 mr-1.5" />
+            )}
+            {isRepairing ? "Repairing..." : "Repair Search"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleReprocessBrain}
+            disabled={isReprocessing || isRepairing}
+          >
+            {isReprocessing ? (
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-1.5" />
+            )}
+            {isReprocessing ? "Re-processing..." : "Re-process Brain"}
+          </Button>
+        </div>
       </div>
 
       {/* Intelligence Level */}

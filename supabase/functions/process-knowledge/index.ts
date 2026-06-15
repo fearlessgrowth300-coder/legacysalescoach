@@ -8,16 +8,23 @@ const defaultCorsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// ===== EMBEDDING GENERATION (OpenAI text-embedding-3-small, 768 dims) =====
-async function generateEmbedding(text: string, _apiKey: string): Promise<number[] | null> {
+// ===== EMBEDDING GENERATION (text-embedding-3-small, 768 dims via Lovable Gateway) =====
+// Uses the Lovable AI Gateway + LOVABLE_API_KEY so uploads embed correctly on
+// Lovable Cloud without a separate OpenAI key. Falls back to direct OpenAI if set.
+async function generateEmbedding(text: string, apiKey: string): Promise<number[] | null> {
   try {
+    const LOVABLE_API_KEY = apiKey || Deno.env.get("LOVABLE_API_KEY");
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-    if (!OPENAI_API_KEY) return null;
+    const endpoint = LOVABLE_API_KEY
+      ? "https://ai.gateway.lovable.dev/v1/embeddings"
+      : "https://api.openai.com/v1/embeddings";
+    const key = LOVABLE_API_KEY || OPENAI_API_KEY;
+    if (!key) return null;
     const truncated = (text || "").substring(0, 32000);
     if (truncated.length < 5) return null;
-    const r = await fetch("https://api.openai.com/v1/embeddings", {
+    const r = await fetch(endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: "text-embedding-3-small", input: truncated, dimensions: 768 }),
       signal: AbortSignal.timeout(30000),
     });
