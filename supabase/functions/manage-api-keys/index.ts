@@ -77,7 +77,7 @@ serve(async (req) => {
       });
     }
 
-    const allowedServices = ["supadata", "transcriptapi"];
+    const allowedServices = ["supadata", "transcriptapi", "openai", "gemini", "anthropic"];
     if (!allowedServices.includes(service)) {
       return new Response(JSON.stringify({ error: "Unsupported service" }), {
         status: 400, headers: { ...headers, "Content-Type": "application/json" },
