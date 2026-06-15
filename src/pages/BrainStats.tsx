@@ -94,20 +94,58 @@ export default function BrainStats() {
 
   const tier = getIntelligenceTier(intelligenceLevel);
 
+  // Rebuild Brain — SAFE, browser-driven. Re-extracts principles from each of your
+  // uploaded sources one at a time using the existing process-knowledge function.
+  // It NEVER deletes anything (no global wipe), and is resumable — if it stops,
+  // just run it again. Works even if newer edge-function code hasn't deployed.
   const handleReprocessBrain = async () => {
     if (isReprocessing) return;
     setIsReprocessing(true);
-    toast.info("Re-processing all uploads... This may take a few minutes.");
+    toast.info("Rebuilding your brain from your uploaded sources. Keep this page open — this can take several minutes.");
     try {
-      const { data, error } = await supabase.functions.invoke("reprocess-brain");
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-      toast.success(data.message || "Brain re-processed successfully!");
+      const { data: srcItems, error: itemsErr } = await supabase
+        .from("knowledge_base_items")
+        .select("id, title, type, url, file_path")
+        .eq("user_id", user!.id)
+        .order("created_at", { ascending: true });
+      if (itemsErr) throw itemsErr;
+      const list = srcItems || [];
+      if (list.length === 0) { toast.error("No uploaded sources found to rebuild from."); return; }
+
+      let done = 0;
+      let principles = 0;
+      let failed = 0;
+      for (const item of list as any[]) {
+        try {
+          await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", item.id);
+          const body: any = { itemId: item.id, type: item.type };
+          if (item.type === "pdf" && item.file_path) {
+            body.filePath = item.file_path;
+            // Reuse the text we extracted at upload time if it's still in storage.
+            const { data: txt } = await supabase.storage.from("knowledge-files").download(`${item.file_path}.txt`);
+            const extracted = txt ? await txt.text() : "";
+            if (extracted.length >= 100) body.manualTranscript = extracted;
+          } else if (item.url) {
+            body.url = item.url;
+          }
+          const { data, error } = await supabase.functions.invoke("process-knowledge", { body });
+          if (error || data?.error) { failed++; }
+          else { principles += data?.learnings?.length || 0; }
+        } catch (e) {
+          console.error("Rebuild failed for", item.title, e);
+          failed++;
+        }
+        done++;
+        toast.info(`Rebuilding... ${done}/${list.length} sources${principles ? ` · ${principles} principles so far` : ""}`);
+        queryClient.invalidateQueries({ queryKey: ["brain-chunks"] });
+        queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+      }
+      toast.success(`Rebuilt ${done} sources (${principles} principles${failed ? `, ${failed} need a retry` : ""}). Next: click Repair Search.`);
       queryClient.invalidateQueries({ queryKey: ["brain-chunks"] });
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
       queryClient.invalidateQueries({ queryKey: ["brain-learnings"] });
     } catch (e: any) {
-      toast.error(e.message || "Re-processing failed");
+      toast.error(e.message || "Rebuild failed");
     } finally {
       setIsReprocessing(false);
     }
@@ -217,7 +255,7 @@ export default function BrainStats() {
             ) : (
               <RefreshCw className="h-4 w-4 mr-1.5" />
             )}
-            {isReprocessing ? "Re-processing..." : "Re-process Brain"}
+            {isReprocessing ? "Rebuilding..." : "Rebuild Brain"}
           </Button>
         </div>
       </div>
