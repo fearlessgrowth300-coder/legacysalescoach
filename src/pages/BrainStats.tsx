@@ -124,7 +124,9 @@ export default function BrainStats() {
       let totalBrain = 0;
       let totalChunks = 0;
       for (let i = 0; i < 200; i++) {
-        const { data, error } = await supabase.functions.invoke("backfill-embeddings");
+        const { data, error } = await supabase.functions.invoke("reprocess-brain", {
+          body: { mode: "backfill" },
+        });
         if (error) throw error;
         if (data?.error) throw new Error(data.error);
         totalBrain += data.updatedBrain || 0;
