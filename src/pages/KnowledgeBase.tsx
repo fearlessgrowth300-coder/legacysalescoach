@@ -1269,40 +1269,63 @@ export default function KnowledgeBase() {
                     </div>
                   )}
                   {item.status === "ready" && (
-                    <div
-                      className="mt-3 pt-3 border-t cursor-pointer hover:bg-accent/50 rounded-b-lg transition-colors -mx-3 -mb-3 sm:-mx-6 sm:-mb-4 px-3 pb-3 sm:px-6 sm:pb-4"
-                      onClick={async () => {
-                        try {
-                          setSelectedItemId(item.id);
-                          showLearnings([], item.title);
-                          const itemInsights = await loadInsightsForItem(item.id);
-                          if (itemInsights.length === 0) {
-                            toast.info("No insights found for this item yet.");
+                    <>
+                      {getInsightCountForItem(item.id) === 0 && (
+                        <div className="mt-3 pt-3 border-t flex items-center justify-between gap-2">
+                          <p className="text-xs text-muted-foreground">
+                            No principles extracted yet.
+                          </p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(e) => { e.stopPropagation(); retryItem.mutate(item); }}
+                            disabled={retryItem.isPending}
+                            className="shrink-0"
+                          >
+                            {retryItem.isPending ? (
+                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-3 w-3 mr-1" />
+                            )}
+                            Re-extract
+                          </Button>
+                        </div>
+                      )}
+                      <div
+                        className="mt-3 pt-3 border-t cursor-pointer hover:bg-accent/50 rounded-b-lg transition-colors -mx-3 -mb-3 sm:-mx-6 sm:-mb-4 px-3 pb-3 sm:px-6 sm:pb-4"
+                        onClick={async () => {
+                          try {
+                            setSelectedItemId(item.id);
+                            showLearnings([], item.title);
+                            const itemInsights = await loadInsightsForItem(item.id);
+                            if (itemInsights.length === 0) {
+                              toast.info("No insights found for this item yet.");
+                              setLearningsDialogOpen(false);
+                              return;
+                            }
+                            setProcessedLearnings(itemInsights);
+                          } catch (e: any) {
+                            toast.error(e.message || "Failed to load insights");
                             setLearningsDialogOpen(false);
-                            return;
                           }
-                          setProcessedLearnings(itemInsights);
-                        } catch (e: any) {
-                          toast.error(e.message || "Failed to load insights");
-                          setLearningsDialogOpen(false);
-                        }
-                      }}
-                    >
-                      <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                        <Sparkles className="h-3 w-3" /> Learned {getInsightCountForItem(item.id)} insights · <span className="text-primary underline underline-offset-2">View all</span>
-                      </p>
-                      <div className="space-y-1">
-                        {itemChunks.slice(0, 3).map((chunk: any) => (
-                          <div key={chunk.id} className="flex items-start gap-2">
-                            <Badge variant="secondary" className="text-[10px] shrink-0 mt-0.5">{(chunk.category || "general").replace(/_/g, " ")}</Badge>
-                            <p className="text-xs text-muted-foreground line-clamp-1">{chunk.content}</p>
-                          </div>
-                        ))}
-                        {(itemSummaries?.[item.id]?.chunks || 0) > 3 && (
-                          <p className="text-xs text-primary font-medium">+ {(itemSummaries?.[item.id]?.chunks || 0) - 3} more insights →</p>
-                        )}
+                        }}
+                      >
+                        <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
+                          <Sparkles className="h-3 w-3" /> Learned {getInsightCountForItem(item.id)} insights · <span className="text-primary underline underline-offset-2">View all</span>
+                        </p>
+                        <div className="space-y-1">
+                          {itemChunks.slice(0, 3).map((chunk: any) => (
+                            <div key={chunk.id} className="flex items-start gap-2">
+                              <Badge variant="secondary" className="text-[10px] shrink-0 mt-0.5">{(chunk.category || "general").replace(/_/g, " ")}</Badge>
+                              <p className="text-xs text-muted-foreground line-clamp-1">{chunk.content}</p>
+                            </div>
+                          ))}
+                          {(itemSummaries?.[item.id]?.chunks || 0) > 3 && (
+                            <p className="text-xs text-primary font-medium">+ {(itemSummaries?.[item.id]?.chunks || 0) - 3} more insights →</p>
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    </>
                   )}
                   {item.status === "error" && (
                     <div className="mt-3 pt-3 border-t flex items-center justify-between">
