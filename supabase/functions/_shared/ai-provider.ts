@@ -72,7 +72,9 @@ export async function resolveAiProvider(supabase: any, userId: string | null): P
       key: found.key,
       model: (t) => t === "reasoning" ? "gemini-2.5-flash" : t === "fast" ? "gemini-2.5-flash-lite" : "gemini-2.5-flash",
       isAnthropic: false,
-      embed: { url: `${GEMINI_BASE}/embeddings`, key: found.key },
+      // Gemini has no `text-embedding-3-small`; keep embeddings on the Lovable
+      // gateway so query vectors match the stored 768-dim vectors.
+      embed: lovableProvider().embed,
     };
   }
 

@@ -1,6 +1,29 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { describeApiKey, getLatestUserApiKey } from "../_shared/api-key-utils.ts";
+import { resolveAiProvider, aiEmbed, type AiProvider } from "../_shared/ai-provider.ts";
+
+// Build the chat endpoint/headers/model for the user's provider. OpenAI & Gemini
+// are OpenAI-compatible so the request/response shape is unchanged — we only swap
+// URL, key and model. Anthropic (or no key) falls back to the Lovable gateway here
+// (the raw-fetch path can't translate Anthropic; chat/extraction still works).
+function chatTarget(ai: AiProvider, gatewayModel: string): { url: string; headers: Record<string, string>; model: string } {
+  if (ai.name === "lovable" || ai.isAnthropic) {
+    const lk = (ai.name === "lovable" ? ai.key : "") || Deno.env.get("LOVABLE_API_KEY") || "";
+    return {
+      url: "https://ai.gateway.lovable.dev/v1/chat/completions",
+      headers: { Authorization: `Bearer ${lk}`, "Content-Type": "application/json" },
+      model: gatewayModel,
+    };
+  }
+  const tier: "fast" | "balanced" | "reasoning" =
+    gatewayModel.includes("flash-lite") ? "fast" : gatewayModel.includes("gemini-3") ? "reasoning" : "balanced";
+  return {
+    url: ai.chatUrl,
+    headers: { Authorization: `Bearer ${ai.key}`, "Content-Type": "application/json" },
+    model: ai.model(tier),
+  };
+}
 import { extractPdfBytes, looksScanned, ocrPdfWithVision } from "./pdf-extract.ts";
 
 const defaultCorsHeaders = {
@@ -8,45 +31,26 @@ const defaultCorsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// ===== EMBEDDING GENERATION (text-embedding-3-small, 768 dims via Lovable Gateway) =====
-// Uses the Lovable AI Gateway + LOVABLE_API_KEY so uploads embed correctly on
-// Lovable Cloud without a separate OpenAI key. Falls back to direct OpenAI if set.
-async function generateEmbedding(text: string, apiKey: string): Promise<number[] | null> {
-  try {
-    const LOVABLE_API_KEY = apiKey || Deno.env.get("LOVABLE_API_KEY");
-    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-    const endpoint = LOVABLE_API_KEY
-      ? "https://ai.gateway.lovable.dev/v1/embeddings"
-      : "https://api.openai.com/v1/embeddings";
-    const key = LOVABLE_API_KEY || OPENAI_API_KEY;
-    if (!key) return null;
-    const truncated = (text || "").substring(0, 32000);
-    if (truncated.length < 5) return null;
-    const r = await fetch(endpoint, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "text-embedding-3-small", input: truncated, dimensions: 768 }),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!r.ok) { await r.text(); return null; }
-    const d = await r.json();
-    return d.data?.[0]?.embedding || null;
-  } catch (e) {
-    console.error("Embedding failed:", e);
-    return null;
-  }
+// ===== EMBEDDING GENERATION (text-embedding-3-small, 768 dims) =====
+// Always uses the provider's embedding endpoint (Lovable gateway for Lovable/
+// Gemini/Anthropic; OpenAI for OpenAI users) so stored vectors stay consistent.
+async function generateEmbedding(text: string, ai: AiProvider): Promise<number[] | null> {
+  const truncated = (text || "").substring(0, 32000);
+  if (truncated.length < 5) return null;
+  return await aiEmbed(ai, truncated);
 }
 
 // ===== PASS 1: TRANSCRIPT CLEANING =====
 // One job: fix punctuation, paragraph breaks, strip filler, label speaker shifts.
 // No extraction. No JSON. Plain readable text out.
-async function cleanTranscriptChunk(rawChunk: string, apiKey: string): Promise<string> {
+async function cleanTranscriptChunk(rawChunk: string, ai: AiProvider): Promise<string> {
   try {
-    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const _t = chatTarget(ai, "google/gemini-3-flash-preview");
+    const r = await fetch(_t.url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: _t.headers,
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
+        model: _t.model,
         messages: [
           {
             role: "system",
@@ -83,7 +87,7 @@ RULES:
 async function extractStructuredLearningsChunk(
   content: string,
   sourceName: string,
-  apiKey: string,
+  ai: AiProvider,
   chunkIndex: number,
   totalChunks: number,
   options: { timeoutMs?: number; maxTokens?: number; maxPrinciples?: number } = {},
@@ -91,14 +95,12 @@ async function extractStructuredLearningsChunk(
   try {
     const chunkLabel = totalChunks > 1 ? ` (Part ${chunkIndex + 1}/${totalChunks})` : "";
     const maxPrinciples = options.maxPrinciples ?? 12;
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const _t = chatTarget(ai, "google/gemini-2.5-flash");
+    const response = await fetch(_t.url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers: _t.headers,
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: _t.model,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -349,14 +351,14 @@ function parsePrinciplesJson(raw: string): any[] {
 
 import { chunkText, dedupePrinciples, prepareBookSections, type DetectedChapter } from "./lib.ts";
 
-async function extractStructuredLearnings(content: string, sourceName: string, apiKey: string): Promise<any[]> {
+async function extractStructuredLearnings(content: string, sourceName: string, ai: AiProvider): Promise<any[]> {
   // ===== PASS 1: Clean each 10k chunk independently, then concatenate =====
   const rawChunks = chunkText(content, 10000);
   console.log(`Pass 1: cleaning ${rawChunks.length} raw chunks of ~10k chars each`);
 
   const cleanedParts: string[] = [];
   for (let i = 0; i < rawChunks.length; i++) {
-    const cleaned = await cleanTranscriptChunk(rawChunks[i], apiKey);
+    const cleaned = await cleanTranscriptChunk(rawChunks[i], ai);
     console.log(`Pass 1 chunk ${i + 1}/${rawChunks.length}: ${rawChunks[i].length} → ${cleaned.length} chars`);
     cleanedParts.push(cleaned);
   }
@@ -372,7 +374,7 @@ async function extractStructuredLearnings(content: string, sourceName: string, a
     const chunkLearnings = await extractStructuredLearningsChunk(
       extractionChunks[i],
       sourceName,
-      apiKey,
+      ai,
       i,
       extractionChunks.length,
     );
@@ -389,14 +391,15 @@ async function extractStructuredLearnings(content: string, sourceName: string, a
 async function extractBookSkeleton(
   firstPages: string,
   chapterTitles: string[],
-  apiKey: string,
+  ai: AiProvider,
 ): Promise<{ title: string; author: string; core_system: string; what_this_book_teaches: string; chapters: { index: number; title: string; one_line: string }[] } | null> {
   try {
-    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const _t = chatTarget(ai, "google/gemini-2.5-flash");
+    const r = await fetch(_t.url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: _t.headers,
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: _t.model,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -452,16 +455,17 @@ async function extractBookLearningsChunk(
   content: string,
   sourceName: string,
   chapterTitle: string,
-  apiKey: string,
+  ai: AiProvider,
   chunkIndex: number,
   totalChunks: number,
 ): Promise<any[]> {
   try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const _t = chatTarget(ai, "google/gemini-2.5-flash-lite");
+    const response = await fetch(_t.url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: _t.headers,
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash-lite",
+        model: _t.model,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: `Extract concise sales learnings from this book section. Return JSON only: {"principles":[{"principle_name":"","category":"Mindset|Prospecting|Opening|Trust Building|Objection Handling|Closing|Follow Up|Leadership|Script|Warning|Framework|Psychology","what_i_learned":"1-2 clear sentences","the_deep_why":"1 sentence psychology","how_to_apply":"2-3 practical steps","exact_words_to_use":"spoken script if useful","when_to_use":"specific trigger situation","trigger_phrases":"3-5 comma-separated phrases","power_level":7}]}. Return 3-5 principles maximum. Prefer fewer complete items over many slow items.` },
@@ -487,7 +491,7 @@ async function extractChapterPrinciples(
   bookContext: { title?: string; author?: string; core_system?: string; what_this_book_teaches?: string },
   chapterContext: { title: string; one_line?: string },
   sourceName: string,
-  apiKey: string,
+  ai: AiProvider,
   chunkSize = 6000,
 ): Promise<any[]> {
   const subChunks = chunkText(chapter.text, chunkSize);
@@ -514,7 +518,7 @@ ${subChunks[i]}`;
       wrapped,
       sourceName,
       chapterContext.title,
-      apiKey,
+      ai,
       i,
       subChunks.length,
     );
@@ -530,11 +534,11 @@ async function extractChapterWithFallback(
   bookContext: { title?: string; author?: string; core_system?: string; what_this_book_teaches?: string },
   chapterContext: { title: string; one_line?: string },
   sourceName: string,
-  apiKey: string,
+  ai: AiProvider,
 ): Promise<any[]> {
   try {
     const first = await extractChapterPrinciples(
-      chapter, bookContext, chapterContext, sourceName, apiKey, 6000,
+      chapter, bookContext, chapterContext, sourceName, ai, 6000,
     );
     if (first.length > 0) return first;
     console.warn(`Chapter ${chapter.index} returned 0 principles at 6k — retrying at 3.5k`);
@@ -542,7 +546,7 @@ async function extractChapterWithFallback(
     console.warn(`Chapter ${chapter.index} failed at 6k (${e?.message}) — retrying at 3.5k`);
   }
   return await extractChapterPrinciples(
-    chapter, bookContext, chapterContext, sourceName, apiKey, 3500,
+    chapter, bookContext, chapterContext, sourceName, ai, 3500,
   );
 }
 
@@ -551,7 +555,7 @@ async function extractChapterWithFallback(
 async function summarizeChapter(
   chapterTitle: string,
   principles: { principle_name: string; what_i_learned?: string }[],
-  apiKey: string,
+  ai: AiProvider,
 ): Promise<string> {
   if (principles.length === 0) return "";
   const list = principles
@@ -559,11 +563,12 @@ async function summarizeChapter(
     .map((p, i) => `${i + 1}. ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 160)}`)
     .join("\n");
   try {
-    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const _t = chatTarget(ai, "google/gemini-2.5-flash");
+    const r = await fetch(_t.url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: _t.headers,
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: _t.model,
         messages: [
           { role: "system", content: "You write tight 1-2 sentence chapter takeaways for a salesperson. Plain text, no markdown, max 220 chars." },
           { role: "user", content: `Chapter: ${chapterTitle}\nPrinciples extracted:\n${list}\n\nWrite the takeaway:` },
@@ -583,18 +588,19 @@ async function summarizeChapter(
 // ===== BOOK PIPELINE: Pass 3 (connection layer) =====
 async function buildConnectionMap(
   principles: { principle_name: string; what_i_learned?: string }[],
-  apiKey: string,
+  ai: AiProvider,
 ): Promise<Record<string, string[]>> {
   if (principles.length === 0) return {};
   const list = principles
     .map((p, i) => `${i + 1}. ${p.principle_name} — ${(p.what_i_learned || "").substring(0, 140)}`)
     .join("\n");
   try {
-    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const _t = chatTarget(ai, "google/gemini-2.5-flash");
+    const r = await fetch(_t.url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: _t.headers,
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: _t.model,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -647,7 +653,7 @@ async function persistLearning(
   brainType: string,
   sourceName: string,
   learning: any,
-  apiKey: string,
+  ai: AiProvider,
   seenChunkContent: Set<string>,
 ): Promise<any | null> {
   const principleName = (learning.principle_name || "Untitled Principle").trim();
@@ -661,7 +667,7 @@ async function persistLearning(
     learning.works_best_for,
     learning.trigger_phrases,
   ].filter((s) => typeof s === "string" && s.trim().length > 0).join(" | ");
-  const embedding = await generateEmbedding(embeddingText, apiKey);
+  const embedding = await generateEmbedding(embeddingText, ai);
 
   const brainRow = {
     user_id: userId,
@@ -810,6 +816,12 @@ serve(async (req) => {
     }
     const user = { id: userIdResolved };
 
+    // Resolve the user's AI provider (their own OpenAI/Gemini/Claude key, or the
+    // Lovable gateway fallback). All principle EXTRACTION runs on this; embeddings
+    // stay on text-embedding-3-small via the provider's embed endpoint.
+    const ai = await resolveAiProvider(supabase, user.id);
+    console.log(`[process-knowledge] AI provider: ${ai.name}`);
+
     // Get item info early so book pipeline can update book_brief incrementally
     const { data: itemEarly } = await supabase
       .from("knowledge_base_items")
@@ -928,7 +940,7 @@ serve(async (req) => {
             },
             { title: targetMeta.title, one_line: targetMeta.one_line },
             sourceName,
-            LOVABLE_API_KEY,
+            ai,
           );
 
           let storedCount = 0;
@@ -936,12 +948,12 @@ serve(async (req) => {
           for (const p of principles) {
             const stored = await persistLearning(
               supabase, user.id, itemId, item.brain_type, sourceName,
-              { ...p, _chapter: retryChapterIndex }, LOVABLE_API_KEY, seenChunkContent,
+              { ...p, _chapter: retryChapterIndex }, ai, seenChunkContent,
             );
             if (stored) { allStored.push(stored); storedForChapter.push(stored); storedCount++; }
           }
 
-          const summary = await summarizeChapter(targetMeta.title, storedForChapter, LOVABLE_API_KEY);
+          const summary = await summarizeChapter(targetMeta.title, storedForChapter, ai);
           const finalChapters = updatedChapters.map((c: any) =>
             c.index === retryChapterIndex ? { ...c, status: "done", principle_count: storedCount, error: null, summary } : c,
           );
@@ -1100,7 +1112,7 @@ serve(async (req) => {
               .eq("user_id", user.id)
               .eq("source_id", itemId);
             if (stored && stored.length > 0) {
-              const connections = await buildConnectionMap(stored, LOVABLE_API_KEY);
+              const connections = await buildConnectionMap(stored, ai);
               for (const principleName of Object.keys(connections)) {
                 const connected = connections[principleName].join(", ");
                 if (!connected) continue;
@@ -1163,7 +1175,7 @@ serve(async (req) => {
             },
             { title: nextMeta.title, one_line: nextMeta.one_line },
             sourceName,
-            LOVABLE_API_KEY,
+            ai,
           );
 
           const seen = new Set<string>();
@@ -1172,7 +1184,7 @@ serve(async (req) => {
           for (const p of principles) {
             const stored = await persistLearning(
               supabase, user.id, itemId, item.brain_type, sourceName,
-              { ...p, _chapter: nextMeta.index }, LOVABLE_API_KEY, seen,
+              { ...p, _chapter: nextMeta.index }, ai, seen,
             );
             if (stored) { storedForChapter.push(stored); storedCount++; }
           }
@@ -1191,7 +1203,7 @@ serve(async (req) => {
             console.warn(`Continue: chapter ${nextMeta.index} extracted 0 principles — marked failed`);
             await finishBookIfComplete(brief, failChapters);
           } else {
-            const summary = await summarizeChapter(nextMeta.title, storedForChapter, LOVABLE_API_KEY);
+            const summary = await summarizeChapter(nextMeta.title, storedForChapter, ai);
             const doneChapters = extractingChapters.map((c: any) =>
               c.index === nextMeta.index
                 ? { ...c, status: "done", principle_count: storedCount, summary, error: null }
@@ -1236,7 +1248,7 @@ serve(async (req) => {
       const skeleton = await extractBookSkeleton(
         firstPages,
         detected.map((c) => c.title),
-        LOVABLE_API_KEY,
+        ai,
       );
 
       const bookContext = skeleton ?? {
@@ -1279,7 +1291,7 @@ serve(async (req) => {
 
     // ============== STANDARD PIPELINE (videos / short content) ==============
     console.log(`Three-pass pipeline starting on ${contentToProcess.length} chars`);
-    const learnings = await extractStructuredLearnings(contentToProcess, sourceName, LOVABLE_API_KEY);
+    const learnings = await extractStructuredLearnings(contentToProcess, sourceName, ai);
     console.log(`Pass 2 complete: ${learnings.length} principles extracted`);
 
     const storedLearnings: any[] = [];
@@ -1287,7 +1299,7 @@ serve(async (req) => {
     try {
       for (const learning of learnings) {
         const stored = await persistLearning(
-          supabase, user.id, itemId, item.brain_type, sourceName, learning, LOVABLE_API_KEY, seenChunkContent,
+          supabase, user.id, itemId, item.brain_type, sourceName, learning, ai, seenChunkContent,
         );
         if (stored) {
           storedLearnings.push({
