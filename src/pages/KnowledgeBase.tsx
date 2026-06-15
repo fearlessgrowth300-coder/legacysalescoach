@@ -25,6 +25,12 @@ import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
+// Display columns for principles — deliberately EXCLUDES the heavy `embedding`
+// vector. Selecting "*" pulled 768-float vectors per row, which made the
+// "All Brain Learnings" loader return nothing once embeddings were populated.
+const LEARNING_COLUMNS =
+  "id, principle_name, what_i_learned, how_to_apply, source_name, source_id, source_type, brain_type, category, the_deep_why, exact_words_to_use, words_to_never_use, real_example_or_story, when_to_use, when_not_to_use, common_mistake, power_level, works_best_for, connected_principles, relevance_score, created_at";
+
 type UrlPreview = {
   type: "youtube" | "instagram" | "webpage";
   thumbnail: string;
@@ -170,7 +176,7 @@ export default function KnowledgeBase() {
       while (from < 10000) {
         const { data, error } = await supabase
           .from("sales_brain")
-          .select("*")
+          .select(LEARNING_COLUMNS)
           .order("created_at", { ascending: false })
           .range(from, from + pageSize - 1);
         if (error) throw error;
@@ -629,7 +635,7 @@ export default function KnowledgeBase() {
     while (from < 10000) {
       const { data, error } = await supabase
         .from("sales_brain")
-        .select("*")
+        .select(LEARNING_COLUMNS)
         .eq("source_id", itemId)
         .order("created_at", { ascending: false })
         .range(from, from + pageSize - 1);
