@@ -91,21 +91,16 @@ Generate a JSON response with:
 IMPORTANT: Ground your advice in the user's uploaded knowledge when possible. Reference specific sources or principles they've learned. If no brain knowledge exists, provide general best practices.
 Return ONLY valid JSON.`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `Generate learning material for the "${scenarioName}" scenario.` },
-        ],
-        temperature: 0.7,
-      }),
+    const aiResponse = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Generate learning material for the "${scenarioName}" scenario.` },
+      ],
+      temperature: 0.7,
+      response_format: { type: "json_object" },
     });
+
 
     if (!aiResponse.ok) {
       if (aiResponse.status === 429) {
