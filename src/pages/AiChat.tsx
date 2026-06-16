@@ -852,11 +852,20 @@ export default function AiChat() {
         metadata: allImageUrls.length ? { image_urls: allImageUrls } : {},
       }).eq("id", msg.id);
     }
-    // Remove all messages after the edited one — use current messages state snapshot
-    if (activeConvId) {
-      const idsToRemove = messages.slice(editingMsgIdx + 1).map(m => m.id).filter((id): id is string => !!id);
-      if (idsToRemove.length > 0) {
-        await supabase.from("ai_chat_messages").delete().in("id", idsToRemove);
+    // Remove ALL messages after the edited one from the DB (including any
+    // assistant rows whose id never made it back into local state).
+    if (activeConvId && msg.id) {
+      const { data: editedRow } = await supabase
+        .from("ai_chat_messages")
+        .select("created_at")
+        .eq("id", msg.id)
+        .maybeSingle();
+      if (editedRow?.created_at) {
+        await supabase
+          .from("ai_chat_messages")
+          .delete()
+          .eq("conversation_id", activeConvId)
+          .gt("created_at", editedRow.created_at);
       }
     }
     const truncated: Msg[] = messages.slice(0, editingMsgIdx);
