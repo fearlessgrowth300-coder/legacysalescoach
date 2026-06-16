@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { resolveUserChatTarget, userChat, resolveUserEmbedTarget, userEmbed, NoUserAiKeyError } from "../_shared/user-ai.ts";
 
 
 function getCorsHeaders(req: Request) {
@@ -113,16 +113,63 @@ serve(async (req) => {
         prospectPersona: (customScenario?.persona || "You are a potential prospect. Be realistic and push back naturally.").substring(0, 1000),
       };
 
-      // Fetch user's knowledge chunks for context
-      const { data: knowledgeChunks } = await supabase
-        .from("knowledge_chunks")
-        .select("content, category")
-        .eq("user_id", user.id)
-        .limit(20);
-
-      const knowledgeContext = knowledgeChunks?.length
-        ? `\n\nThe user has learned these sales techniques (use them to coach):\n${knowledgeChunks.map(c => `- [${c.category}]: ${c.content}`).join("\n").substring(0, 3000)}`
+      // ── RAG: retrieve the principles MOST RELEVANT to this scenario + the
+      //    salesperson's latest line, from the user's own books/videos. ──
+      const lastUserLine = action === "respond"
+        ? (([...(messages || [])].reverse().find((m: any) => m.role === "user")?.content) || "")
         : "";
+      const retrievalQuery = `Sales practice — scenario "${scenario.name}": ${scenario.description}. Prospect: ${scenario.prospectPersona}. ${lastUserLine ? `The salesperson just said: "${String(lastUserLine).slice(0, 400)}".` : "Opening the conversation."} Surface the best frameworks for opening, rapport, discovery, objection handling and closing this moment.`;
+
+      let knowledgeContext = "";
+      let usedPrincipleNames: string[] = [];
+      try {
+        const embedTarget = await resolveUserEmbedTarget(supabase, user.id);
+        const emb = await userEmbed(embedTarget, retrievalQuery);
+        if (emb) {
+          const { data: matches } = await supabase.rpc("match_sales_brain", {
+            query_embedding: JSON.stringify(emb),
+            match_count: 12,
+            match_threshold: 0.1,
+            p_user_id: user.id,
+          });
+          const ids = (matches || []).map((m: any) => m.id).filter(Boolean).slice(0, 12);
+          if (ids.length) {
+            const { data: princ } = await supabase
+              .from("sales_brain")
+              .select("principle_name, category, what_i_learned, how_to_apply, exact_words_to_use, source_name")
+              .in("id", ids);
+            // Source-diversity: at most 2 per source, keep best 8.
+            const perSource: Record<string, number> = {};
+            const picked: any[] = [];
+            for (const p of (princ || [])) {
+              const k = (p.source_name || "x").toLowerCase();
+              if ((perSource[k] = (perSource[k] || 0) + 1) <= 2) picked.push(p);
+              if (picked.length >= 8) break;
+            }
+            usedPrincipleNames = picked.map((p) => p.principle_name).filter(Boolean);
+            knowledgeContext = `\n\n=== THE USER'S OWN PLAYBOOK (coach using THESE specific principles — name them and their source) ===\n` +
+              picked.map((p, i) =>
+                `${i + 1}. ${p.principle_name} (from "${p.source_name}", ${p.category}): ${(p.what_i_learned || "").slice(0, 220)}` +
+                (p.exact_words_to_use ? ` | Exact words: ${String(p.exact_words_to_use).slice(0, 160)}` : "") +
+                (p.how_to_apply ? ` | Apply: ${String(p.how_to_apply).slice(0, 160)}` : "")
+              ).join("\n");
+          }
+        }
+      } catch (e) {
+        console.warn("[practice-call] retrieval failed, falling back to generic chunks:", e);
+      }
+
+      // Fallback to a generic sample only if semantic retrieval found nothing.
+      if (!knowledgeContext) {
+        const { data: knowledgeChunks } = await supabase
+          .from("knowledge_chunks")
+          .select("content, category")
+          .eq("user_id", user.id)
+          .limit(20);
+        knowledgeContext = knowledgeChunks?.length
+          ? `\n\nThe user has learned these sales techniques (use them to coach):\n${knowledgeChunks.map(c => `- [${c.category}]: ${c.content}`).join("\n").substring(0, 3000)}`
+          : "";
+      }
 
       const businessInfo = businessContext
         ? `\n\nThe user's business: ${String(businessContext).substring(0, 2000)}`
@@ -152,7 +199,7 @@ RESPONSE FORMAT (return valid JSON):
 
 Rules:
 - As the PROSPECT: Be realistic. Don't make it too easy. Push back naturally. React to emotional intelligence.
-- As the COACH: Be encouraging but honest. Reference specific sales frameworks (Hormozi, Voss, Belfort, Cardone) when relevant.
+- As the COACH: Be encouraging but honest. Coach using the principles in THE USER'S OWN PLAYBOOK above — name the exact principle and its source book/video when you give a tip or identify a technique. Only fall back to general frameworks if the playbook has nothing relevant.
 - If the user is doing poorly, the prospect should get more resistant. If they're doing well, the prospect warms up.
 - Track the conversation stage and adjust difficulty accordingly.
 - ALWAYS return valid JSON. No markdown, no extra text.
@@ -215,7 +262,7 @@ Rules:
         };
       }
 
-      return new Response(JSON.stringify(parsed), {
+      return new Response(JSON.stringify({ ...parsed, principlesUsed: usedPrincipleNames }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
