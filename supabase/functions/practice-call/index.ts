@@ -181,18 +181,12 @@ Rules:
         }
       }
 
-      const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-3-flash-preview",
-          messages: chatMessages,
-          temperature: 0.7,
-        }),
+      const aiResponse = await userChat(chat, {
+        model: chat.models.reasoning,
+        messages: chatMessages,
+        temperature: 0.7,
       });
+
 
       if (!aiResponse.ok) {
         if (aiResponse.status === 429) {
