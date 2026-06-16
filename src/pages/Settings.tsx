@@ -207,27 +207,59 @@ export default function Settings() {
               YouTube Transcript API Key
             </CardTitle>
             <CardDescription>
-               Used for extracting YouTube video transcripts automatically via TranscriptAPI.com.
+              Add one or more API keys to extract YouTube transcripts. The app rotates
+              through them automatically — if one hits its limit, the next is used.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <Alert>
               <AlertTriangle className="h-4 w-4" />
               <AlertDescription>
-                Get your API key from{" "}
+                Get keys from{" "}
                 <a href="https://transcriptapi.com" target="_blank" rel="noopener noreferrer" className="text-primary underline">
                   transcriptapi.com
                 </a>
-                . Your key is stored securely on the server and never sent back to the browser. Depending on TranscriptAPI.com's account rules, transcript extraction may require an active paid plan even if credits are available.
+                . You can add multiple keys (e.g. from different accounts) so re-extraction
+                doesn't fail when one runs out of credits. Keys are stored encrypted on the
+                server and never sent back to the browser.
               </AlertDescription>
             </Alert>
 
-            {currentKeyMasked && (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-muted-foreground">Current key:</span>
-                <code className="bg-muted px-2 py-1 rounded text-xs">{currentKeyMasked}</code>
+            {transcriptKeys.length > 0 && (
+              <div className="space-y-2">
+                <Label>Saved keys ({transcriptKeys.length})</Label>
+                <div className="space-y-2">
+                  {transcriptKeys.map((k) => (
+                    <div key={k.id} className="flex items-center justify-between gap-2 rounded-lg border bg-muted/30 px-3 py-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">{k.label}</div>
+                        <code className="text-xs text-muted-foreground">{k.masked}</code>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDeleteTranscriptKey(k.id)}
+                        aria-label={`Remove ${k.label}`}
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
+
+            <div className="space-y-2 pt-2 border-t">
+              <Label htmlFor="supadata-label">Label (optional)</Label>
+              <Input
+                id="supadata-label"
+                type="text"
+                value={supadataLabel}
+                onChange={(e) => setSupadataLabel(e.target.value)}
+                placeholder="e.g. Account 1, Backup, Work account"
+                maxLength={60}
+              />
+            </div>
 
             <div className="space-y-2">
               <Label htmlFor="supadata-key">New API Key</Label>
@@ -241,8 +273,8 @@ export default function Settings() {
             </div>
 
             <Button onClick={handleSaveKey} disabled={isSaving || !supadataKey.trim()}>
-              <Save className="h-4 w-4 mr-2" />
-              {isSaving ? "Saving..." : "Save API Key"}
+              <Plus className="h-4 w-4 mr-2" />
+              {isSaving ? "Adding..." : "Add Key"}
             </Button>
           </CardContent>
         </Card>
