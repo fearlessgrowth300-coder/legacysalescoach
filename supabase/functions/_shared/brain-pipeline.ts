@@ -324,7 +324,7 @@ async function callTool(
 // ─── Step 1: Query expansion ──────────────────────────────────────────
 
 export async function expandQuery(
-  apiKey: string,
+  chat: UserChatTarget,
   question: string,
   session: SessionContext,
 ): Promise<string[]> {
@@ -336,8 +336,8 @@ export async function expandQuery(
 
   const result = await Promise.race([
     callTool(
-      apiKey,
-      FAST_MODEL,
+      chat,
+      "fast",
       `You expand a sales coaching question into 3-5 diverse retrieval sub-queries to maximize recall against a vector database of sales principles, scripts, frameworks, and objection-handlers. Sub-queries must be short (3-10 words), cover different angles, and use vocabulary a sales book or video would use (e.g. "feel-felt-found framework", "value reframe scripts"). Do not answer the question.`,
       `Recent conversation (for context only, not retrieval):\n${recent || "(none)"}\n\nUser question: "${question}"\n\nReturn 3-5 sub-queries.`,
       "expand_query",
@@ -356,6 +356,7 @@ export async function expandQuery(
   // Always include the original as sub-query 0
   return [question, ...subs.filter((s: any) => typeof s === "string" && s.trim().length > 0)].slice(0, 6);
 }
+
 
 // ─── Step 2: Hybrid retrieval per sub-query ───────────────────────────
 
