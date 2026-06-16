@@ -551,6 +551,64 @@ export default function BrainStats() {
           )}
         </CardContent>
       </Card>
+
+      {/* Confirm Clear Brain */}
+      <AlertDialog open={confirmClearOpen} onOpenChange={setConfirmClearOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Trash2 className="h-5 w-5 text-destructive" /> Clear entire brain?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes <strong>every principle, chunk and learned insight</strong> from your brain.
+              Your uploaded sources (PDFs, videos, links) in the Knowledge Base are <strong>kept</strong> — you'll
+              re-extract them one by one afterwards. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleClearBrain}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Yes, wipe everything
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Post-Clear: choose how to re-extract */}
+      <Dialog open={postClearOpen} onOpenChange={setPostClearOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" /> Brain is empty — ready to re-extract
+            </DialogTitle>
+            <DialogDescription>
+              Removed <strong>{clearStats.principles}</strong> principles, <strong>{clearStats.chunks}</strong> chunks
+              and <strong>{clearStats.insights}</strong> insights. <strong>{clearStats.items}</strong> sources are now waiting.
+              <br /><br />
+              Open the Knowledge Base and click <strong>Re-extract</strong> on each source one at a time — videos and PDFs both
+              start extracting the moment you click. Doing them one by one avoids rate limits and keeps each extraction healthy.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={() => { setPostClearOpen(false); navigate("/knowledge-base?filter=video"); }}
+            >
+              <Youtube className="h-4 w-4 mr-1.5" /> Re-extract videos
+            </Button>
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => { setPostClearOpen(false); navigate("/knowledge-base?filter=pdf"); }}
+            >
+              <FileText className="h-4 w-4 mr-1.5" /> Re-extract PDFs
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
