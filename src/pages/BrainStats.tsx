@@ -4,21 +4,34 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Brain, BookOpen, MessageSquare, Target, Shield,
   Sparkles, TrendingUp, Zap, Heart, Briefcase, FileText, Link,
-  ThumbsUp, Lightbulb, Calendar, RefreshCw, Loader2
+  ThumbsUp, Lightbulb, Calendar, RefreshCw, Loader2, Trash2, Youtube
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { format, isToday, isThisWeek } from "date-fns";
 import { toast } from "sonner";
 
 export default function BrainStats() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [isReprocessing, setIsReprocessing] = useState(false);
   const [isRepairing, setIsRepairing] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [postClearOpen, setPostClearOpen] = useState(false);
+  const [clearStats, setClearStats] = useState<{ principles: number; chunks: number; insights: number; items: number }>({ principles: 0, chunks: 0, insights: 0, items: 0 });
 
   const { data: chunks, isLoading } = useQuery({
     queryKey: ["brain-chunks"],
@@ -188,6 +201,59 @@ export default function BrainStats() {
     }
   };
 
+  // Clear Brain — DESTRUCTIVE. Wipes ALL extracted intelligence so the user can
+  // re-extract each source one by one from the Knowledge Base page.
+  // Deletes: sales_brain principles, knowledge_chunks, learned_insights,
+  // conversation_insights, and resets knowledge_base_items.status to "pending"
+  // so each upload shows a Re-extract button in the KB UI.
+  // Sources (the uploaded files/URLs) are KEPT — only the derived brain is wiped.
+  const handleClearBrain = async () => {
+    if (!user || isClearing) return;
+    setIsClearing(true);
+    setConfirmClearOpen(false);
+    toast.info("Clearing brain — wiping all principles, chunks and insights...");
+    try {
+      const [{ count: pCount }, { count: cCount }, { count: iCount }] = await Promise.all([
+        supabase.from("sales_brain").delete({ count: "exact" }).eq("user_id", user.id),
+        supabase.from("knowledge_chunks").delete({ count: "exact" }).eq("user_id", user.id),
+        supabase.from("learned_insights").delete({ count: "exact" }).eq("user_id", user.id),
+      ]);
+      try { await supabase.from("conversation_insights").delete().eq("user_id", user.id); } catch { /* table optional */ }
+
+      // Reset all source items back to "pending" so the KB shows Re-extract.
+      const { data: resetItems } = await supabase
+        .from("knowledge_base_items")
+        .update({ status: "pending" })
+        .eq("user_id", user.id)
+        .select("id");
+
+      // Verify the brain is truly empty before unlocking the next step.
+      const [{ count: pLeft }, { count: cLeft }] = await Promise.all([
+        supabase.from("sales_brain").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+        supabase.from("knowledge_chunks").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+      ]);
+      if ((pLeft || 0) > 0 || (cLeft || 0) > 0) {
+        throw new Error(`Brain not fully cleared (${pLeft || 0} principles, ${cLeft || 0} chunks remain). Try again.`);
+      }
+
+      setClearStats({
+        principles: pCount || 0,
+        chunks: cCount || 0,
+        insights: iCount || 0,
+        items: resetItems?.length || 0,
+      });
+      queryClient.invalidateQueries({ queryKey: ["brain-chunks"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+      queryClient.invalidateQueries({ queryKey: ["learned-insights"] });
+      toast.success(`Brain cleared. ${pCount || 0} principles + ${cCount || 0} chunks removed.`);
+      setPostClearOpen(true);
+    } catch (e: any) {
+      toast.error(e.message || "Clear failed");
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
   const byCategory: Record<string, number> = {};
   chunks?.forEach((c) => { byCategory[c.category] = (byCategory[c.category] || 0) + 1; });
 
@@ -256,6 +322,19 @@ export default function BrainStats() {
               <RefreshCw className="h-4 w-4 mr-1.5" />
             )}
             {isReprocessing ? "Rebuilding..." : "Rebuild Brain"}
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => setConfirmClearOpen(true)}
+            disabled={isClearing || isReprocessing || isRepairing}
+          >
+            {isClearing ? (
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4 mr-1.5" />
+            )}
+            {isClearing ? "Clearing..." : "Clear Brain"}
           </Button>
         </div>
       </div>
@@ -472,6 +551,64 @@ export default function BrainStats() {
           )}
         </CardContent>
       </Card>
+
+      {/* Confirm Clear Brain */}
+      <AlertDialog open={confirmClearOpen} onOpenChange={setConfirmClearOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Trash2 className="h-5 w-5 text-destructive" /> Clear entire brain?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes <strong>every principle, chunk and learned insight</strong> from your brain.
+              Your uploaded sources (PDFs, videos, links) in the Knowledge Base are <strong>kept</strong> — you'll
+              re-extract them one by one afterwards. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleClearBrain}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Yes, wipe everything
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Post-Clear: choose how to re-extract */}
+      <Dialog open={postClearOpen} onOpenChange={setPostClearOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" /> Brain is empty — ready to re-extract
+            </DialogTitle>
+            <DialogDescription>
+              Removed <strong>{clearStats.principles}</strong> principles, <strong>{clearStats.chunks}</strong> chunks
+              and <strong>{clearStats.insights}</strong> insights. <strong>{clearStats.items}</strong> sources are now waiting.
+              <br /><br />
+              Open the Knowledge Base and click <strong>Re-extract</strong> on each source one at a time — videos and PDFs both
+              start extracting the moment you click. Doing them one by one avoids rate limits and keeps each extraction healthy.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={() => { setPostClearOpen(false); navigate("/knowledge-base?filter=video"); }}
+            >
+              <Youtube className="h-4 w-4 mr-1.5" /> Re-extract videos
+            </Button>
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => { setPostClearOpen(false); navigate("/knowledge-base?filter=pdf"); }}
+            >
+              <FileText className="h-4 w-4 mr-1.5" /> Re-extract PDFs
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
