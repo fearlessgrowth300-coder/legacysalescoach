@@ -782,10 +782,17 @@ export default function AiChat() {
             setMessages(prev => prev.map(m => m.id === savedMsg.id ? { ...m, status: "read" as const } : m));
           }
           if (assistantSoFar && convId) {
-            await supabase.from("ai_chat_messages").insert({
+            const { data: inserted } = await supabase.from("ai_chat_messages").insert({
               conversation_id: convId, user_id: user!.id, role: "assistant", content: assistantSoFar,
               metadata: lastBrainMeta ? { selected_principles: lastBrainMeta.selected_principles || [], framework_name: lastBrainMeta.framework_name || "", empty_vault: !!lastBrainMeta.empty_vault, debug: lastBrainMeta.debug || null } : {},
-            } as any);
+            } as any).select("id").single();
+            if (inserted?.id) {
+              setMessages(prev => {
+                const lastIdx = [...prev].map(m => m.role).lastIndexOf("assistant");
+                if (lastIdx === -1) return prev;
+                return prev.map((m, i) => i === lastIdx && !m.id ? { ...m, id: inserted.id } : m);
+              });
+            }
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
@@ -852,11 +859,20 @@ export default function AiChat() {
         metadata: allImageUrls.length ? { image_urls: allImageUrls } : {},
       }).eq("id", msg.id);
     }
-    // Remove all messages after the edited one — use current messages state snapshot
-    if (activeConvId) {
-      const idsToRemove = messages.slice(editingMsgIdx + 1).map(m => m.id).filter((id): id is string => !!id);
-      if (idsToRemove.length > 0) {
-        await supabase.from("ai_chat_messages").delete().in("id", idsToRemove);
+    // Remove ALL messages after the edited one from the DB (including any
+    // assistant rows whose id never made it back into local state).
+    if (activeConvId && msg.id) {
+      const { data: editedRow } = await supabase
+        .from("ai_chat_messages")
+        .select("created_at")
+        .eq("id", msg.id)
+        .maybeSingle();
+      if (editedRow?.created_at) {
+        await supabase
+          .from("ai_chat_messages")
+          .delete()
+          .eq("conversation_id", activeConvId)
+          .gt("created_at", editedRow.created_at);
       }
     }
     const truncated: Msg[] = messages.slice(0, editingMsgIdx);
@@ -963,10 +979,17 @@ export default function AiChat() {
           setIsTyping(false);
           setWasTruncated(truncated);
           if (assistantSoFar && activeConvId) {
-            await supabase.from("ai_chat_messages").insert({
+            const { data: inserted } = await supabase.from("ai_chat_messages").insert({
               conversation_id: activeConvId, user_id: user!.id, role: "assistant", content: assistantSoFar,
               metadata: lastBrainMeta2 ? { selected_principles: lastBrainMeta2.selected_principles || [], framework_name: lastBrainMeta2.framework_name || "", empty_vault: !!lastBrainMeta2.empty_vault, debug: lastBrainMeta2.debug || null } : {},
-            } as any);
+            } as any).select("id").single();
+            if (inserted?.id) {
+              setMessages(prev => {
+                const lastIdx = [...prev].map(m => m.role).lastIndexOf("assistant");
+                if (lastIdx === -1) return prev;
+                return prev.map((m, i) => i === lastIdx && !m.id ? { ...m, id: inserted.id } : m);
+              });
+            }
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
