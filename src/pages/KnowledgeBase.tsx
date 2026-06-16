@@ -1373,13 +1373,15 @@ export default function KnowledgeBase() {
                             <p className="text-[11px] text-muted-foreground">{retryProgress[item.id].note}</p>
                           )}
                         </div>
-                      ) : getInsightCountForItem(item.id) === 0 && (
+                      ) : (
                         <div className="mt-3 pt-3 border-t flex items-center justify-between gap-2">
                           <p className="text-xs text-muted-foreground">
-                            No principles extracted yet.
+                            {getInsightCountForItem(item.id) === 0
+                              ? "No principles extracted yet."
+                              : `${getInsightCountForItem(item.id)} principles extracted. Re-extract to refresh.`}
                           </p>
                           <Button
-                            variant="outline"
+                            variant={getInsightCountForItem(item.id) === 0 ? "default" : "outline"}
                             size="sm"
                             onClick={(e) => { e.stopPropagation(); retryItem.mutate(item); }}
                             disabled={retryItem.isPending}
@@ -1390,7 +1392,7 @@ export default function KnowledgeBase() {
                             ) : (
                               <RefreshCw className="h-3 w-3 mr-1" />
                             )}
-                            Re-extract
+                            {getInsightCountForItem(item.id) === 0 ? "Extract" : "Re-extract"}
                           </Button>
                         </div>
                       )}
