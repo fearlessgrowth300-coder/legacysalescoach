@@ -211,16 +211,18 @@ async function anthropicChat(provider: AiProvider, model: string, opts: AiChatOp
   }
 }
 
-// Provider-aware embedding (768-dim text-embedding-3-small on OpenAI/Gemini/Lovable).
-// Anthropic users fall back to the Lovable embedding endpoint (Anthropic has none).
+// Provider-aware embedding. Uses the user's own provider key. Returns null for
+// Anthropic users (no embeddings API) — callers should surface a clear error.
 export async function aiEmbed(provider: AiProvider, text: string): Promise<number[] | null> {
-  const target = provider.embed || lovableProvider().embed;
+  const target = provider.embed;
   if (!target?.key) return null;
   try {
+    const body: any = { model: target.model, input: (text || "").substring(0, 32000) };
+    if (target.provider === "openai") body.dimensions = 768;
     const res = await fetch(target.url, {
       method: "POST",
       headers: { Authorization: `Bearer ${target.key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "text-embedding-3-small", input: (text || "").substring(0, 32000), dimensions: 768 }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(30000),
     });
     if (!res.ok) {
@@ -233,4 +235,5 @@ export async function aiEmbed(provider: AiProvider, text: string): Promise<numbe
     console.error("[ai-provider] embed threw:", e);
     return null;
   }
+
 }
