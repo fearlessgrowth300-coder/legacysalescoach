@@ -497,18 +497,15 @@ ${message}
 SALES_BRAIN_PRINCIPLES:
 ${principlesText.substring(0, 6000)}`;
 
-    const replyResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: replySystemPrompt },
-          { role: "user", content: replyUserPrompt },
-        ],
-        temperature: 0.8,
-      }),
+    const replyResponse = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: replySystemPrompt },
+        { role: "user", content: replyUserPrompt },
+      ],
+      temperature: 0.8,
     });
+
 
     if (!replyResponse.ok) {
       const st = replyResponse.status;
