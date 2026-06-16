@@ -265,14 +265,35 @@ export function enforceSourceDiversity<T extends { source_title?: string | null;
 // ─── Gateway helpers ──────────────────────────────────────────────────
 
 async function callTool(
-  apiKey: string,
-  model: string,
+  chat: UserChatTarget,
+  tier: "fast" | "balanced" | "reasoning",
   systemPrompt: string,
   userPrompt: string,
   toolName: string,
   toolSchema: Record<string, unknown>,
-  opts?: { reasoning?: { effort: "minimal" | "low" | "medium" | "high" } },
+  _opts?: { reasoning?: { effort: "minimal" | "low" | "medium" | "high" } },
 ): Promise<any> {
+  const model = chat.models[tier];
+  // Anthropic translation path — use userChat()
+  if (chat.isAnthropic) {
+    const { userChat } = await import("./user-ai.ts");
+    const res = await userChat(chat, {
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      tools: [{ type: "function", function: { name: toolName, description: "Structured output", parameters: toolSchema } }],
+      tool_choice: { type: "function", function: { name: toolName } },
+      temperature: 0.2,
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const tc = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (!tc?.function?.arguments) return null;
+    try { return JSON.parse(tc.function.arguments); } catch { return null; }
+  }
+
   const body: any = {
     model,
     messages: [
@@ -283,10 +304,9 @@ async function callTool(
     tool_choice: { type: "function", function: { name: toolName } },
     temperature: 0.2,
   };
-  if (opts?.reasoning) body.reasoning = opts.reasoning;
-  const res = await fetch(GATEWAY, {
+  const res = await fetch(chat.url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    headers: chat.headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -299,6 +319,7 @@ async function callTool(
   if (!tc?.function?.arguments) return null;
   try { return JSON.parse(tc.function.arguments); } catch { return null; }
 }
+
 
 // ─── Step 1: Query expansion ──────────────────────────────────────────
 
