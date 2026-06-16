@@ -176,41 +176,24 @@ Return ONLY the JSON.`;
     // Generate embeddings for conversation chunks
     for (const chunk of chunks.slice(0, 15)) {
       try {
-        const embResponse = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "text-embedding-3-small",
-            input: chunk.substring(0, 8000),
-            dimensions: 768,
-          }),
-          signal: AbortSignal.timeout(30000),
+        const embedding = await generateEmbedding(chunk.substring(0, 8000), supabase, user.id);
+        await supabase.from("knowledge_chunks").insert({
+          user_id: user.id,
+          workspace_id: workspaceId,
+          source_type: "training_conversation",
+          category: "conversation_style",
+          content: chunk,
+          brain_type: "both",
+          trigger_phrases: "",
+          relevance_score: 75,
+          embedding,
         });
-
-        if (embResponse.ok) {
-          const embData = await embResponse.json();
-          const embedding = embData.data?.[0]?.embedding || null;
-
-          await supabase.from("knowledge_chunks").insert({
-            user_id: user.id,
-            workspace_id: workspaceId,
-            source_type: "training_conversation",
-            category: "conversation_style",
-            content: chunk,
-            brain_type: "both",
-            trigger_phrases: "",
-            relevance_score: 75,
-            embedding,
-          });
-          chunksStored++;
-        }
+        chunksStored++;
       } catch {
         // Continue with other chunks
       }
     }
+
 
     return new Response(JSON.stringify({
       success: true,
