@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-import { describeApiKey, getLatestUserApiKey } from "../_shared/api-key-utils.ts";
+import { describeApiKey, getLatestUserApiKey, getAllUserApiKeys } from "../_shared/api-key-utils.ts";
 
 const defaultCorsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -70,20 +70,13 @@ async function resolveUserId(authHeader: string | null): Promise<string | null> 
   return fallbackUserId;
 }
 
-async function getUserTranscriptApiKey(userId: string | null): Promise<string | null> {
-  if (!userId) return null;
+async function getUserTranscriptApiKeys(userId: string | null): Promise<{ key: string; label: string }[]> {
+  if (!userId) return [];
   try {
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-    const userKey = await getLatestUserApiKey(supabase, userId, ["supadata", "transcriptapi"]);
-    if (userKey?.key) {
-      console.log("Using user's TranscriptAPI key from user_api_keys", {
-        service: userKey.service,
-        ...describeApiKey(userKey.key),
-      });
-      return userKey.key;
-    }
-  } catch (e) { console.error("Failed to fetch user API key:", e); }
-  return null;
+    const rows = await getAllUserApiKeys(supabase, userId, ["supadata", "transcriptapi"]);
+    return rows.map((r) => ({ key: r.key, label: `user:${r.label}` }));
+  } catch (e) { console.error("Failed to fetch user API keys:", e); return []; }
 }
 
 async function fetchYouTubeData(videoId: string, userId: string | null = null) {
@@ -103,12 +96,17 @@ async function fetchYouTubeData(videoId: string, userId: string | null = null) {
     }
   } catch (e) { console.error("YouTube oembed error:", e); }
 
-  // 2. Try TranscriptAPI.com — user's key first, then global fallback on 401/402
-  const userKey = await getUserTranscriptApiKey(userId);
+  // 2. Try TranscriptAPI.com — rotate through ALL user keys, then global fallback.
+  const userKeys = await getUserTranscriptApiKeys(userId);
   const globalKey = Deno.env.get("SUPADATA_API_KEY");
+  const seen = new Set<string>();
   const keysToTry: { key: string; label: string }[] = [];
-  if (userKey) keysToTry.push({ key: userKey, label: "user-provided" });
-  if (globalKey && globalKey !== userKey) keysToTry.push({ key: globalKey, label: "global fallback" });
+  for (const k of userKeys) {
+    if (seen.has(k.key)) continue;
+    keysToTry.push(k); seen.add(k.key);
+  }
+  if (globalKey && !seen.has(globalKey)) keysToTry.push({ key: globalKey, label: "global fallback" });
+  console.log(`[preview-url] Trying ${keysToTry.length} transcript key(s)`);
 
   for (const { key, label } of keysToTry) {
     if (transcript && transcript.length > 50) break;
@@ -137,7 +135,7 @@ async function fetchYouTubeData(videoId: string, userId: string | null = null) {
       } else {
         const errBody = await sdRes.text();
         console.warn(`TranscriptAPI error (${label}):`, sdRes.status, errBody);
-        if (sdRes.status === 401 || sdRes.status === 402) continue;
+        if ([401, 402, 403, 429].includes(sdRes.status)) continue;
       }
     } catch (e) { console.error(`TranscriptAPI error (${label}):`, e); }
   }
