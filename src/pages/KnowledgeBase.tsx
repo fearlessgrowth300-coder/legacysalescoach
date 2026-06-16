@@ -1431,6 +1431,27 @@ export default function KnowledgeBase() {
                       </div>
                     </>
                   )}
+                  {item.status === "pending" && (
+                    <div className="mt-3 pt-3 border-t flex items-center justify-between gap-2">
+                      <p className="text-xs text-muted-foreground">
+                        Not extracted yet. Click to extract principles from this {item.type === "pdf" ? "PDF" : "source"}.
+                      </p>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={(e) => { e.stopPropagation(); retryItem.mutate(item); }}
+                        disabled={retryItem.isPending}
+                        className="shrink-0"
+                      >
+                        {retryItem.isPending ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-3 w-3 mr-1" />
+                        )}
+                        Extract
+                      </Button>
+                    </div>
+                  )}
                   {item.status === "error" && (
                     <div className="mt-3 pt-3 border-t flex items-center justify-between">
                       <p className="text-xs text-destructive">Failed to process. Try again or use a different URL.</p>
