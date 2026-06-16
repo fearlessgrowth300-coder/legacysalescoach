@@ -80,3 +80,6 @@ verify_jwt = false
 
 [functions.backfill-embeddings]
 verify_jwt = false
+
+[functions.record-conversion]
+verify_jwt = false

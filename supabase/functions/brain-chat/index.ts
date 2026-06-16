@@ -343,41 +343,78 @@ serve(async (req) => {
     const encoder = new TextEncoder();
 
     if (hasImageAttachment) {
-      console.log("[brain-chat] image flow — running OCR on", lastUserImages.length, "image(s)");
-      // OCR each image via the existing ocr-screenshot edge function
-      const ocrTexts: string[] = [];
-      for (const img of lastUserImages.slice(0, 10)) {
+      userInstruction = (lastUserText || "").trim() || "Look at the image(s) and tell me exactly what's going on and what to do.";
+      console.log("[brain-chat] image flow — vision on", lastUserImages.length, "image(s)");
+
+      // ── VISION FIRST: understand ANY image — conversation screenshot, product
+      // photo, IG/TikTok profile, chart, meme — not just text. The provider's
+      // vision model both transcribes any text AND describes what's shown. ──
+      let analysis = "";
+      if (!chat.isAnthropic) {
         try {
-          let imageBase64 = "";
-          let mimeType = "image/png";
-          if (img.startsWith("data:")) {
-            const m = img.match(/^data:([^;]+);base64,(.+)$/);
-            if (m) { mimeType = m[1]; imageBase64 = m[2]; }
-          } else {
-            const dataUrl = await imageToBase64(img);
-            if (dataUrl) {
-              const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-              if (m) { mimeType = m[1]; imageBase64 = m[2]; }
-            }
-          }
-          if (!imageBase64) continue;
-          const { data, error } = await supabaseAdmin.functions.invoke("ocr-screenshot", {
-            body: { imageBase64, mimeType },
-            headers: { Authorization: authHeader },
+          const imageParts = lastUserImages.slice(0, 8).map((url) => ({ type: "image_url", image_url: { url } }));
+          const vResp = await userChat(chat, {
+            model: chat.models.vision,
+            temperature: 0.2,
+            max_tokens: 900,
+            messages: [{
+              role: "user",
+              content: [
+                { type: "text", text: `You are a sales coach's eyes. Analyze the image(s) carefully.${lastUserText ? ` The user also wrote: "${lastUserText}"` : ""}\n\nReturn plain text with these labeled sections:\nTRANSCRIPT: If it shows a conversation/DM/chat, transcribe it verbatim (who said what, in order). Otherwise write "none".\nWHAT I SEE: Describe exactly what is in the image(s) — people, product, screen, profile/bio, captions, numbers, charts, context. Be concrete.\nSITUATION: 1-2 sentences on the sales situation and what the user needs help with right now.` },
+                ...imageParts,
+              ],
+            }],
           });
-          if (!error && data?.text) ocrTexts.push(String(data.text));
+          if (vResp.ok) {
+            const vd = await vResp.json();
+            analysis = (vd.choices?.[0]?.message?.content || "").trim();
+            console.log("[brain-chat] vision analysis chars:", analysis.length);
+          } else {
+            console.warn("[brain-chat] vision call non-2xx:", vResp.status);
+          }
         } catch (e) {
-          console.warn("[brain-chat] OCR failed for an image:", e);
+          console.warn("[brain-chat] vision analysis failed:", e);
         }
       }
-      conversationText = ocrTexts.join("\n\n---\n\n").trim();
-      userInstruction = (lastUserText || "").trim() || "Read the conversation and write the best reply.";
 
-      if (conversationText.length < 20) {
-        const fixed = "I couldn't read the screenshot clearly. Try uploading a higher-quality image or paste the conversation text directly.";
+      // ── OCR fallback (Anthropic has no vision here, or if vision returned nothing) ──
+      if (analysis.length < 5) {
+        const ocrTexts: string[] = [];
+        for (const img of lastUserImages.slice(0, 10)) {
+          try {
+            let imageBase64 = "";
+            let mimeType = "image/png";
+            if (img.startsWith("data:")) {
+              const m = img.match(/^data:([^;]+);base64,(.+)$/);
+              if (m) { mimeType = m[1]; imageBase64 = m[2]; }
+            } else {
+              const dataUrl = await imageToBase64(img);
+              if (dataUrl) {
+                const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+                if (m) { mimeType = m[1]; imageBase64 = m[2]; }
+              }
+            }
+            if (!imageBase64) continue;
+            const { data, error } = await supabaseAdmin.functions.invoke("ocr-screenshot", {
+              body: { imageBase64, mimeType },
+              headers: { Authorization: authHeader },
+            });
+            if (!error && data?.text) ocrTexts.push(String(data.text));
+          } catch (e) {
+            console.warn("[brain-chat] OCR failed for an image:", e);
+          }
+        }
+        if (ocrTexts.length) analysis = ocrTexts.join("\n\n---\n\n").trim();
+      }
+
+      conversationText = analysis;
+
+      // Only bail when BOTH vision and OCR gave us nothing usable.
+      if (conversationText.length < 5) {
+        const fixed = "I couldn't make out that image. Try a clearer photo, or just tell me in words what's going on and I'll pull the right plays from your brain.";
         const stream = new ReadableStream({
           start(controller) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: { selected_principles: [], framework_name: "", contradictions: [], empty_vault: false, debug: { ocr_failed: true } } })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: { selected_principles: [], framework_name: "", contradictions: [], empty_vault: false, debug: { image_failed: true } } })}\n\n`));
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: fixed } }] })}\n\n`));
             controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
             controller.close();
@@ -386,29 +423,8 @@ serve(async (req) => {
         return new Response(stream, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
       }
 
-      // Extract a sales-situation sentence to drive vector retrieval
-      try {
-        const sitResp = await userChat(chat, {
-          model: chat.models.fast,
-          temperature: 0,
-          max_tokens: 120,
-          messages: [{
-            role: "user",
-            content: `Read this conversation and write a 1-sentence sales situation description for semantic search. Focus on objection type, prospect psychology, and conversation stage. Output the situation only — no other text.\n\nConversation:\n${conversationText.slice(0, 1500)}`,
-          }],
-        });
-        if (sitResp.ok) {
-          const sd = await sitResp.json();
-          const sit = sd.choices?.[0]?.message?.content?.trim();
-          if (sit) {
-            retrievalQuery = `${sit}\n\nUser instruction: ${userInstruction}`;
-            console.log("[brain-chat] situation:", sit);
-          }
-        }
-      } catch (e) {
-        console.warn("[brain-chat] situation extraction failed:", e);
-        retrievalQuery = conversationText.slice(0, 600);
-      }
+      // Drive vector retrieval from the vision/OCR analysis + the user's instruction.
+      retrievalQuery = `${conversationText.slice(0, 1400)}\n\nUser instruction: ${userInstruction}`;
     } else {
       // Text/chat path: avoid a separate pre-LLM retrieval-brief call. The shared
       // pipeline expands and scores against the full vault, so this keeps feedback fast.
@@ -493,7 +509,7 @@ serve(async (req) => {
     });
 
     if (hasImageAttachment && conversationText) {
-      systemPrompt += `\n\n=== SCREENSHOT CONVERSATION (extracted via OCR) ===\n${conversationText}\n\n=== USER INSTRUCTION ===\n"${userInstruction}"\n\nThe user pasted a real conversation as a screenshot. Read it carefully, diagnose what is happening, then follow the response style above. End your reply with a clear, copy-paste ready message the user can send to this prospect.`;
+      systemPrompt += `\n\n=== WHAT'S IN THE IMAGE(S) — VISION ANALYSIS ===\n${conversationText}\n\n=== USER INSTRUCTION ===\n"${userInstruction}"\n\nThe user attached image(s). You can ALSO see them directly. Combine what you see with the analysis above and the user's instruction, diagnose exactly what's happening, then follow the response style above. If it's a conversation, end with a clear copy-paste ready message to send. If it's a profile/product/other image, give the concrete next move and the exact words — always grounded in the vault principles.`;
     }
 
     const brainMeta = {

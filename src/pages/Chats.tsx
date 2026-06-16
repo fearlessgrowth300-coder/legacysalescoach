@@ -745,8 +745,23 @@ export default function Chats() {
     mutationFn: async ({ id, outcome }: { id: string; outcome: string }) => {
       const { error } = await supabase.from("prospects").update({ outcome }).eq("id", id);
       if (error) throw error;
+      // Conversion learning loop: on a WIN, boost the principles that closed it so
+      // the brain gets smarter at what actually converts for this user.
+      if (outcome === "won") {
+        try {
+          const { data } = await supabase.functions.invoke("record-conversion", { body: { prospectId: id } });
+          return data;
+        } catch (e) {
+          console.warn("record-conversion failed", e);
+        }
+      }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["prospects"] }),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["prospects"] });
+      if (data?.boosted > 0) {
+        toast.success(`🧠 Learned from this win — boosted ${data.boosted} principles that closed it.`);
+      }
+    },
   });
 
   const deleteProspect = useMutation({
