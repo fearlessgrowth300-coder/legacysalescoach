@@ -467,13 +467,36 @@ async function extractBookLearningsChunk(
         model: _t.model,
         response_format: { type: "json_object" },
         messages: [
-          { role: "system", content: `Extract concise sales learnings from this book section. Return JSON only: {"principles":[{"principle_name":"","category":"Mindset|Prospecting|Opening|Trust Building|Objection Handling|Closing|Follow Up|Leadership|Script|Warning|Framework|Psychology","what_i_learned":"1-2 clear sentences","the_deep_why":"1 sentence psychology","how_to_apply":"2-3 practical steps","exact_words_to_use":"spoken script if useful","when_to_use":"specific trigger situation","trigger_phrases":"3-5 comma-separated phrases","power_level":7}]}. Return 3-5 principles maximum. Prefer fewer complete items over many slow items.` },
+          { role: "system", content: `You are an elite sales student taking EXHAUSTIVE notes on this book section. Extract every distinct, valuable learning — leave nothing important behind.
+
+Return JSON ONLY:
+{"principles":[{
+"principle_name":"short memorable name",
+"category":"Mindset|Prospecting|Opening|Trust Building|Objection Handling|Closing|Follow Up|Leadership|Script|Story|Warning|Framework|Psychology|Pricing|Referral|Tonality",
+"what_i_learned":"The FULL insight written in your own notes — capture the complete idea with its context, nuance, and the specifics the author gives. MINIMUM 3 full sentences. Do NOT over-summarize.",
+"the_deep_why":"The psychological mechanism — why this works on the prospect's brain, emotions, or decision-making.",
+"how_to_apply":"Concrete step-by-step application drawn from the text.",
+"exact_words_to_use":"Any script, line, phrase, or question the author provides — copy it WORD-FOR-WORD, VERBATIM. NEVER paraphrase, shorten, or clean up a script. Empty string if there is none.",
+"when_to_use":"the specific trigger situation",
+"when_not_to_use":"when it backfires (if mentioned, else empty)",
+"common_mistake":"the mistake people make with this (if mentioned, else empty)",
+"real_example_or_story":"any example or story the author uses, kept concrete (else empty)",
+"words_to_never_use":"phrases to avoid (if mentioned, else empty)",
+"trigger_phrases":"3-6 comma-separated phrases that signal this applies",
+"power_level":7
+}]}
+
+RULES:
+- Extract UP TO 8 distinct principles from this section. Capture every genuinely valuable idea, script, framework, warning, objection-handler, and story in the text. Do NOT pad with weak or duplicate items — but do NOT skip real value either.
+- exact_words_to_use MUST be VERBATIM — reproduce the author's scripts and exact lines word-for-word, no paraphrasing or shortening.
+- what_i_learned must be RICH (3+ sentences), never a one-line headline.
+- Return ONLY the JSON object.` },
           { role: "user", content: `Book: ${sourceName}\nChapter: ${chapterTitle}\nPart: ${chunkIndex + 1}/${totalChunks}\n\n${content}` },
         ],
         temperature: 0.2,
-        max_tokens: 4500,
+        max_tokens: 7000,
       }),
-      signal: AbortSignal.timeout(22000),
+      signal: AbortSignal.timeout(40000),
     });
     if (!response.ok) return [];
     const data = await response.json();
