@@ -1,5 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { generateEmbedding } from "../_shared/embeddings.ts";
+
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
@@ -31,8 +34,16 @@ serve(async (req) => {
       });
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
+
 
     // Update status to processing
     if (trainingDataId) {
@@ -71,21 +82,16 @@ Extract and return this EXACT JSON:
 
 Return ONLY the JSON.`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: "You are a conversational style analyst. Return valid JSON only." },
-          { role: "user", content: stylePrompt },
-        ],
-        temperature: 0.2,
-      }),
+    const response = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: "You are a conversational style analyst. Return valid JSON only." },
+        { role: "user", content: stylePrompt },
+      ],
+      temperature: 0.2,
+      response_format: { type: "json_object" },
     });
+
 
     if (!response.ok) {
       if (trainingDataId) {
@@ -170,41 +176,24 @@ Return ONLY the JSON.`;
     // Generate embeddings for conversation chunks
     for (const chunk of chunks.slice(0, 15)) {
       try {
-        const embResponse = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "text-embedding-3-small",
-            input: chunk.substring(0, 8000),
-            dimensions: 768,
-          }),
-          signal: AbortSignal.timeout(30000),
+        const embedding = await generateEmbedding(chunk.substring(0, 8000), supabase, user.id);
+        await supabase.from("knowledge_chunks").insert({
+          user_id: user.id,
+          workspace_id: workspaceId,
+          source_type: "training_conversation",
+          category: "conversation_style",
+          content: chunk,
+          brain_type: "both",
+          trigger_phrases: "",
+          relevance_score: 75,
+          embedding,
         });
-
-        if (embResponse.ok) {
-          const embData = await embResponse.json();
-          const embedding = embData.data?.[0]?.embedding || null;
-
-          await supabase.from("knowledge_chunks").insert({
-            user_id: user.id,
-            workspace_id: workspaceId,
-            source_type: "training_conversation",
-            category: "conversation_style",
-            content: chunk,
-            brain_type: "both",
-            trigger_phrases: "",
-            relevance_score: 75,
-            embedding,
-          });
-          chunksStored++;
-        }
+        chunksStored++;
       } catch {
         // Continue with other chunks
       }
     }
+
 
     return new Response(JSON.stringify({
       success: true,

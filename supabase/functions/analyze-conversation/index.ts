@@ -2,6 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -28,8 +30,8 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceRoleKey);
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+
 
     const token = authHeader.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
@@ -272,19 +274,25 @@ ${winningContext}
 
 CONVERSATION_HISTORY:
 ${conversationHistory}`;
-
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.3,
-      }),
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
+    const aiResponse = await userChat(chat, {
+      model: chat.models.balanced,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.3,
+      response_format: { type: "json_object" },
     });
+
 
     if (!aiResponse.ok) {
       const status = aiResponse.status;

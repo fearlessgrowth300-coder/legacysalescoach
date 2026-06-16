@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
@@ -45,8 +47,15 @@ serve(async (req) => {
       });
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
 
     const parsePrompt = `You are a conversation framework parser. Analyze this custom conversation framework and extract ALL structured rules into a JSON object.
 
@@ -91,21 +100,16 @@ RULES:
 - Be thorough — this structured data will be used to enforce rules on every generated reply
 - Return ONLY the JSON object, no other text`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: "You are a framework parser. Return valid JSON only." },
-          { role: "user", content: parsePrompt },
-        ],
-        temperature: 0.2,
-      }),
+    const response = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: "You are a framework parser. Return valid JSON only." },
+        { role: "user", content: parsePrompt },
+      ],
+      temperature: 0.2,
+      response_format: { type: "json_object" },
     });
+
 
     if (!response.ok) {
       const status = response.status;

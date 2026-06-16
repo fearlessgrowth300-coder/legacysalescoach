@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -14,12 +16,7 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const supabase = createClient(supabaseUrl, supabaseKey);
-
-    if (!LOVABLE_API_KEY) {
-      throw new Error("AI service not configured");
-    }
 
     // Auth check
     const authHeader = req.headers.get("Authorization");
@@ -30,6 +27,16 @@ serve(async (req) => {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
+
 
     const { sessionId, transcript, scenarioName, prospectName, prospectRole, prospectCompany } = await req.json();
 
@@ -126,22 +133,17 @@ Analyze the transcript and return a JSON object with this EXACT structure. Be sp
 
 IMPORTANT: Return ONLY valid JSON, no markdown, no code fences.`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `Here is the call transcript:\n\n${formattedTranscript}` },
-        ],
-        temperature: 0.3,
-        max_tokens: 3000,
-      }),
+    const aiResponse = await userChat(chat, {
+      model: chat.models.balanced,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Here is the call transcript:\n\n${formattedTranscript}` },
+      ],
+      temperature: 0.3,
+      max_tokens: 3000,
+      response_format: { type: "json_object" },
     });
+
 
     if (!aiResponse.ok) {
       if (aiResponse.status === 429) {

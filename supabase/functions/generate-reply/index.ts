@@ -2,6 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -98,8 +100,6 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceRoleKey);
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     const token = authHeader?.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
@@ -108,6 +108,16 @@ serve(async (req) => {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
+
 
     // ===== PARALLEL DATA FETCH =====
     const { data: prospect } = await supabase.from("prospects").select("*").eq("id", prospectId).eq("user_id", user.id).single();
@@ -327,18 +337,16 @@ SPIN DETECTION: <4 exchanges="situation", personal but no pain="problem", pain n
 STAGE RULES: "friend" 0-40, "warming" 41-74, "referral" 75+ AND pain_expressed=true.
 WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.`;
 
-    const analysisResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: analysisPrompt },
-          { role: "user", content: `WORKSPACE_PROFILE:\n${workspaceProfile}\n\nSALES_BRAIN_PRINCIPLES:\n${principlesText.substring(0, 4000)}\n\nCONVERSATION_HISTORY:\n${conversationHistory}` },
-        ],
-        temperature: 0.3,
-      }),
+    const analysisResponse = await userChat(chat, {
+      model: chat.models.balanced,
+      messages: [
+        { role: "system", content: analysisPrompt },
+        { role: "user", content: `WORKSPACE_PROFILE:\n${workspaceProfile}\n\nSALES_BRAIN_PRINCIPLES:\n${principlesText.substring(0, 4000)}\n\nCONVERSATION_HISTORY:\n${conversationHistory}` },
+      ],
+      temperature: 0.3,
+      response_format: { type: "json_object" },
     });
+
 
     if (!analysisResponse.ok) {
       const st = analysisResponse.status;
@@ -489,18 +497,15 @@ ${message}
 SALES_BRAIN_PRINCIPLES:
 ${principlesText.substring(0, 6000)}`;
 
-    const replyResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: replySystemPrompt },
-          { role: "user", content: replyUserPrompt },
-        ],
-        temperature: 0.8,
-      }),
+    const replyResponse = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: replySystemPrompt },
+        { role: "user", content: replyUserPrompt },
+      ],
+      temperature: 0.8,
     });
+
 
     if (!replyResponse.ok) {
       const st = replyResponse.status;

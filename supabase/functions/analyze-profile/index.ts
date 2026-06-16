@@ -1,5 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { generateEmbedding } from "../_shared/embeddings.ts";
+
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
@@ -38,28 +41,9 @@ async function scrapeUrl(url: string): Promise<string> {
   }
 }
 
-async function generateEmbedding(text: string, apiKey: string): Promise<number[] | null> {
-  try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "text-embedding-3-small",
-        input: text.substring(0, 8000),
-        dimensions: 768,
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.data?.[0]?.embedding || null;
-  } catch {
-    return null;
-  }
-}
+// (embedding helper moved to shared util — see imports above)
+
+
 
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
@@ -116,8 +100,16 @@ serve(async (req) => {
       });
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
+
 
     // ===== STEP 1: Profile Analysis (existing) =====
     const prompt = `Analyze this business/creator profile and provide:
@@ -136,21 +128,16 @@ ${scrapedParts.join("\n\n")}
 
 Return JSON: { "profile_analysis": "...", "products_detected": "..." }`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: "You are a business profile analyzer. Return valid JSON only." },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.3,
-      }),
+    const aiResponse = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: "You are a business profile analyzer. Return valid JSON only." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.3,
+      response_format: { type: "json_object" },
     });
+
 
     if (!aiResponse.ok) {
       const status = aiResponse.status;
@@ -224,21 +211,16 @@ Return a JSON object with these exact fields:
 
 Return ONLY the JSON object.`;
 
-    const personaResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: "You are a persona analyzer. Return valid JSON only." },
-          { role: "user", content: personaPrompt },
-        ],
-        temperature: 0.3,
-      }),
+    const personaResponse = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: "You are a persona analyzer. Return valid JSON only." },
+        { role: "user", content: personaPrompt },
+      ],
+      temperature: 0.3,
+      response_format: { type: "json_object" },
     });
+
 
     let personaData: any = null;
     if (personaResponse.ok) {
@@ -274,7 +256,7 @@ Key Themes: ${personaData.key_themes || "Not detected"}
 Framework Approach: ${personaData.framework_summary || "No custom framework"}
 Workspace Type: ${workspace.workspace_type || "friend"}`;
 
-      const embedding = await generateEmbedding(personaSummary, LOVABLE_API_KEY);
+      const embedding = await generateEmbedding(personaSummary, supabase, user.id);
 
       await supabase.from("sales_brain").insert({
         user_id: user.id,

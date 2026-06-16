@@ -17,8 +17,8 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+
 
     const token = authHeader?.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
@@ -51,9 +51,10 @@ serve(async (req) => {
       // Verify embeddings can actually be generated in this environment
       const probe = await generateEmbedding("sales objection handling test", supabase, user.id);
       if (!probe) {
-        return new Response(JSON.stringify({ error: "Embedding provider not available (LOVABLE_API_KEY missing)." }),
+        return new Response(JSON.stringify({ error: "Embedding provider not available. Add your OpenAI or Gemini API key in Settings." }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
+
 
       let updatedBrain = 0;
       let updatedChunks = 0;

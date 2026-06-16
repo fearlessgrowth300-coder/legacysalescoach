@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,10 +19,7 @@ serve(async (req) => {
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const supabase = createClient(supabaseUrl, supabaseKey);
-
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
     const token = authHeader?.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
@@ -29,6 +28,16 @@ serve(async (req) => {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
+
 
     // Fetch user's Brain knowledge
     const [brainRes, chunksRes, companyRes] = await Promise.all([
@@ -82,21 +91,16 @@ Generate a JSON response with:
 IMPORTANT: Ground your advice in the user's uploaded knowledge when possible. Reference specific sources or principles they've learned. If no brain knowledge exists, provide general best practices.
 Return ONLY valid JSON.`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `Generate learning material for the "${scenarioName}" scenario.` },
-        ],
-        temperature: 0.7,
-      }),
+    const aiResponse = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Generate learning material for the "${scenarioName}" scenario.` },
+      ],
+      temperature: 0.7,
+      response_format: { type: "json_object" },
     });
+
 
     if (!aiResponse.ok) {
       if (aiResponse.status === 429) {

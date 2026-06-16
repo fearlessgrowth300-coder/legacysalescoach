@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+
 
 /**
  * Twilio TwiML webhook for practice calls.
@@ -88,14 +90,8 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    if (!LOVABLE_API_KEY) {
-      return new Response(twimlHangup("AI service is not configured. Goodbye."), {
-        headers: { "Content-Type": "text/xml" },
-      });
-    }
 
     // Get session
     const { data: session, error: sessionError } = await supabase
@@ -246,20 +242,23 @@ RULES:
       }
     }
 
-    // Call AI
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: chatMessages,
-        temperature: 0.7,
-        max_tokens: 200,
-      }),
+    // Call AI using the session owner's API key
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, session.user_id);
+    } catch (e) {
+      console.error("twilio webhook: no user AI key", e);
+      return new Response(twimlHangup("AI service not configured. Add an API key in Settings. Goodbye."), {
+        headers: { "Content-Type": "text/xml" },
+      });
+    }
+    const aiResponse = await userChat(chat, {
+      model: chat.models.balanced,
+      messages: chatMessages,
+      temperature: 0.7,
+      max_tokens: 200,
     });
+
 
     if (!aiResponse.ok) {
       console.error("AI error:", aiResponse.status);

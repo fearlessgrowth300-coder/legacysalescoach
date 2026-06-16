@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { resolveUserChatTarget, userChat } from "../_shared/user-ai.ts";
+
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
@@ -126,9 +128,11 @@ serve(async (req) => {
         .single();
 
       if (workspace) {
-        const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-        if (LOVABLE_API_KEY) {
+        let chat: any = null;
+        try { chat = await resolveUserChatTarget(supabase, user.id); } catch { /* skip AI when no key */ }
+        if (chat) {
           const mostRecentVideo = profileData.recentVideos[0] || null;
+
           const videoContext = mostRecentVideo
             ? `MOST RECENT VIDEO TO COMMENT ON:\nCaption: "${mostRecentVideo.caption}"\nViews: ${mostRecentVideo.views}, Likes: ${mostRecentVideo.likes}\n${mostRecentVideo.hashtags?.length ? `Hashtags: #${mostRecentVideo.hashtags.join(" #")}` : ""}`
             : `No specific videos found. Use their bio and profile info to craft a comment that would work on any of their posts.`;
@@ -178,21 +182,16 @@ RULES:
 Return JSON: { "comment": "the full comment with CTA", "strategy": "why this comment + CTA will work on this specific prospect", "targetVideoCaption": "exact caption of the chosen video", "targetVideoUrl": "URL of the chosen video", "whyThisVideo": "why you picked this specific video over others", "postNumber": 1, "videoLikes": 1234, "videoViews": 56789 }`;
 
           try {
-            const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${LOVABLE_API_KEY}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model: "google/gemini-3-flash-preview",
-                messages: [
-                  { role: "system", content: "You are a TikTok engagement expert. Return valid JSON only." },
-                  { role: "user", content: aiPrompt },
-                ],
-                temperature: 0.7,
-              }),
+            const aiRes = await userChat(chat, {
+              model: chat.models.reasoning,
+              messages: [
+                { role: "system", content: "You are a TikTok engagement expert. Return valid JSON only." },
+                { role: "user", content: aiPrompt },
+              ],
+              temperature: 0.7,
+              response_format: { type: "json_object" },
             });
+
 
             if (aiRes.ok) {
               const aiData = await aiRes.json();
