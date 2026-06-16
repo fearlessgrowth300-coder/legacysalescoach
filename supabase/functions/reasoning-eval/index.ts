@@ -5,6 +5,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { runPipeline, buildSessionContext, selectPrinciples } from "../_shared/brain-pipeline.ts";
+import { resolveUserChatTarget, NoUserAiKeyError } from "../_shared/user-ai.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -22,7 +23,15 @@ serve(async (req) => {
     const { data: { user } } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
     if (!user) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
 
-    const apiKey = Deno.env.get("LOVABLE_API_KEY")!;
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...cors, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
     const session = await buildSessionContext(supabase, null, [{ role: "user", content: question }]);
 
     // Mode A: caller provided explicit candidate ids — load and run only Step 4
@@ -30,14 +39,14 @@ serve(async (req) => {
       const { data: rows } = await supabase.from("sales_brain")
         .select("id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story")
         .in("id", candidatePrincipleIds).eq("user_id", user.id);
-      const reasoning = await selectPrinciples(apiKey, question, (rows || []) as any, session);
+      const reasoning = await selectPrinciples(chat, question, (rows || []) as any, session);
       return new Response(JSON.stringify({ mode: "manual", question, reasoning }), {
         headers: { ...cors, "Content-Type": "application/json" },
       });
     }
 
     // Mode B: full pipeline (Layers 1+2)
-    const out = await runPipeline({ apiKey, supabaseAdmin: supabase, userId: user.id, question, session });
+    const out = await runPipeline({ chat, supabaseAdmin: supabase, userId: user.id, question, session });
     return new Response(JSON.stringify({ mode: "full", question, ...out }, null, 2), {
       headers: { ...cors, "Content-Type": "application/json" },
     });

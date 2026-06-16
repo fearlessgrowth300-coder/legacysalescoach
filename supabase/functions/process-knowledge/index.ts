@@ -3,18 +3,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { describeApiKey, getLatestUserApiKey } from "../_shared/api-key-utils.ts";
 import { resolveAiProvider, aiEmbed, type AiProvider } from "../_shared/ai-provider.ts";
 
-// Build the chat endpoint/headers/model for the user's provider. OpenAI & Gemini
-// are OpenAI-compatible so the request/response shape is unchanged — we only swap
-// URL, key and model. Anthropic (or no key) falls back to the Lovable gateway here
-// (the raw-fetch path can't translate Anthropic; chat/extraction still works).
+// Build the chat endpoint/headers/model for the user's OWN provider key
+// (OpenAI / Gemini). NO Lovable-AI fallback. Anthropic users get a clear error
+// for this feature (the raw-fetch JSON-extraction path can't translate the
+// Messages API shape) — they should add an OpenAI or Gemini key in Settings.
 function chatTarget(ai: AiProvider, gatewayModel: string): { url: string; headers: Record<string, string>; model: string } {
-  if (ai.name === "lovable" || ai.isAnthropic) {
-    const lk = (ai.name === "lovable" ? ai.key : "") || Deno.env.get("LOVABLE_API_KEY") || "";
-    return {
-      url: "https://ai.gateway.lovable.dev/v1/chat/completions",
-      headers: { Authorization: `Bearer ${lk}`, "Content-Type": "application/json" },
-      model: gatewayModel,
-    };
+  if (ai.name === "lovable") {
+    throw new Error("No AI API key configured. Add your OpenAI or Gemini key in Settings.");
+  }
+  if (ai.isAnthropic) {
+    throw new Error("Anthropic isn't supported for knowledge extraction yet. Add an OpenAI or Gemini key in Settings.");
   }
   const tier: "fast" | "balanced" | "reasoning" =
     gatewayModel.includes("flash-lite") ? "fast" : gatewayModel.includes("gemini-3") ? "reasoning" : "balanced";
@@ -760,8 +758,8 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    // Note: PDF OCR uses OPENAI_API_KEY directly (server-side OpenAI vision); all
+    // chat/extraction routes through the user's OWN provider key via chatTarget.
 
     // Resolve user: try auth.getUser, then JWT payload fallback, then body userId (service-to-service)
     const token = authHeader?.replace("Bearer ", "");
@@ -857,7 +855,7 @@ serve(async (req) => {
     if (manualTranscript && manualTranscript.trim().length > 10) {
       content = manualTranscript.trim();
     } else if (type === "pdf" && (filePath || itemEarly.file_path)) {
-      content = await extractPdfContent(filePath || itemEarly.file_path, supabase, itemId, corsHeaders, LOVABLE_API_KEY);
+      content = await extractPdfContent(filePath || itemEarly.file_path, supabase, itemId, corsHeaders);
     } else if (url || itemEarly.url) {
       content = await extractUrlContent(url || itemEarly.url, supabaseUrl, supabaseKey, supabase, user.id);
     }
@@ -1413,7 +1411,6 @@ async function extractPdfContent(
   supabase: any,
   itemId: string,
   _corsHeaders: any,
-  apiKey: string,
 ): Promise<string> {
   // See pdf-extract.ts for the architectural rationale (unpdf > Gemini-as-PDF-reader > pdf-parse).
   try {
@@ -1460,7 +1457,7 @@ async function extractPdfContent(
     // 2) OCR fallback only when the file looks scanned. Born-digital PDFs skip this entirely.
     if (looksScanned(text.length, arrayBuffer.byteLength)) {
       console.log(`PDF looks scanned (${text.length} chars / ${fileSizeMB.toFixed(2)} MB) — running vision OCR`);
-      const ocr = await ocrPdfWithVision(bytes, apiKey);
+      const ocr = await ocrPdfWithVision(bytes, "");
       if (ocr.length > text.length) finalText = ocr;
     }
 
