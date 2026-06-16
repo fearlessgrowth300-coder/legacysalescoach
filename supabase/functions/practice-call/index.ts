@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { resolveUserChatTarget, userChat, resolveUserEmbedTarget, userEmbed, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { BRAIN_PERSONA } from "../_shared/persona.ts";
 
 
 function getCorsHeaders(req: Request) {
@@ -182,7 +183,8 @@ serve(async (req) => {
 ROLE 1 - PROSPECT: You act as a realistic prospect in this scenario: "${scenario.name}" - ${scenario.description}
 Prospect persona: ${scenario.prospectPersona}
 
-ROLE 2 - COACH: After each response AS the prospect, you also provide coaching feedback.
+ROLE 2 - COACH: After each response AS the prospect, you also provide coaching feedback. As the COACH (NOT the prospect), embody this stance:
+${BRAIN_PERSONA}
 
 ${businessInfo}
 ${knowledgeContext}

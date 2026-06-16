@@ -5,6 +5,7 @@ import {
   runPipeline, buildSessionContext, buildPrinciplesBlock,
 } from "../_shared/brain-pipeline.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { BRAIN_PERSONA } from "../_shared/persona.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -65,6 +66,8 @@ serve(async (req) => {
       const primarySource = pipeline.selected.find((s) => s.tier === "primary")?.source_title || pipeline.selected[0]?.source_title || "your vault";
 
       const systemPrompt = `You are "The Brain" speaking out loud as a sales coach. You speak ONLY from the principles below — never general knowledge.
+
+${BRAIN_PERSONA}
 
 DOMINANT FRAMEWORK: ${pipeline.framework_name || "(unspecified)"}
 
