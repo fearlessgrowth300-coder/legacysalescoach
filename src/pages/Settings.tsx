@@ -19,8 +19,10 @@ const AI_PROVIDERS = [
 export default function Settings() {
   const { user } = useAuth();
   const [supadataKey, setSupadataKey] = useState("");
+  const [supadataLabel, setSupadataLabel] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [currentKeyMasked, setCurrentKeyMasked] = useState("");
+  type TranscriptKey = { id: string; label: string; masked: string; updatedAt: string };
+  const [transcriptKeys, setTranscriptKeys] = useState<TranscriptKey[]>([]);
 
   // ─── Bring-your-own AI provider key ───
   const [aiProvider, setAiProvider] = useState<string>("gemini");
