@@ -133,22 +133,17 @@ Analyze the transcript and return a JSON object with this EXACT structure. Be sp
 
 IMPORTANT: Return ONLY valid JSON, no markdown, no code fences.`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `Here is the call transcript:\n\n${formattedTranscript}` },
-        ],
-        temperature: 0.3,
-        max_tokens: 3000,
-      }),
+    const aiResponse = await userChat(chat, {
+      model: chat.models.balanced,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Here is the call transcript:\n\n${formattedTranscript}` },
+      ],
+      temperature: 0.3,
+      max_tokens: 3000,
+      response_format: { type: "json_object" },
     });
+
 
     if (!aiResponse.ok) {
       if (aiResponse.status === 429) {
