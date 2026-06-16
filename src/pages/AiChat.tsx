@@ -859,21 +859,29 @@ export default function AiChat() {
         metadata: allImageUrls.length ? { image_urls: allImageUrls } : {},
       }).eq("id", msg.id);
     }
-    // Remove ALL messages after the edited one from the DB (including any
-    // assistant rows whose id never made it back into local state).
-    if (activeConvId && msg.id) {
+    // Remove ALL messages after the edited one from the DB. Robust:
+    //  - resolve the conversation from the row itself (don't depend on activeConvId,
+    //    which can be null right after a fresh send → the old reply would survive),
+    //  - delete by created_at (catches assistant rows whose id never reached state),
+    //  - PLUS an explicit id sweep of subsequent messages we already track.
+    if (msg.id) {
       const { data: editedRow } = await supabase
         .from("ai_chat_messages")
-        .select("created_at")
+        .select("created_at, conversation_id")
         .eq("id", msg.id)
         .maybeSingle();
-      if (editedRow?.created_at) {
+      const convId = activeConvId || editedRow?.conversation_id;
+      if (editedRow?.created_at && convId) {
         await supabase
           .from("ai_chat_messages")
           .delete()
-          .eq("conversation_id", activeConvId)
+          .eq("conversation_id", convId)
           .gt("created_at", editedRow.created_at);
       }
+    }
+    const subsequentIds = messages.slice(editingMsgIdx + 1).map((m) => m.id).filter((x): x is string => !!x);
+    if (subsequentIds.length) {
+      await supabase.from("ai_chat_messages").delete().in("id", subsequentIds);
     }
     const truncated: Msg[] = messages.slice(0, editingMsgIdx);
     truncated.push({ ...msg, content: editText, is_edited: true, image_url: primaryUrl, image_urls: allImageUrls.length > 0 ? allImageUrls : undefined });
