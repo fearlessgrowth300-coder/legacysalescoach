@@ -69,17 +69,25 @@ serve(async (req) => {
       });
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
+    if (chat.isAnthropic) {
+      return new Response(JSON.stringify({ error: "Anthropic doesn't support vision via this endpoint. Add an OpenAI or Gemini key in Settings for screenshot OCR." }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const aiResponse = await fetch(chat.url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
+      headers: chat.headers,
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: chat.models.vision,
+
         messages: [
           {
             role: "user",
