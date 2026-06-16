@@ -93,9 +93,10 @@ function chunkWithOffsets(source: string, absoluteStart: number, chunkSize: numb
 // Cap how many sub-sections one detected chapter can be split into. Without
 // this, a single huge end-of-book chapter (e.g. a long "Conclusion") gets
 // split into 20+ sections that all look like junk to the user and bloat the
-// per-chapter queue. Three is enough to keep each call inside the AI budget
-// without making the UI look broken.
-const MAX_SUBSECTIONS_PER_CHAPTER = 3;
+// per-chapter queue. 5 keeps each piece small enough to extract fully within
+// the per-section AI time budget (so big merged chapters don't get cut short)
+// while staying presentable in the UI.
+const MAX_SUBSECTIONS_PER_CHAPTER = 5;
 
 export function splitLargeDetectedChapters(
   chapters: DetectedChapter[],
@@ -160,6 +161,25 @@ export function detectChapters(content: string, fallbackChunkSize = 12000): Dete
     matches.push({ offset: m.index, title });
     if (matches.length > 200) break; // safety
   }
+
+  // ALSO catch numbered Title-Case chapter headings like "1. The Case for
+  // Prospecting" or "12 Know Your Numbers". Case-SENSITIVE (no `i` flag) and
+  // requires a Title-Case heading (capitalized words + short connectors), so
+  // sentence-style numbered bullets ("1. It refuses certainty") are NOT matched.
+  const conn = "of|the|for|and|a|an|to|in|on|or|nor|your|you|with|from|at|by|vs|into|than";
+  const numberedTitleRe = new RegExp(
+    `^\\s{0,4}[0-9]{1,2}[.):]?\\s+[A-Z][a-z'’\\-]+(?:\\s+(?:[A-Z][a-z'’\\-]+|${conn}))+`,
+    "gm",
+  );
+  let n: RegExpExecArray | null;
+  while ((n = numberedTitleRe.exec(content)) !== null) {
+    const title = n[0].trim().replace(/\s+/g, " ").slice(0, 140);
+    matches.push({ offset: n.index, title });
+    if (matches.length > 400) break; // safety
+  }
+
+  // Merge the two marker sources in document order before de-duping.
+  matches.sort((a, b) => a.offset - b.offset);
 
   // De-dupe markers very close to each other (e.g. TOC + first occurrence).
   const filtered: { offset: number; title: string }[] = [];
