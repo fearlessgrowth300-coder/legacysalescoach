@@ -4,6 +4,8 @@ import { SALES_PLAYBOOK, FRAMEWORK_DETECTION_PROMPT } from "./sales-playbook.ts"
 import { OBJECTION_HANDLERS, OBJECTION_DETECTION_PROMPT } from "./objection-handlers.ts";
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
