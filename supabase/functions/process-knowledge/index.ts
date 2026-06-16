@@ -1457,7 +1457,7 @@ async function extractPdfContent(
     // 2) OCR fallback only when the file looks scanned. Born-digital PDFs skip this entirely.
     if (looksScanned(text.length, arrayBuffer.byteLength)) {
       console.log(`PDF looks scanned (${text.length} chars / ${fileSizeMB.toFixed(2)} MB) — running vision OCR`);
-      const ocr = await ocrPdfWithVision(bytes, apiKey);
+      const ocr = await ocrPdfWithVision(bytes, "");
       if (ocr.length > text.length) finalText = ocr;
     }
 
