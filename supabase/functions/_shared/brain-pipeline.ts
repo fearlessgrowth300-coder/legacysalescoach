@@ -893,17 +893,17 @@ export async function runPipelineFast(opts: {
    * wrapped in a timeout so it can never blow the edge CPU budget. Falls back to the
    * local relevance+power selection if reasoning is slow or unavailable.
    */
-  apiKey?: string;
+  chat?: UserChatTarget;
   session: SessionContext;
 }): Promise<PipelineOutput> {
   const { supabaseAdmin, userId, question, session } = opts;
-  const apiKey = opts.apiKey;
+  const chat = opts.chat;
   const embedText = (opts.embedQuery && opts.embedQuery.trim().length > 0)
     ? opts.embedQuery
     : question;
 
   // Single embedding over the clean message (not the templated wrapper)
-  const emb = await generateEmbedding(embedText.substring(0, 1500));
+  const emb = await generateEmbedding(embedText.substring(0, 1500), supabaseAdmin, userId);
   const embeddingUsed = !!emb;
 
   let semP: Principle[] = [];
@@ -1007,9 +1007,9 @@ export async function runPipelineFast(opts: {
   let usedReasoning = false;
   const reasoningQuestion = embedText.trim() || question;
   const substantial = reasoningQuestion.trim().length >= 12;
-  if (apiKey && substantial && top.length >= 3) {
+  if (chat && substantial && top.length >= 3) {
     const reasoning = await Promise.race([
-      selectPrinciples(apiKey, reasoningQuestion, top.slice(0, 18), session),
+      selectPrinciples(chat, reasoningQuestion, top.slice(0, 18), session),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ]);
     if (reasoning && reasoning.selected.length >= 2) {
@@ -1067,16 +1067,16 @@ export async function runPipelineFast(opts: {
 // ─── Orchestrator: full pipeline up through Layer 2 ───────────────────
 
 export async function runPipeline(opts: {
-  apiKey: string;
+  chat: UserChatTarget;
   supabaseAdmin: any;
   userId: string;
   question: string;
   session: SessionContext;
 }): Promise<PipelineOutput> {
-  const { apiKey, supabaseAdmin, userId, question, session } = opts;
+  const { chat, supabaseAdmin, userId, question, session } = opts;
 
   // Step 1
-  const subqueries = await expandQuery(apiKey, question, session);
+  const subqueries = await expandQuery(chat, question, session);
 
   // Step 2
   const { principles, chunks, embeddingUsed, semanticCount, staticCount } =
@@ -1090,7 +1090,7 @@ export async function runPipeline(opts: {
   ).size;
 
   // Step 3
-  const { top, topScore } = await rerank(apiKey, question, principles, session);
+  const { top, topScore } = await rerank(chat, question, principles, session);
   const rerankedSourceCount = new Set(
     top.map((p) => sourceKeyOf(p)).filter(Boolean) as string[]
   ).size;
@@ -1118,7 +1118,7 @@ export async function runPipeline(opts: {
     (p.relevance_score ?? 0) >= 4
   );
   if (top.length === 0 || (decent.length < 1 && topScore < 0.25)) {
-    const topic = await extractTopic(apiKey, question);
+    const topic = await extractTopic(chat, question);
     return {
       selected: [],
       contradictions: [],
@@ -1131,7 +1131,7 @@ export async function runPipeline(opts: {
   }
 
   // Step 4
-  const reasoning = await selectPrinciples(apiKey, question, top, session);
+  const reasoning = await selectPrinciples(chat, question, top, session);
 
   // Resolve source_url + source_title from knowledge_base_items for the selected principles only
   const sourceIds = [...new Set(reasoning.selected.map((s) => s.source_id).filter((x): x is string => !!x))];
