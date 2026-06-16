@@ -51,9 +51,10 @@ serve(async (req) => {
       // Verify embeddings can actually be generated in this environment
       const probe = await generateEmbedding("sales objection handling test", supabase, user.id);
       if (!probe) {
-        return new Response(JSON.stringify({ error: "Embedding provider not available (LOVABLE_API_KEY missing)." }),
+        return new Response(JSON.stringify({ error: "Embedding provider not available. Add your OpenAI or Gemini API key in Settings." }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
+
 
       let updatedBrain = 0;
       let updatedChunks = 0;
