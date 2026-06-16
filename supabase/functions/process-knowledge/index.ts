@@ -1590,30 +1590,26 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
   } catch { /* ignore */ }
 
   if (videoId) {
-    // 1. Try TranscriptAPI.com with user's key first, then global fallback
-    let userTranscriptApiKey: string | null = null;
+    // 1. Try TranscriptAPI.com — rotate through ALL user-saved transcript keys,
+    //    then fall back to the global key. If one key returns 401/402/403/429
+    //    (auth/billing/limit), automatically try the next one.
+    const userKeys: { key: string; label: string }[] = [];
     if (userId && supabaseClient) {
       try {
-        const userKey = await getLatestUserApiKey(supabaseClient, userId, ["supadata", "transcriptapi"]);
-        if (userKey?.key) {
-          userTranscriptApiKey = userKey.key;
-          console.log("Using user's TranscriptAPI key from user_api_keys", {
-            service: userKey.service,
-            ...describeApiKey(userKey.key),
-          });
-        }
-      } catch (e) { console.error("Failed to fetch user API key:", e); }
+        const rows = await getAllUserApiKeys(supabaseClient, userId, ["supadata", "transcriptapi"]);
+        for (const r of rows) userKeys.push({ key: r.key, label: `user:${r.label}` });
+        console.log(`[process-knowledge] Loaded ${userKeys.length} user transcript key(s) for rotation`);
+      } catch (e) { console.error("Failed to fetch user API keys:", e); }
     }
 
-    // Try TranscriptAPI with available keys, falling back from user key to global key
     const globalKey = Deno.env.get("SUPADATA_API_KEY") || null;
-    const seenKeys = new Set<string>();
+    const seen = new Set<string>();
     const keysToTry: { key: string; label: string }[] = [];
-    if (userTranscriptApiKey) {
-      keysToTry.push({ key: userTranscriptApiKey, label: "user" });
-      seenKeys.add(userTranscriptApiKey);
+    for (const k of userKeys) {
+      if (seen.has(k.key)) continue;
+      keysToTry.push(k); seen.add(k.key);
     }
-    if (globalKey && !seenKeys.has(globalKey)) keysToTry.push({ key: globalKey, label: "global" });
+    if (globalKey && !seen.has(globalKey)) keysToTry.push({ key: globalKey, label: "global" });
 
     for (const { key, label } of keysToTry) {
       if (content && content.length > 100) break;
@@ -1648,8 +1644,8 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
         } else {
           const errBody = await sdRes.text();
           console.warn(`TranscriptAPI error (${label} key):`, sdRes.status, errBody);
-          // If 401/402, try next key
-          if (sdRes.status === 401 || sdRes.status === 402) continue;
+          // Auth, payment, forbidden, or rate-limit → try next key
+          if ([401, 402, 403, 429].includes(sdRes.status)) continue;
         }
       } catch (e) { console.error(`TranscriptAPI error (${label} key):`, e); }
     }
