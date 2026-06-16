@@ -373,7 +373,7 @@ export async function hybridRetrieve(
 }> {
   // Generate embeddings for all sub-queries in parallel
   const embeddings = await Promise.all(
-    subqueries.map((q) => generateEmbedding(q.substring(0, 1000))),
+    subqueries.map((q) => generateEmbedding(q.substring(0, 1000), supabaseAdmin, userId)),
   );
   const embeddingUsed = embeddings.some((e) => !!e);
 
@@ -551,7 +551,7 @@ export async function hybridRetrieve(
 // ─── Step 3: Cross-encoder rerank → top 8 ─────────────────────────────
 
 export async function rerank(
-  _apiKey: string,
+  _chat: UserChatTarget | null,
   question: string,
   candidates: Principle[],
   session: SessionContext,
@@ -590,7 +590,7 @@ export async function rerank(
 // ─── Step 4: Selection prompt → top 3 + winning framework ─────────────
 
 export async function selectPrinciples(
-  apiKey: string,
+  chat: UserChatTarget,
   question: string,
   candidates: Principle[],
   session: SessionContext,
@@ -621,8 +621,8 @@ deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
     : "";
 
   const result = await callTool(
-    apiKey,
-    REASONING_MODEL,
+    chat,
+    "reasoning",
     `You are an elite sales coach choosing principles to drive a multi-source coaching reply.
 
 Pick TWO TIERS:
@@ -852,10 +852,10 @@ Rules:
 
 // ─── Empty-vault topic extraction ─────────────────────────────────────
 
-export async function extractTopic(apiKey: string, question: string): Promise<string> {
+export async function extractTopic(chat: UserChatTarget, question: string): Promise<string> {
   const result = await callTool(
-    apiKey,
-    FAST_MODEL,
+    chat,
+    "fast",
     `Extract the 2-5 word topic of a sales coaching question. Return just the topic (e.g. "price objection handling", "cold DM openers"). No quotes, no punctuation.`,
     question,
     "extract_topic",
