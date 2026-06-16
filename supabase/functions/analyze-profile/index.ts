@@ -211,21 +211,16 @@ Return a JSON object with these exact fields:
 
 Return ONLY the JSON object.`;
 
-    const personaResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: "You are a persona analyzer. Return valid JSON only." },
-          { role: "user", content: personaPrompt },
-        ],
-        temperature: 0.3,
-      }),
+    const personaResponse = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: "You are a persona analyzer. Return valid JSON only." },
+        { role: "user", content: personaPrompt },
+      ],
+      temperature: 0.3,
+      response_format: { type: "json_object" },
     });
+
 
     let personaData: any = null;
     if (personaResponse.ok) {
