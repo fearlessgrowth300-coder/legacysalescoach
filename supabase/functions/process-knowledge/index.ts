@@ -814,10 +814,29 @@ serve(async (req) => {
     }
     const user = { id: userIdResolved };
 
-    // Resolve the user's AI provider (their own OpenAI/Gemini/Claude key, or the
-    // Lovable gateway fallback). All principle EXTRACTION runs on this; embeddings
-    // stay on text-embedding-3-small via the provider's embed endpoint.
-    const ai = await resolveAiProvider(supabase, user.id);
+    // Resolve the user's AI provider. STRICT: requires an OpenAI or Gemini key
+    // (Anthropic isn't supported for the JSON-extraction pipeline). If no key
+    // is configured, surface a clear 400 with the exact action the user must
+    // take in Settings — no Lovable fallback exists anywhere.
+    let ai;
+    try {
+      ai = await resolveAiProvider(supabase, user.id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return new Response(JSON.stringify({
+        error: "missing_api_key",
+        message: "No AI API key configured. Add your OpenAI or Gemini key in Settings to extract principles.",
+        required: ["openai", "gemini"],
+        detail: msg,
+      }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    if (ai.isAnthropic) {
+      return new Response(JSON.stringify({
+        error: "unsupported_provider",
+        message: "Anthropic isn't supported for knowledge extraction yet. Add an OpenAI or Gemini key in Settings.",
+        required: ["openai", "gemini"],
+      }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
     console.log(`[process-knowledge] AI provider: ${ai.name}`);
 
     // Get item info early so book pipeline can update book_brief incrementally
