@@ -782,10 +782,17 @@ export default function AiChat() {
             setMessages(prev => prev.map(m => m.id === savedMsg.id ? { ...m, status: "read" as const } : m));
           }
           if (assistantSoFar && convId) {
-            await supabase.from("ai_chat_messages").insert({
+            const { data: inserted } = await supabase.from("ai_chat_messages").insert({
               conversation_id: convId, user_id: user!.id, role: "assistant", content: assistantSoFar,
               metadata: lastBrainMeta ? { selected_principles: lastBrainMeta.selected_principles || [], framework_name: lastBrainMeta.framework_name || "", empty_vault: !!lastBrainMeta.empty_vault, debug: lastBrainMeta.debug || null } : {},
-            } as any);
+            } as any).select("id").single();
+            if (inserted?.id) {
+              setMessages(prev => {
+                const lastIdx = [...prev].map(m => m.role).lastIndexOf("assistant");
+                if (lastIdx === -1) return prev;
+                return prev.map((m, i) => i === lastIdx && !m.id ? { ...m, id: inserted.id } : m);
+              });
+            }
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
