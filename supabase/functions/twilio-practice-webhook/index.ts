@@ -242,20 +242,23 @@ RULES:
       }
     }
 
-    // Call AI
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: chatMessages,
-        temperature: 0.7,
-        max_tokens: 200,
-      }),
+    // Call AI using the session owner's API key
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, session.user_id);
+    } catch (e) {
+      console.error("twilio webhook: no user AI key", e);
+      return new Response(twimlHangup("AI service not configured. Add an API key in Settings. Goodbye."), {
+        headers: { "Content-Type": "text/xml" },
+      });
+    }
+    const aiResponse = await userChat(chat, {
+      model: chat.models.balanced,
+      messages: chatMessages,
+      temperature: 0.7,
+      max_tokens: 200,
     });
+
 
     if (!aiResponse.ok) {
       console.error("AI error:", aiResponse.status);
