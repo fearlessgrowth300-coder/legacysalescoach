@@ -128,9 +128,11 @@ serve(async (req) => {
         .single();
 
       if (workspace) {
-        const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-        if (LOVABLE_API_KEY) {
+        let chat: any = null;
+        try { chat = await resolveUserChatTarget(supabase, user.id); } catch { /* skip AI when no key */ }
+        if (chat) {
           const mostRecentVideo = profileData.recentVideos[0] || null;
+
           const videoContext = mostRecentVideo
             ? `MOST RECENT VIDEO TO COMMENT ON:\nCaption: "${mostRecentVideo.caption}"\nViews: ${mostRecentVideo.views}, Likes: ${mostRecentVideo.likes}\n${mostRecentVideo.hashtags?.length ? `Hashtags: #${mostRecentVideo.hashtags.join(" #")}` : ""}`
             : `No specific videos found. Use their bio and profile info to craft a comment that would work on any of their posts.`;
