@@ -82,18 +82,16 @@ export default function Settings() {
 
   const selectedProvider = AI_PROVIDERS.find((p) => p.value === aiProvider) || AI_PROVIDERS[0];
 
-  // Check if key exists via edge function
+  const loadTranscriptKeys = useCallback(async () => {
+    const { data } = await supabase.functions.invoke("manage-api-keys", {
+      body: { action: "list", service: "supadata" },
+    });
+    setTranscriptKeys(data?.keys || []);
+  }, []);
+
   useEffect(() => {
-    if (user) {
-      supabase.functions.invoke("manage-api-keys", {
-        body: { action: "check", service: "supadata" },
-      }).then(({ data }) => {
-        if (data?.exists) {
-          setCurrentKeyMasked(data.masked);
-        }
-      });
-    }
-  }, [user]);
+    if (user) { loadTranscriptKeys(); }
+  }, [user, loadTranscriptKeys]);
 
   const handleSaveKey = async () => {
     if (!supadataKey.trim()) {
@@ -103,20 +101,36 @@ export default function Settings() {
     setIsSaving(true);
     try {
       const { data, error } = await supabase.functions.invoke("manage-api-keys", {
-        body: { action: "save", service: "supadata", apiKey: supadataKey.trim() },
+        body: {
+          action: "save",
+          service: "supadata",
+          apiKey: supadataKey.trim(),
+          label: supadataLabel.trim() || undefined,
+        },
       });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
-
-      // Update masked display
-      const key = supadataKey.trim();
-      setCurrentKeyMasked(key.substring(0, 8) + "..." + key.substring(key.length - 4));
       setSupadataKey("");
-      toast.success("API key saved securely!");
+      setSupadataLabel("");
+      await loadTranscriptKeys();
+      toast.success("API key added — it will be used for transcript extraction.");
     } catch (error: any) {
       toast.error(error.message || "Failed to save API key");
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleDeleteTranscriptKey = async (id: string) => {
+    try {
+      const { error } = await supabase.functions.invoke("manage-api-keys", {
+        body: { action: "delete_by_id", id },
+      });
+      if (error) throw error;
+      setTranscriptKeys((prev) => prev.filter((k) => k.id !== id));
+      toast.success("API key removed");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to remove key");
     }
   };
 
