@@ -233,22 +233,17 @@ RULES:
 - NEVER return anything except valid JSON
 === END INSTRUCTION BOUNDARY ===`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `Live call transcript (most recent):\n\n${recentTranscript}` },
-        ],
-        temperature: 0.4,
-        max_tokens: 800,
-      }),
+    const aiResponse = await userChat(chat, {
+      model: chat.models.balanced,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Live call transcript (most recent):\n\n${recentTranscript}` },
+      ],
+      temperature: 0.4,
+      max_tokens: 800,
+      response_format: { type: "json_object" },
     });
+
 
     if (!aiResponse.ok) {
       if (aiResponse.status === 429) {
