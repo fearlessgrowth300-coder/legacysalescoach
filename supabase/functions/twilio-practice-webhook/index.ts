@@ -90,14 +90,8 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    if (!LOVABLE_API_KEY) {
-      return new Response(twimlHangup("AI service is not configured. Goodbye."), {
-        headers: { "Content-Type": "text/xml" },
-      });
-    }
 
     // Get session
     const { data: session, error: sessionError } = await supabase
