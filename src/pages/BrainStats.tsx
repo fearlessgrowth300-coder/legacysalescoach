@@ -4,21 +4,34 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Brain, BookOpen, MessageSquare, Target, Shield,
   Sparkles, TrendingUp, Zap, Heart, Briefcase, FileText, Link,
-  ThumbsUp, Lightbulb, Calendar, RefreshCw, Loader2
+  ThumbsUp, Lightbulb, Calendar, RefreshCw, Loader2, Trash2, Youtube
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { format, isToday, isThisWeek } from "date-fns";
 import { toast } from "sonner";
 
 export default function BrainStats() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [isReprocessing, setIsReprocessing] = useState(false);
   const [isRepairing, setIsRepairing] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [postClearOpen, setPostClearOpen] = useState(false);
+  const [clearStats, setClearStats] = useState<{ principles: number; chunks: number; insights: number; items: number }>({ principles: 0, chunks: 0, insights: 0, items: 0 });
 
   const { data: chunks, isLoading } = useQuery({
     queryKey: ["brain-chunks"],
