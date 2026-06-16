@@ -34,9 +34,9 @@ export default function BrainStats() {
   const [clearStats, setClearStats] = useState<{ principles: number; chunks: number; insights: number; items: number }>({ principles: 0, chunks: 0, insights: 0, items: 0 });
 
   const { data: chunks, isLoading } = useQuery({
-    queryKey: ["brain-chunks"],
+    queryKey: ["brain-chunks", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase.from("knowledge_chunks").select("*");
+      const { data, error } = await supabase.from("knowledge_chunks").select("*").eq("user_id", user!.id);
       if (error) throw error;
       return data;
     },
@@ -44,9 +44,9 @@ export default function BrainStats() {
   });
 
   const { data: items } = useQuery({
-    queryKey: ["kb-items"],
+    queryKey: ["kb-items", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase.from("knowledge_base_items").select("*");
+      const { data, error } = await supabase.from("knowledge_base_items").select("*").eq("user_id", user!.id);
       if (error) throw error;
       return data;
     },
