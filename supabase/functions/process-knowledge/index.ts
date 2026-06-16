@@ -364,7 +364,8 @@ async function extractStructuredLearnings(content: string, sourceName: string, a
   console.log(`Pass 1 done. Concatenated cleaned text: ${cleanedFull.length} chars`);
 
   // ===== PASS 2: Re-chunk the cleaned text at 10k and extract from each =====
-  const extractionChunks = chunkText(cleanedFull, 10000);
+  // ~12% overlap so a framework spanning a boundary stays whole in one chunk.
+  const extractionChunks = chunkText(cleanedFull, 10000, 1200);
   console.log(`Pass 2: extracting from ${extractionChunks.length} cleaned chunks`);
 
   const allLearnings: any[] = [];
@@ -492,7 +493,7 @@ async function extractChapterPrinciples(
   ai: AiProvider,
   chunkSize = 6000,
 ): Promise<any[]> {
-  const subChunks = chunkText(chapter.text, chunkSize);
+  const subChunks = chunkText(chapter.text, chunkSize, Math.floor(chunkSize * 0.12));
   const all: any[] = [];
   const deadlineMs = Date.now() + 95_000;
   for (let i = 0; i < subChunks.length; i++) {

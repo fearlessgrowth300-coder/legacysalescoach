@@ -1,11 +1,15 @@
 // Pure helpers extracted so they can be unit-tested under both Deno (edge runtime)
 // and Vitest (node). No Deno-specific imports here.
 
-// True 10k-character chunker. Breaks on sentence/paragraph boundaries when possible.
-export function chunkText(content: string, chunkSize = 10000): string[] {
+// 10k-character chunker. Breaks on sentence/paragraph boundaries when possible.
+// `overlap` (chars) carries the tail of each chunk into the next so a framework
+// or principle that straddles a boundary isn't cut mid-explanation. Duplicate
+// principles from overlapping regions are removed later by dedupePrinciples.
+export function chunkText(content: string, chunkSize = 10000, overlap = 0): string[] {
   const chunks: string[] = [];
   if (!content) return chunks;
   if (content.length <= chunkSize) return [content];
+  const safeOverlap = Math.max(0, Math.min(overlap, Math.floor(chunkSize * 0.4)));
   let start = 0;
   while (start < content.length) {
     let end = start + chunkSize;
@@ -20,7 +24,7 @@ export function chunkText(content: string, chunkSize = 10000): string[] {
     if (breakPoint > start + chunkSize * 0.5) end = breakPoint + 1;
     const piece = content.substring(start, end).trim();
     if (piece.length > 0) chunks.push(piece);
-    start = end;
+    start = safeOverlap > 0 ? Math.max(end - safeOverlap, start + 1) : end;
   }
   return chunks;
 }
