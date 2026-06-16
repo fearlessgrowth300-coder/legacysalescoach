@@ -256,7 +256,7 @@ Key Themes: ${personaData.key_themes || "Not detected"}
 Framework Approach: ${personaData.framework_summary || "No custom framework"}
 Workspace Type: ${workspace.workspace_type || "friend"}`;
 
-      const embedding = await generateEmbedding(personaSummary, LOVABLE_API_KEY);
+      const embedding = await generateEmbedding(personaSummary, supabase, user.id);
 
       await supabase.from("sales_brain").insert({
         user_id: user.id,
