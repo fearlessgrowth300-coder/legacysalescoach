@@ -3,18 +3,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { describeApiKey, getLatestUserApiKey } from "../_shared/api-key-utils.ts";
 import { resolveAiProvider, aiEmbed, type AiProvider } from "../_shared/ai-provider.ts";
 
-// Build the chat endpoint/headers/model for the user's provider. OpenAI & Gemini
-// are OpenAI-compatible so the request/response shape is unchanged — we only swap
-// URL, key and model. Anthropic (or no key) falls back to the Lovable gateway here
-// (the raw-fetch path can't translate Anthropic; chat/extraction still works).
+// Build the chat endpoint/headers/model for the user's OWN provider key
+// (OpenAI / Gemini). NO Lovable-AI fallback. Anthropic users get a clear error
+// for this feature (the raw-fetch JSON-extraction path can't translate the
+// Messages API shape) — they should add an OpenAI or Gemini key in Settings.
 function chatTarget(ai: AiProvider, gatewayModel: string): { url: string; headers: Record<string, string>; model: string } {
-  if (ai.name === "lovable" || ai.isAnthropic) {
-    const lk = (ai.name === "lovable" ? ai.key : "") || Deno.env.get("LOVABLE_API_KEY") || "";
-    return {
-      url: "https://ai.gateway.lovable.dev/v1/chat/completions",
-      headers: { Authorization: `Bearer ${lk}`, "Content-Type": "application/json" },
-      model: gatewayModel,
-    };
+  if (ai.name === "lovable") {
+    throw new Error("No AI API key configured. Add your OpenAI or Gemini key in Settings.");
+  }
+  if (ai.isAnthropic) {
+    throw new Error("Anthropic isn't supported for knowledge extraction yet. Add an OpenAI or Gemini key in Settings.");
   }
   const tier: "fast" | "balanced" | "reasoning" =
     gatewayModel.includes("flash-lite") ? "fast" : gatewayModel.includes("gemini-3") ? "reasoning" : "balanced";
