@@ -487,16 +487,16 @@ Return JSON ONLY:
 }]}
 
 RULES:
-- Extract UP TO 8 distinct principles from this section. Capture every genuinely valuable idea, script, framework, warning, objection-handler, and story in the text. Do NOT pad with weak or duplicate items — but do NOT skip real value either.
+- Extract UP TO 6 distinct, high-value principles from this section. Capture the genuinely valuable ideas, scripts, frameworks, warnings, objection-handlers, and stories. Do NOT pad with weak or duplicate items.
 - exact_words_to_use MUST be VERBATIM — reproduce the author's scripts and exact lines word-for-word, no paraphrasing or shortening.
 - what_i_learned must be RICH (3+ sentences), never a one-line headline.
 - Return ONLY the JSON object.` },
           { role: "user", content: `Book: ${sourceName}\nChapter: ${chapterTitle}\nPart: ${chunkIndex + 1}/${totalChunks}\n\n${content}` },
         ],
         temperature: 0.2,
-        max_tokens: 7000,
+        max_tokens: 5500,
       }),
-      signal: AbortSignal.timeout(40000),
+      signal: AbortSignal.timeout(28000),
     });
     if (!response.ok) return [];
     const data = await response.json();
@@ -518,7 +518,7 @@ async function extractChapterPrinciples(
 ): Promise<any[]> {
   const subChunks = chunkText(chapter.text, chunkSize, Math.floor(chunkSize * 0.12));
   const all: any[] = [];
-  const deadlineMs = Date.now() + 95_000;
+  const deadlineMs = Date.now() + 70_000;
   for (let i = 0; i < subChunks.length; i++) {
     if (Date.now() > deadlineMs) {
       console.warn(`Chapter ${chapter.index} hit time budget after ${i}/${subChunks.length} subchunks; continuing with ${all.length} principles`);
