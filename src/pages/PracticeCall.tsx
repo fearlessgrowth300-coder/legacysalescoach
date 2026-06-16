@@ -312,6 +312,11 @@ export default function PracticeCall() {
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const liveRecognitionRef = useRef<any>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
+  // Mirror callState in a ref so the recursive voice loop always reads the CURRENT
+  // value (the useCallback closure otherwise captures a stale callState and the
+  // loop stops listening after the first turn).
+  const callStateRef = useRef<CallState>("idle");
+  useEffect(() => { callStateRef.current = callState; }, [callState]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -436,9 +441,9 @@ export default function PracticeCall() {
     try {
       const userSpeech = await startListening();
       if (!userSpeech.trim()) {
-        // No speech detected, try again
-        if (callState === "voice_connected") {
-          setTimeout(() => voiceConversationLoop(scenario, transcript, sessionId), 500);
+        // No speech detected this cycle — keep listening while the call is active.
+        if (callStateRef.current === "voice_connected") {
+          setTimeout(() => voiceConversationLoop(scenario, transcript, sessionId), 400);
         }
         return;
       }
@@ -488,10 +493,23 @@ export default function PracticeCall() {
       // Continue loop
       voiceConversationLoop(scenario, updatedTranscript, sessionId);
     } catch (e: any) {
-      if (e === "aborted" || e === "not-allowed") return;
+      const err = String(e);
+      if (err === "aborted") return;
+      // Surface fatal mic/browser problems instead of retrying forever in silence.
+      if (err === "not-allowed" || err.includes("not supported")) {
+        toast.error(
+          err.includes("not supported")
+            ? "Voice practice needs a browser with speech recognition (Chrome on desktop or Android). Try there, or use the text practice."
+            : "Microphone was blocked. Allow mic access for this site and start the call again.",
+        );
+        setCallState("voice_ended");
+        return;
+      }
       console.error("Voice loop error:", e);
-      // Retry after brief pause
-      setTimeout(() => voiceConversationLoop(scenario, transcript, sessionId), 1000);
+      // Transient error — keep the call going while still connected.
+      if (callStateRef.current === "voice_connected") {
+        setTimeout(() => voiceConversationLoop(scenario, transcript, sessionId), 1000);
+      }
     }
   }, [startListening, speakText, getBusinessContextString]);
 
