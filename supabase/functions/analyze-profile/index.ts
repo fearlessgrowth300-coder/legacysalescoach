@@ -41,28 +41,9 @@ async function scrapeUrl(url: string): Promise<string> {
   }
 }
 
-async function generateEmbedding(text: string, apiKey: string): Promise<number[] | null> {
-  try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "text-embedding-3-small",
-        input: text.substring(0, 8000),
-        dimensions: 768,
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.data?.[0]?.embedding || null;
-  } catch {
-    return null;
-  }
-}
+// (embedding helper moved to shared util — see imports above)
+
+
 
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
