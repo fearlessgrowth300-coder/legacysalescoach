@@ -82,21 +82,16 @@ Extract and return this EXACT JSON:
 
 Return ONLY the JSON.`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: "You are a conversational style analyst. Return valid JSON only." },
-          { role: "user", content: stylePrompt },
-        ],
-        temperature: 0.2,
-      }),
+    const response = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: "You are a conversational style analyst. Return valid JSON only." },
+        { role: "user", content: stylePrompt },
+      ],
+      temperature: 0.2,
+      response_format: { type: "json_object" },
     });
+
 
     if (!response.ok) {
       if (trainingDataId) {
