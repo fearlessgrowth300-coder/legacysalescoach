@@ -855,7 +855,7 @@ serve(async (req) => {
     if (manualTranscript && manualTranscript.trim().length > 10) {
       content = manualTranscript.trim();
     } else if (type === "pdf" && (filePath || itemEarly.file_path)) {
-      content = await extractPdfContent(filePath || itemEarly.file_path, supabase, itemId, corsHeaders, LOVABLE_API_KEY);
+      content = await extractPdfContent(filePath || itemEarly.file_path, supabase, itemId, corsHeaders);
     } else if (url || itemEarly.url) {
       content = await extractUrlContent(url || itemEarly.url, supabaseUrl, supabaseKey, supabase, user.id);
     }
