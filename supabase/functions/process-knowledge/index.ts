@@ -1411,7 +1411,6 @@ async function extractPdfContent(
   supabase: any,
   itemId: string,
   _corsHeaders: any,
-  apiKey: string,
 ): Promise<string> {
   // See pdf-extract.ts for the architectural rationale (unpdf > Gemini-as-PDF-reader > pdf-parse).
   try {
