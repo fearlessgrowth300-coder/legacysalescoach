@@ -133,9 +133,10 @@ CRITICAL RULE: Use multiple different sources ONLY when they genuinely fit the m
 
 When you cite a source, use this exact format:
 (Source: "Book/Video Title")
+If the principle block shows a SOURCE CHAPTER line, you MUST include it in the citation: (Source: "Book Title", Chapter N).
 
 or when naming a principle:
-The [Principle Name] (from "[Book Title]")
+The [Principle Name] (from "[Book Title]", Chapter N if the chapter is shown)
 
 PRINCIPLE NAMING RULE — NON-NEGOTIABLE:
 - Never write a generic sentence like "According to Source A combined with Source B" by itself.
@@ -485,6 +486,33 @@ serve(async (req) => {
     const workspaceProfile = clampText(await fetchWorkspaceProfile(supabaseAdmin, user.id), WORKSPACE_PROFILE_CHAR_LIMIT);
     const recentExchanges = session.recent_exchanges
       .map((e) => `${e.role}: ${e.content}`).join("\n");
+
+    // Chapter-level citations: book principles carry metadata.chapter (the chapter
+    // index). Attach a "Chapter N" label so the model can cite the exact section.
+    try {
+      const citedIds = [...new Set([
+        ...pipeline.selected.map((s) => s.id),
+        ...pipeline.evidence_principles.map((p) => p.id),
+      ].filter((x): x is string => !!x))];
+      if (citedIds.length) {
+        const { data: metaRows } = await supabaseAdmin.from("sales_brain").select("id, metadata").in("id", citedIds);
+        const chapterById = new Map<string, string>();
+        for (const r of (metaRows || [])) {
+          const ch = (r as any).metadata?.chapter;
+          if (ch !== null && ch !== undefined && ch !== "") chapterById.set((r as any).id, `Chapter ${ch}`);
+        }
+        for (const s of pipeline.selected) {
+          const label = chapterById.get(s.id);
+          if (label) (s.full as any).chapter_label = label;
+        }
+        for (const p of pipeline.evidence_principles) {
+          const label = chapterById.get(p.id);
+          if (label) (p as any).chapter_label = label;
+        }
+      }
+    } catch (e) {
+      console.warn("[brain-chat] chapter label resolution failed:", e);
+    }
 
     // Collect every source title the model is allowed to name (selected + evidence)
     const sourceTitles = [...new Set([

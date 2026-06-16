@@ -1272,7 +1272,7 @@ export function buildPrinciplesBlock(selected: SelectedPrinciple[]): string {
     const tierLabel = s.tier === "primary" ? "PRIMARY" : "SUPPORTING";
     return `[PRINCIPLE ${i + 1} — ${tierLabel}]
 SOURCE BOOK/VIDEO: "${s.source_title || sourceTitleOf(p)}"
-PRINCIPLE NAME: ${p.principle_name}
+${(p as any).chapter_label ? `SOURCE CHAPTER: ${(p as any).chapter_label}\n` : ""}PRINCIPLE NAME: ${p.principle_name}
 CATEGORY: ${p.category}
 WHAT IT IS: ${p.what_i_learned || ""}
 THE DEEP WHY: ${p.the_deep_why || ""}
@@ -1300,7 +1300,7 @@ export function buildEvidenceBlock(principles: Principle[]): string {
   return clampText(principles.map((p, i) =>
     `[EVIDENCE PRINCIPLE ${i + 1}]
 SOURCE BOOK/VIDEO: "${sourceTitleOf(p)}"
-PRINCIPLE NAME: ${p.principle_name}
+${(p as any).chapter_label ? `SOURCE CHAPTER: ${(p as any).chapter_label}\n` : ""}PRINCIPLE NAME: ${p.principle_name}
 CATEGORY: ${p.category}
 What it teaches: ${(p.what_i_learned || "").substring(0, 170)}
 How to apply: ${(p.how_to_apply || "").substring(0, 160)}
