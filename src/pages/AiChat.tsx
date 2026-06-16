@@ -1318,7 +1318,7 @@ export default function AiChat() {
               return (
               <div key={i} ref={isLastUser ? userMsgRef : undefined} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[85%] min-w-0 rounded-lg p-3 relative group overflow-hidden break-words ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                  className={`max-w-[85%] min-w-0 rounded-lg p-3 relative group overflow-hidden break-words [overflow-wrap:anywhere] ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
                   onTouchStart={() => {
                     msgLongPressTimer.current = setTimeout(() => {
                       if (navigator.vibrate) navigator.vibrate(50);
@@ -1331,7 +1331,7 @@ export default function AiChat() {
                   {(msg.image_urls || (msg.image_url ? [msg.image_url] : [])).length > 0 && (
                     <div className="flex flex-wrap gap-1 mb-2">
                       {(msg.image_urls || [msg.image_url!]).map((url, imgIdx) => (
-                        <img key={imgIdx} src={url} alt={`Attached ${imgIdx + 1}`} className="rounded-md max-h-48 object-cover" />
+                        <img key={imgIdx} src={url} alt={`Attached ${imgIdx + 1}`} className="rounded-md max-h-48 max-w-full object-contain" />
                       ))}
                     </div>
                   )}
@@ -1376,7 +1376,7 @@ export default function AiChat() {
                       {msg.role === "assistant" ? (
                         <BrainCitations content={msg.content} selectedPrinciples={msg.selected_principles} frameworkName={msg.framework_name} />
                       ) : (
-                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                        <p className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</p>
                       )}
                       {/* Truncation warning on last assistant message */}
                       {wasTruncated && msg.role === "assistant" && i === messages.length - 1 && !isLoading && (
