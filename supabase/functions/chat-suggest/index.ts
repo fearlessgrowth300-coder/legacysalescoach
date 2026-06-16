@@ -643,10 +643,11 @@ serve(async (req) => {
         message ? `Profile scrape summary: ${message}` : "",
       ].filter(Boolean).join("\n").substring(0, 3500);
 
-      const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+      let firstChat: any = null;
+      try { firstChat = await resolveUserChatTarget(supabase, user.id); } catch { /* skip if no key */ }
       let parsed: any = null;
 
-      if (LOVABLE_API_KEY) {
+      if (firstChat) {
         const firstMessagePrompt = `Create 3 first DM openers for this ${prospect.platform === "tiktok" ? "TikTok" : "Instagram"} prospect.
 
 MY CONTEXT:
@@ -670,20 +671,14 @@ JSON shape:
 {"suggestions":[{"id":1,"type":"primary","text":"...","whyThisWorks":"...","frameworkUsed":"..."},{"id":2,"type":"alternative","text":"...","whyThisWorks":"...","frameworkUsed":"..."},{"id":3,"type":"softer","text":"...","whyThisWorks":"...","frameworkUsed":"..."}],"pushyWarning":null,"detectedTone":"profile_based","questioningPattern":"situation","frameworkApplied":"Pattern Interrupt + Specific Observation + Micro-Commitment","prospectType":"unknown","brainChunksUsed":[],"prospectFears":[],"prospectDreams":[],"conversionTriggers":[]}`;
 
         try {
-          const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${LOVABLE_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "google/gemini-2.5-flash-lite",
-              messages: [
-                { role: "system", content: "You write natural first DMs. Return valid JSON only." },
-                { role: "user", content: firstMessagePrompt },
-              ],
-              temperature: 0.75,
-            }),
+          const aiRes = await userChat(firstChat, {
+            model: firstChat.models.fast,
+            messages: [
+              { role: "system", content: "You write natural first DMs. Return valid JSON only." },
+              { role: "user", content: firstMessagePrompt },
+            ],
+            temperature: 0.75,
+            response_format: { type: "json_object" },
           });
 
           if (aiRes.ok) {
@@ -698,6 +693,7 @@ JSON shape:
           console.warn("first_message fast path parse/generation failed", error);
         }
       }
+
 
       if (!parsed?.suggestions?.length) {
         parsed = {
