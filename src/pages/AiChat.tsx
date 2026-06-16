@@ -1279,8 +1279,11 @@ export default function AiChat() {
         {/* Old voice overlay removed — using VoiceCallAssistant component now */}
 
         {/* Messages */}
-        <ScrollArea className="flex-1 p-4" ref={scrollRef}>
-          <div className="space-y-3 max-w-3xl mx-auto">
+        {/* The `[&_...viewport]>div` override forces Radix ScrollArea's internal
+            display:table wrapper to a block so it can't size to content and
+            overflow horizontally on narrow mobile viewports. */}
+        <ScrollArea className="flex-1 p-4 [&_[data-radix-scroll-area-viewport]>div]:!block [&_[data-radix-scroll-area-viewport]>div]:w-full" ref={scrollRef}>
+          <div className="space-y-3 max-w-3xl mx-auto w-full">
             {messages.length === 0 && !activeConvId && (
               <div className="text-center py-12">
                 <div className="relative inline-block mb-4">
