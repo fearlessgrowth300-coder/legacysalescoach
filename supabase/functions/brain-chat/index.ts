@@ -24,7 +24,7 @@ function getCorsHeaders(req: Request) {
 const MAX_MESSAGE_LENGTH = 30000;
 const MAX_MESSAGES = 2000;
 const MODEL_CONTEXT_MESSAGES = 8;
-const USER_INPUT_CHAR_LIMIT = 1800;
+const USER_INPUT_CHAR_LIMIT = 3600;
 const RECENT_EXCHANGES_CHAR_LIMIT = 900;
 const WORKSPACE_PROFILE_CHAR_LIMIT = 500;
 
@@ -360,11 +360,11 @@ serve(async (req) => {
           const vResp = await userChat(chat, {
             model: chat.models.vision,
             temperature: 0.2,
-            max_tokens: 900,
+            max_tokens: 1800,
             messages: [{
               role: "user",
               content: [
-                { type: "text", text: `You are a sales coach's eyes. Analyze the image(s) carefully.${lastUserText ? ` The user also wrote: "${lastUserText}"` : ""}\n\nReturn plain text with these labeled sections:\nTRANSCRIPT: If it shows a conversation/DM/chat, transcribe it verbatim (who said what, in order). Otherwise write "none".\nWHAT I SEE: Describe exactly what is in the image(s) — people, product, screen, profile/bio, captions, numbers, charts, context. Be concrete.\nSITUATION: 1-2 sentences on the sales situation and what the user needs help with right now.` },
+                { type: "text", text: `You are a sales coach's eyes. Read the image(s) COMPLETELY and carefully — top to bottom, every message.${lastUserText ? ` The user also wrote: "${lastUserText}"` : ""}\n\nReturn plain text with these labeled sections:\nTRANSCRIPT: If it shows a conversation/DM/chat, transcribe the ENTIRE thread VERBATIM from the very FIRST message to the last — every line, in order, labeling who said what (Prospect vs You). Do NOT summarize or skip the earlier messages. Otherwise write "none".\nWHAT I SEE: Describe exactly what is in the image(s) — people, product, screen, profile/bio, captions, numbers, charts, context. Be concrete.\nSITUATION: 2-3 sentences on the full arc of the conversation (how it started, where it is now) and what the user needs help with right now.` },
                 ...imageParts,
               ],
             }],
@@ -540,7 +540,7 @@ serve(async (req) => {
     });
 
     if (hasImageAttachment && conversationText) {
-      systemPrompt += `\n\n=== WHAT'S IN THE IMAGE(S) — VISION ANALYSIS ===\n${conversationText}\n\n=== USER INSTRUCTION ===\n"${userInstruction}"\n\nThe user attached image(s). You can ALSO see them directly. Combine what you see with the analysis above and the user's instruction, diagnose exactly what's happening, then follow the response style above. If it's a conversation, end with a clear copy-paste ready message to send. If it's a profile/product/other image, give the concrete next move and the exact words — always grounded in the vault principles.`;
+      systemPrompt += `\n\n=== WHAT'S IN THE IMAGE(S) — VISION ANALYSIS (FULL CONVERSATION) ===\n${conversationText}\n\n=== THE USER'S FULL INSTRUCTION (read ALL of it, not just the last line) ===\n"${userInstruction}"\n\nHOW TO USE THIS:\n1. Read the ENTIRE conversation transcript above from the FIRST message to the last — understand the whole arc (how it started, what was offered, every objection, where it stands now). Do NOT base your reply on only the most recent message.\n2. Read the user's FULL instruction above and honor EVERY part of it — the price/offer details, what they're selling, the timing, and any specific ask. Don't fixate on only the last sentence.\n3. Then diagnose what's really happening across the whole thread and follow the response style above. Reference specific things the prospect actually said earlier in the conversation when relevant.\n\nIf it's a conversation, end with a clear copy-paste ready message to send. If it's a profile/product/other image, give the concrete next move and the exact words — always grounded in the vault principles.`;
     }
 
     const brainMeta = {
