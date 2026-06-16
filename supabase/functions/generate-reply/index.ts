@@ -100,8 +100,6 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceRoleKey);
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     const token = authHeader?.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
@@ -110,6 +108,16 @@ serve(async (req) => {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
+
 
     // ===== PARALLEL DATA FETCH =====
     const { data: prospect } = await supabase.from("prospects").select("*").eq("id", prospectId).eq("user_id", user.id).single();
