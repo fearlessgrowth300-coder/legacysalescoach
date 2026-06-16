@@ -337,18 +337,16 @@ SPIN DETECTION: <4 exchanges="situation", personal but no pain="problem", pain n
 STAGE RULES: "friend" 0-40, "warming" 41-74, "referral" 75+ AND pain_expressed=true.
 WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.`;
 
-    const analysisResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: analysisPrompt },
-          { role: "user", content: `WORKSPACE_PROFILE:\n${workspaceProfile}\n\nSALES_BRAIN_PRINCIPLES:\n${principlesText.substring(0, 4000)}\n\nCONVERSATION_HISTORY:\n${conversationHistory}` },
-        ],
-        temperature: 0.3,
-      }),
+    const analysisResponse = await userChat(chat, {
+      model: chat.models.balanced,
+      messages: [
+        { role: "system", content: analysisPrompt },
+        { role: "user", content: `WORKSPACE_PROFILE:\n${workspaceProfile}\n\nSALES_BRAIN_PRINCIPLES:\n${principlesText.substring(0, 4000)}\n\nCONVERSATION_HISTORY:\n${conversationHistory}` },
+      ],
+      temperature: 0.3,
+      response_format: { type: "json_object" },
     });
+
 
     if (!analysisResponse.ok) {
       const st = analysisResponse.status;
