@@ -80,3 +80,34 @@ export async function getLatestUserApiKey(
     service: data.service,
   };
 }
+
+// Returns ALL keys for the user across the given services, ordered newest first.
+// Used to rotate through multiple keys (e.g. several YouTube Transcript keys).
+export async function getAllUserApiKeys(
+  supabase: any,
+  userId: string | null,
+  services: string[],
+): Promise<{ id: string; key: string; service: string; label: string }[]> {
+  if (!userId) return [];
+  const { data, error } = await supabase
+    .from("user_api_keys")
+    .select("id, api_key, service, label")
+    .eq("user_id", userId)
+    .in("service", services)
+    .order("updated_at", { ascending: false });
+  if (error) throw error;
+  const out: { id: string; key: string; service: string; label: string }[] = [];
+  for (const row of data || []) {
+    try {
+      out.push({
+        id: row.id,
+        key: await decryptStoredApiKey(row.api_key),
+        service: row.service,
+        label: row.label || "default",
+      });
+    } catch (e) {
+      console.warn("[api-key-utils] decrypt failed for key", row.id, e);
+    }
+  }
+  return out;
+}
