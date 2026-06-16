@@ -101,7 +101,7 @@ serve(async (req) => {
     // Retrieve brain principles (semantic + static)
     const lastMessages = (messages || []).slice(-5).map((m: any) => m.content).join(" ");
     const queryText = lastMessages.substring(0, 1000);
-    const embeddingPromise = generateEmbedding(queryText);
+    const embeddingPromise = generateEmbedding(queryText, supabase, user.id);
 
     const [
       { data: allPrinciples },

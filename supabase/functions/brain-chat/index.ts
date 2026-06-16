@@ -3,6 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import {
   runPipelineFast, buildSessionContext, buildPrinciplesBlock, buildChunksBlock, buildEvidenceBlock,
 } from "../_shared/brain-pipeline.ts";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+
 
 
 function getCorsHeaders(req: Request) {
@@ -317,8 +319,16 @@ serve(async (req) => {
       ? lastUserMsg.content.filter((p: any) => p.type === "image_url" && p.image_url?.url).map((p: any) => p.image_url.url)
       : [];
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabaseAdmin, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
+
 
     // Build session context (last 3 exchanges + previous-turn principles)
     const session = await buildSessionContext(supabaseAdmin, conversation_id || null, modelMessages);
@@ -378,18 +388,14 @@ serve(async (req) => {
 
       // Extract a sales-situation sentence to drive vector retrieval
       try {
-        const sitResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash-lite",
-            temperature: 0,
-            max_tokens: 120,
-            messages: [{
-              role: "user",
-              content: `Read this conversation and write a 1-sentence sales situation description for semantic search. Focus on objection type, prospect psychology, and conversation stage. Output the situation only — no other text.\n\nConversation:\n${conversationText.slice(0, 1500)}`,
-            }],
-          }),
+        const sitResp = await userChat(chat, {
+          model: chat.models.fast,
+          temperature: 0,
+          max_tokens: 120,
+          messages: [{
+            role: "user",
+            content: `Read this conversation and write a 1-sentence sales situation description for semantic search. Focus on objection type, prospect psychology, and conversation stage. Output the situation only — no other text.\n\nConversation:\n${conversationText.slice(0, 1500)}`,
+          }],
         });
         if (sitResp.ok) {
           const sd = await sitResp.json();
@@ -426,7 +432,7 @@ serve(async (req) => {
       userId: user.id,
       question: retrievalQuery,
       embedQuery,
-      apiKey: LOVABLE_API_KEY,
+      chat,
       session,
     });
 
@@ -517,18 +523,25 @@ serve(async (req) => {
       async start(controller) {
         controller.enqueue(encoder.encode(loadingEvent));
         controller.enqueue(encoder.encode(metaEvent));
-        const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "google/gemini-3-flash-preview",
-            max_tokens: 2200,
-            reasoning: { effort: "minimal" },
-            temperature: 0.35,
-            messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
-            stream: true,
-          }),
-        });
+        const aiResp = chat.isAnthropic
+          ? await userChat(chat, {
+              model: chat.models.reasoning,
+              max_tokens: 2200,
+              temperature: 0.35,
+              messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
+            })
+          : await fetch(chat.url, {
+              method: "POST",
+              headers: chat.headers,
+              body: JSON.stringify({
+                model: chat.models.reasoning,
+                max_tokens: 2200,
+                temperature: 0.35,
+                messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
+                stream: true,
+              }),
+            });
+
 
         if (!aiResp.ok || !aiResp.body) {
           let message = "AI gateway error";

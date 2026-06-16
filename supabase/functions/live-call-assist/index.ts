@@ -92,7 +92,7 @@ serve(async (req) => {
     const queryText = transcript.slice(-3).map((t: any) => t.text).join(" ").substring(0, 500);
 
     // Generate embedding + fetch data in parallel
-    const embeddingPromise = generateEmbedding(queryText);
+    const embeddingPromise = generateEmbedding(queryText, supabase, user.id);
 
     const [
       { data: kbItems },

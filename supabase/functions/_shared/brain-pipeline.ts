@@ -3,16 +3,13 @@
 // Layer 2: Reasoning (select)     — step 4
 // Layer 3: Response generation lives in the caller (brain-chat or voice-brain).
 //
-// All AI calls go through Lovable AI Gateway. Gemini equivalents:
-//   "GPT-4o-mini"  -> google/gemini-2.5-flash-lite
-//   "GPT-4o"       -> google/gemini-3-flash-preview
+// All AI calls route through the USER's provider (OpenAI/Gemini/Anthropic) via
+// the shared user-ai helper — NO Lovable-AI fallback.
 
 import { generateEmbedding } from "./embeddings.ts";
 import { deduplicatePrinciples, deduplicateChunks, mergeByIdPriority } from "./dedup.ts";
+import type { UserChatTarget } from "./user-ai.ts";
 
-const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
-const FAST_MODEL = "google/gemini-2.5-flash-lite";
-const REASONING_MODEL = "google/gemini-3-flash-preview";
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story";
@@ -268,14 +265,35 @@ export function enforceSourceDiversity<T extends { source_title?: string | null;
 // ─── Gateway helpers ──────────────────────────────────────────────────
 
 async function callTool(
-  apiKey: string,
-  model: string,
+  chat: UserChatTarget,
+  tier: "fast" | "balanced" | "reasoning",
   systemPrompt: string,
   userPrompt: string,
   toolName: string,
   toolSchema: Record<string, unknown>,
-  opts?: { reasoning?: { effort: "minimal" | "low" | "medium" | "high" } },
+  _opts?: { reasoning?: { effort: "minimal" | "low" | "medium" | "high" } },
 ): Promise<any> {
+  const model = chat.models[tier];
+  // Anthropic translation path — use userChat()
+  if (chat.isAnthropic) {
+    const { userChat } = await import("./user-ai.ts");
+    const res = await userChat(chat, {
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      tools: [{ type: "function", function: { name: toolName, description: "Structured output", parameters: toolSchema } }],
+      tool_choice: { type: "function", function: { name: toolName } },
+      temperature: 0.2,
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const tc = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (!tc?.function?.arguments) return null;
+    try { return JSON.parse(tc.function.arguments); } catch { return null; }
+  }
+
   const body: any = {
     model,
     messages: [
@@ -286,10 +304,9 @@ async function callTool(
     tool_choice: { type: "function", function: { name: toolName } },
     temperature: 0.2,
   };
-  if (opts?.reasoning) body.reasoning = opts.reasoning;
-  const res = await fetch(GATEWAY, {
+  const res = await fetch(chat.url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    headers: chat.headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -303,10 +320,11 @@ async function callTool(
   try { return JSON.parse(tc.function.arguments); } catch { return null; }
 }
 
+
 // ─── Step 1: Query expansion ──────────────────────────────────────────
 
 export async function expandQuery(
-  apiKey: string,
+  chat: UserChatTarget,
   question: string,
   session: SessionContext,
 ): Promise<string[]> {
@@ -318,8 +336,8 @@ export async function expandQuery(
 
   const result = await Promise.race([
     callTool(
-      apiKey,
-      FAST_MODEL,
+      chat,
+      "fast",
       `You expand a sales coaching question into 3-5 diverse retrieval sub-queries to maximize recall against a vector database of sales principles, scripts, frameworks, and objection-handlers. Sub-queries must be short (3-10 words), cover different angles, and use vocabulary a sales book or video would use (e.g. "feel-felt-found framework", "value reframe scripts"). Do not answer the question.`,
       `Recent conversation (for context only, not retrieval):\n${recent || "(none)"}\n\nUser question: "${question}"\n\nReturn 3-5 sub-queries.`,
       "expand_query",
@@ -339,6 +357,7 @@ export async function expandQuery(
   return [question, ...subs.filter((s: any) => typeof s === "string" && s.trim().length > 0)].slice(0, 6);
 }
 
+
 // ─── Step 2: Hybrid retrieval per sub-query ───────────────────────────
 
 export async function hybridRetrieve(
@@ -354,7 +373,7 @@ export async function hybridRetrieve(
 }> {
   // Generate embeddings for all sub-queries in parallel
   const embeddings = await Promise.all(
-    subqueries.map((q) => generateEmbedding(q.substring(0, 1000))),
+    subqueries.map((q) => generateEmbedding(q.substring(0, 1000), supabaseAdmin, userId)),
   );
   const embeddingUsed = embeddings.some((e) => !!e);
 
@@ -532,7 +551,7 @@ export async function hybridRetrieve(
 // ─── Step 3: Cross-encoder rerank → top 8 ─────────────────────────────
 
 export async function rerank(
-  _apiKey: string,
+  _chat: UserChatTarget | null,
   question: string,
   candidates: Principle[],
   session: SessionContext,
@@ -571,7 +590,7 @@ export async function rerank(
 // ─── Step 4: Selection prompt → top 3 + winning framework ─────────────
 
 export async function selectPrinciples(
-  apiKey: string,
+  chat: UserChatTarget,
   question: string,
   candidates: Principle[],
   session: SessionContext,
@@ -602,8 +621,8 @@ deep_why: ${(p.the_deep_why || "").substring(0, 200)}`).join("\n\n");
     : "";
 
   const result = await callTool(
-    apiKey,
-    REASONING_MODEL,
+    chat,
+    "reasoning",
     `You are an elite sales coach choosing principles to drive a multi-source coaching reply.
 
 Pick TWO TIERS:
@@ -833,10 +852,10 @@ Rules:
 
 // ─── Empty-vault topic extraction ─────────────────────────────────────
 
-export async function extractTopic(apiKey: string, question: string): Promise<string> {
+export async function extractTopic(chat: UserChatTarget, question: string): Promise<string> {
   const result = await callTool(
-    apiKey,
-    FAST_MODEL,
+    chat,
+    "fast",
     `Extract the 2-5 word topic of a sales coaching question. Return just the topic (e.g. "price objection handling", "cold DM openers"). No quotes, no punctuation.`,
     question,
     "extract_topic",
@@ -874,17 +893,17 @@ export async function runPipelineFast(opts: {
    * wrapped in a timeout so it can never blow the edge CPU budget. Falls back to the
    * local relevance+power selection if reasoning is slow or unavailable.
    */
-  apiKey?: string;
+  chat?: UserChatTarget;
   session: SessionContext;
 }): Promise<PipelineOutput> {
   const { supabaseAdmin, userId, question, session } = opts;
-  const apiKey = opts.apiKey;
+  const chat = opts.chat;
   const embedText = (opts.embedQuery && opts.embedQuery.trim().length > 0)
     ? opts.embedQuery
     : question;
 
   // Single embedding over the clean message (not the templated wrapper)
-  const emb = await generateEmbedding(embedText.substring(0, 1500));
+  const emb = await generateEmbedding(embedText.substring(0, 1500), supabaseAdmin, userId);
   const embeddingUsed = !!emb;
 
   let semP: Principle[] = [];
@@ -988,9 +1007,9 @@ export async function runPipelineFast(opts: {
   let usedReasoning = false;
   const reasoningQuestion = embedText.trim() || question;
   const substantial = reasoningQuestion.trim().length >= 12;
-  if (apiKey && substantial && top.length >= 3) {
+  if (chat && substantial && top.length >= 3) {
     const reasoning = await Promise.race([
-      selectPrinciples(apiKey, reasoningQuestion, top.slice(0, 18), session),
+      selectPrinciples(chat, reasoningQuestion, top.slice(0, 18), session),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ]);
     if (reasoning && reasoning.selected.length >= 2) {
@@ -1048,16 +1067,16 @@ export async function runPipelineFast(opts: {
 // ─── Orchestrator: full pipeline up through Layer 2 ───────────────────
 
 export async function runPipeline(opts: {
-  apiKey: string;
+  chat: UserChatTarget;
   supabaseAdmin: any;
   userId: string;
   question: string;
   session: SessionContext;
 }): Promise<PipelineOutput> {
-  const { apiKey, supabaseAdmin, userId, question, session } = opts;
+  const { chat, supabaseAdmin, userId, question, session } = opts;
 
   // Step 1
-  const subqueries = await expandQuery(apiKey, question, session);
+  const subqueries = await expandQuery(chat, question, session);
 
   // Step 2
   const { principles, chunks, embeddingUsed, semanticCount, staticCount } =
@@ -1071,7 +1090,7 @@ export async function runPipeline(opts: {
   ).size;
 
   // Step 3
-  const { top, topScore } = await rerank(apiKey, question, principles, session);
+  const { top, topScore } = await rerank(chat, question, principles, session);
   const rerankedSourceCount = new Set(
     top.map((p) => sourceKeyOf(p)).filter(Boolean) as string[]
   ).size;
@@ -1099,7 +1118,7 @@ export async function runPipeline(opts: {
     (p.relevance_score ?? 0) >= 4
   );
   if (top.length === 0 || (decent.length < 1 && topScore < 0.25)) {
-    const topic = await extractTopic(apiKey, question);
+    const topic = await extractTopic(chat, question);
     return {
       selected: [],
       contradictions: [],
@@ -1112,7 +1131,7 @@ export async function runPipeline(opts: {
   }
 
   // Step 4
-  const reasoning = await selectPrinciples(apiKey, question, top, session);
+  const reasoning = await selectPrinciples(chat, question, top, session);
 
   // Resolve source_url + source_title from knowledge_base_items for the selected principles only
   const sourceIds = [...new Set(reasoning.selected.map((s) => s.source_id).filter((x): x is string => !!x))];

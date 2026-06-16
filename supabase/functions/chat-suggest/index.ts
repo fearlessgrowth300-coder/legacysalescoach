@@ -836,7 +836,7 @@ JSON shape:
     const brainQuery = `${message} ${prospectProfile} ${last3Messages}`.substring(0, 500);
 
     // Generate embedding for semantic search (runs in parallel with DB queries)
-    const embeddingPromise = generateEmbedding(brainQuery.substring(0, 1000));
+    const embeddingPromise = generateEmbedding(brainQuery.substring(0, 1000), supabase, user.id);
 
     // 1. Pull WORKSPACE PERSONA from sales_brain (workspace-specific)
     const [
