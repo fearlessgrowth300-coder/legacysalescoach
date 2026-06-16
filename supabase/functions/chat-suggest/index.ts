@@ -1392,21 +1392,16 @@ ${jsonFormat}
 
 === END INSTRUCTION BOUNDARY ===`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: fullSystemPrompt },
-          { role: "user", content: message }
-        ],
-        temperature: 0.8,
-      }),
+    const response = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: fullSystemPrompt },
+        { role: "user", content: message }
+      ],
+      temperature: 0.8,
+      response_format: { type: "json_object" },
     });
+
 
     if (!response.ok) {
       const status = response.status;
