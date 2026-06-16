@@ -1345,7 +1345,7 @@ export default function AiChat() {
                         <div className="flex flex-wrap gap-2">
                           {editImages.map((url, imgIdx) => (
                             <div key={`existing-${imgIdx}`} className="relative">
-                              <img src={url} alt={`Image ${imgIdx + 1}`} className="h-16 rounded-md border" />
+                              <img src={url} alt={`Image ${imgIdx + 1}`} className="h-16 w-16 object-cover rounded-md border" />
                               <button onClick={() => setEditImages(prev => prev.filter((_, ii) => ii !== imgIdx))} className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full h-5 w-5 flex items-center justify-center text-xs">
                                 <X className="h-3 w-3" />
                               </button>
@@ -1353,7 +1353,7 @@ export default function AiChat() {
                           ))}
                           {editNewPreviews.map((url, imgIdx) => (
                             <div key={`new-${imgIdx}`} className="relative">
-                              <img src={url} alt={`New ${imgIdx + 1}`} className="h-16 rounded-md border" />
+                              <img src={url} alt={`New ${imgIdx + 1}`} className="h-16 w-16 object-cover rounded-md border" />
                               <button onClick={() => {
                                 setEditNewImages(prev => prev.filter((_, ii) => ii !== imgIdx));
                                 setEditNewPreviews(prev => prev.filter((_, ii) => ii !== imgIdx));
@@ -1509,7 +1509,7 @@ export default function AiChat() {
           <div className="px-4 pb-1 flex gap-2 flex-wrap">
             {imagePreviews.map((preview, idx) => (
               <div key={idx} className="relative inline-block">
-                <img src={preview} alt={`Preview ${idx + 1}`} className="h-16 rounded-md border" />
+                <img src={preview} alt={`Preview ${idx + 1}`} className="h-16 w-16 object-cover rounded-md border" />
                 <button onClick={() => {
                   setAttachedImages(prev => prev.filter((_, i) => i !== idx));
                   setImagePreviews(prev => prev.filter((_, i) => i !== idx));
