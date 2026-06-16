@@ -49,7 +49,7 @@ serve(async (req) => {
       };
 
       // Verify embeddings can actually be generated in this environment
-      const probe = await generateEmbedding("sales objection handling test");
+      const probe = await generateEmbedding("sales objection handling test", supabase, user.id);
       if (!probe) {
         return new Response(JSON.stringify({ error: "Embedding provider not available (LOVABLE_API_KEY missing)." }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -66,7 +66,7 @@ serve(async (req) => {
         await mapLimit(brainRows, CONC, async (row: any) => {
           const text = principleText(row);
           if (text.length < 3) return;
-          const embedding = await generateEmbedding(text);
+          const embedding = await generateEmbedding(text, supabase, user.id);
           if (!embedding) return;
           const { error } = await supabase.from("sales_brain").update({ embedding }).eq("id", row.id);
           if (!error) updatedBrain++;
@@ -83,7 +83,7 @@ serve(async (req) => {
           await mapLimit(chunkRows, CONC, async (row: any) => {
             const text = (row.content || "").trim();
             if (text.length < 3) return;
-            const embedding = await generateEmbedding(text);
+            const embedding = await generateEmbedding(text, supabase, user.id);
             if (!embedding) return;
             const { error } = await supabase.from("knowledge_chunks").update({ embedding }).eq("id", row.id);
             if (!error) updatedChunks++;

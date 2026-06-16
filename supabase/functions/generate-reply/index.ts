@@ -146,7 +146,7 @@ serve(async (req) => {
     // ===== BRAIN RETRIEVAL (RAG) =====
     const last3 = recentMessages.slice(-3).map((m: any) => m.content).join(" ");
     const brainQuery = `${message} ${prospect.detected_interests || ""} ${last3}`.substring(0, 1000);
-    const embeddingPromise = generateEmbedding(brainQuery);
+    const embeddingPromise = generateEmbedding(brainQuery, supabase, user.id);
 
     const [
       globalPrinciples,
