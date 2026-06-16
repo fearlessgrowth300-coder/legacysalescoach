@@ -128,21 +128,16 @@ ${scrapedParts.join("\n\n")}
 
 Return JSON: { "profile_analysis": "...", "products_detected": "..." }`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: "You are a business profile analyzer. Return valid JSON only." },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.3,
-      }),
+    const aiResponse = await userChat(chat, {
+      model: chat.models.reasoning,
+      messages: [
+        { role: "system", content: "You are a business profile analyzer. Return valid JSON only." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.3,
+      response_format: { type: "json_object" },
     });
+
 
     if (!aiResponse.ok) {
       const status = aiResponse.status;
