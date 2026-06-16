@@ -3,16 +3,13 @@
 // Layer 2: Reasoning (select)     — step 4
 // Layer 3: Response generation lives in the caller (brain-chat or voice-brain).
 //
-// All AI calls go through Lovable AI Gateway. Gemini equivalents:
-//   "GPT-4o-mini"  -> google/gemini-2.5-flash-lite
-//   "GPT-4o"       -> google/gemini-3-flash-preview
+// All AI calls route through the USER's provider (OpenAI/Gemini/Anthropic) via
+// the shared user-ai helper — NO Lovable-AI fallback.
 
 import { generateEmbedding } from "./embeddings.ts";
 import { deduplicatePrinciples, deduplicateChunks, mergeByIdPriority } from "./dedup.ts";
+import type { UserChatTarget } from "./user-ai.ts";
 
-const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
-const FAST_MODEL = "google/gemini-2.5-flash-lite";
-const REASONING_MODEL = "google/gemini-3-flash-preview";
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story";
