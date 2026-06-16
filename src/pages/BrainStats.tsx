@@ -201,6 +201,59 @@ export default function BrainStats() {
     }
   };
 
+  // Clear Brain — DESTRUCTIVE. Wipes ALL extracted intelligence so the user can
+  // re-extract each source one by one from the Knowledge Base page.
+  // Deletes: sales_brain principles, knowledge_chunks, learned_insights,
+  // conversation_insights, and resets knowledge_base_items.status to "pending"
+  // so each upload shows a Re-extract button in the KB UI.
+  // Sources (the uploaded files/URLs) are KEPT — only the derived brain is wiped.
+  const handleClearBrain = async () => {
+    if (!user || isClearing) return;
+    setIsClearing(true);
+    setConfirmClearOpen(false);
+    toast.info("Clearing brain — wiping all principles, chunks and insights...");
+    try {
+      const [{ count: pCount }, { count: cCount }, { count: iCount }] = await Promise.all([
+        supabase.from("sales_brain").delete({ count: "exact" }).eq("user_id", user.id),
+        supabase.from("knowledge_chunks").delete({ count: "exact" }).eq("user_id", user.id),
+        supabase.from("learned_insights").delete({ count: "exact" }).eq("user_id", user.id),
+      ]);
+      try { await supabase.from("conversation_insights").delete().eq("user_id", user.id); } catch { /* table optional */ }
+
+      // Reset all source items back to "pending" so the KB shows Re-extract.
+      const { data: resetItems } = await supabase
+        .from("knowledge_base_items")
+        .update({ status: "pending" })
+        .eq("user_id", user.id)
+        .select("id");
+
+      // Verify the brain is truly empty before unlocking the next step.
+      const [{ count: pLeft }, { count: cLeft }] = await Promise.all([
+        supabase.from("sales_brain").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+        supabase.from("knowledge_chunks").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+      ]);
+      if ((pLeft || 0) > 0 || (cLeft || 0) > 0) {
+        throw new Error(`Brain not fully cleared (${pLeft || 0} principles, ${cLeft || 0} chunks remain). Try again.`);
+      }
+
+      setClearStats({
+        principles: pCount || 0,
+        chunks: cCount || 0,
+        insights: iCount || 0,
+        items: resetItems?.length || 0,
+      });
+      queryClient.invalidateQueries({ queryKey: ["brain-chunks"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+      queryClient.invalidateQueries({ queryKey: ["learned-insights"] });
+      toast.success(`Brain cleared. ${pCount || 0} principles + ${cCount || 0} chunks removed.`);
+      setPostClearOpen(true);
+    } catch (e: any) {
+      toast.error(e.message || "Clear failed");
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
   const byCategory: Record<string, number> = {};
   chunks?.forEach((c) => { byCategory[c.category] = (byCategory[c.category] || 0) + 1; });
 
