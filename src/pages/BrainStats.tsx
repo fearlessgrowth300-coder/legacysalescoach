@@ -323,6 +323,19 @@ export default function BrainStats() {
             )}
             {isReprocessing ? "Rebuilding..." : "Rebuild Brain"}
           </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => setConfirmClearOpen(true)}
+            disabled={isClearing || isReprocessing || isRepairing}
+          >
+            {isClearing ? (
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4 mr-1.5" />
+            )}
+            {isClearing ? "Clearing..." : "Clear Brain"}
+          </Button>
         </div>
       </div>
 
