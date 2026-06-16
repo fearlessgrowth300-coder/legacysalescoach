@@ -24,27 +24,23 @@ export type AiProvider = {
   model: (tier: ModelTier) => string;
   isAnthropic: boolean;
   // Embeddings endpoint + key, or null if the provider has none (Anthropic).
-  embed: { url: string; key: string } | null;
+  embed: { url: string; key: string; model: string; provider: "openai" | "gemini" } | null;
 };
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai";
 
-export function lovableProvider(): AiProvider {
-  const key = Deno.env.get("LOVABLE_API_KEY") || "";
-  return {
-    name: "lovable",
-    chatUrl: "https://ai.gateway.lovable.dev/v1/chat/completions",
-    key,
-    model: (t) => t === "reasoning" ? "google/gemini-3-flash-preview" : t === "fast" ? "google/gemini-2.5-flash-lite" : "google/gemini-2.5-flash",
-    isAnthropic: false,
-    embed: { url: "https://ai.gateway.lovable.dev/v1/embeddings", key },
-  };
+export class NoUserAiKeyError extends Error {
+  constructor() {
+    super("No AI API key configured. Add your OpenAI, Gemini, or Anthropic key in Settings.");
+    this.name = "NoUserAiKeyError";
+  }
 }
 
 // Resolve which provider to use for this user. Reads user_api_keys for an
-// openai/gemini/anthropic key; if none, returns the Lovable gateway.
+// openai/gemini/anthropic key. THROWS NoUserAiKeyError when none is set — there
+// is NO Lovable-AI fallback.
 export async function resolveAiProvider(supabase: any, userId: string | null): Promise<AiProvider> {
-  if (!userId) return lovableProvider();
+  if (!userId) throw new NoUserAiKeyError();
 
   let found: { key: string; service: string } | null = null;
   try {
@@ -52,7 +48,7 @@ export async function resolveAiProvider(supabase: any, userId: string | null): P
   } catch (e) {
     console.warn("[ai-provider] key lookup failed:", e);
   }
-  if (!found?.key) return lovableProvider();
+  if (!found?.key) throw new NoUserAiKeyError();
 
   if (found.service === "openai") {
     return {
@@ -61,7 +57,7 @@ export async function resolveAiProvider(supabase: any, userId: string | null): P
       key: found.key,
       model: (t) => t === "reasoning" ? "gpt-4o" : "gpt-4o-mini",
       isAnthropic: false,
-      embed: { url: "https://api.openai.com/v1/embeddings", key: found.key },
+      embed: { url: "https://api.openai.com/v1/embeddings", key: found.key, model: "text-embedding-3-small", provider: "openai" },
     };
   }
 
@@ -72,20 +68,19 @@ export async function resolveAiProvider(supabase: any, userId: string | null): P
       key: found.key,
       model: (t) => t === "reasoning" ? "gemini-2.5-flash" : t === "fast" ? "gemini-2.5-flash-lite" : "gemini-2.5-flash",
       isAnthropic: false,
-      // Gemini has no `text-embedding-3-small`; keep embeddings on the Lovable
-      // gateway so query vectors match the stored 768-dim vectors.
-      embed: lovableProvider().embed,
+      embed: { url: `${GEMINI_BASE}/embeddings`, key: found.key, model: "text-embedding-004", provider: "gemini" },
     };
   }
 
-  // anthropic — no embeddings API, so embeddings fall back to the Lovable gateway.
+  // anthropic — no embeddings API. Callers needing embeddings must surface
+  // a clear error telling the user to add an OpenAI or Gemini key.
   return {
     name: "anthropic",
     chatUrl: "https://api.anthropic.com/v1/messages",
     key: found.key,
     model: (t) => t === "reasoning" ? "claude-opus-4-8" : t === "fast" ? "claude-haiku-4-5-20251001" : "claude-sonnet-4-6",
     isAnthropic: true,
-    embed: lovableProvider().embed,
+    embed: null,
   };
 }
 
