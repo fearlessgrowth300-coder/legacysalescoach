@@ -12,7 +12,7 @@
 
 import { decryptStoredApiKey } from "./api-key-utils.ts";
 
-export type UserAiProvider = "openai" | "gemini" | "anthropic";
+export type UserAiProvider = "openai" | "gemini" | "anthropic" | "lovable";
 
 export type UserChatTarget = {
   provider: UserAiProvider;
@@ -31,12 +31,50 @@ export type UserEmbedTarget = {
 };
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai";
+const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev/v1";
 
 export class NoUserAiKeyError extends Error {
   constructor() {
-    super("No AI API key configured. Add your OpenAI, Gemini, or Anthropic key in Settings.");
+    super("No AI provider configured. Add an API key in Settings or enable the built-in Lovable AI.");
     this.name = "NoUserAiKeyError";
   }
+}
+
+function lovableChatTarget(): UserChatTarget | null {
+  const key = Deno.env.get("LOVABLE_API_KEY");
+  if (!key) return null;
+  return {
+    provider: "lovable",
+    url: `${LOVABLE_GATEWAY}/chat/completions`,
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Lovable-API-Key": key,
+      "Content-Type": "application/json",
+    },
+    models: {
+      fast: "google/gemini-3-flash-preview",
+      balanced: "google/gemini-3-flash-preview",
+      reasoning: "google/gemini-3-flash-preview",
+      vision: "google/gemini-3-flash-preview",
+    },
+    isAnthropic: false,
+  };
+}
+
+function lovableEmbedTarget(): UserEmbedTarget | null {
+  const key = Deno.env.get("LOVABLE_API_KEY");
+  if (!key) return null;
+  return {
+    provider: "lovable",
+    url: `${LOVABLE_GATEWAY}/embeddings`,
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Lovable-API-Key": key,
+      "Content-Type": "application/json",
+    },
+    model: "google/gemini-embedding-001",
+    dimensions: 768,
+  };
 }
 
 export async function getUserAiKey(
@@ -64,7 +102,11 @@ export async function resolveUserChatTarget(
   userId: string | null,
 ): Promise<UserChatTarget> {
   const found = await getUserAiKey(supabase, userId);
-  if (!found) throw new NoUserAiKeyError();
+  if (!found) {
+    const lovable = lovableChatTarget();
+    if (lovable) return lovable;
+    throw new NoUserAiKeyError();
+  }
 
   if (found.provider === "openai") {
     return {
@@ -108,7 +150,11 @@ export async function resolveUserEmbedTarget(
   userId: string | null,
 ): Promise<UserEmbedTarget> {
   const found = await getUserAiKey(supabase, userId);
-  if (!found) throw new NoUserAiKeyError();
+  if (!found) {
+    const lovable = lovableEmbedTarget();
+    if (lovable) return lovable;
+    throw new NoUserAiKeyError();
+  }
 
   if (found.provider === "openai") {
     return {

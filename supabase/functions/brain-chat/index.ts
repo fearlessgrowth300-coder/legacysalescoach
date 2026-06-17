@@ -23,10 +23,11 @@ function getCorsHeaders(req: Request) {
 
 const MAX_MESSAGE_LENGTH = 30000;
 const MAX_MESSAGES = 2000;
-const MODEL_CONTEXT_MESSAGES = 8;
+const MODEL_CONTEXT_MESSAGES = 40;
 const USER_INPUT_CHAR_LIMIT = 3600;
-const RECENT_EXCHANGES_CHAR_LIMIT = 900;
+const RECENT_EXCHANGES_CHAR_LIMIT = 4000;
 const WORKSPACE_PROFILE_CHAR_LIMIT = 500;
+const PRIOR_SUMMARY_CHAR_LIMIT = 3000;
 
 function clampText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
@@ -79,12 +80,13 @@ function buildSystemPrompt(opts: {
   userInput: string;
   workspaceProfile: string;
   recentExchanges: string;
+  priorSummary: string;
   frameworkName: string;
   sourceTitles: string[];
   whySkeleton: string;
   openerHint: string;
 }) {
-  const { selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, workspaceProfile, recentExchanges, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
+  const { selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, workspaceProfile, recentExchanges, priorSummary, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
   const sourceList = sourceTitles.length ? sourceTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n") : "  (none)";
   return `You are an elite sales Brain. You have been given multiple principles from DIFFERENT books and videos in the user's vault.
 
@@ -202,6 +204,9 @@ ${userInput || "(no latest user input)"}
 === RECENT CONVERSATION CONTEXT ===
 ${recentExchanges || "(this is the first turn)"}
 
+=== EARLIER CONVERSATION HISTORY (summary of older messages — remember and reference these when relevant) ===
+${priorSummary || "(no earlier messages — this is the start of the conversation)"}
+
 === WORKSPACE PROFILE ===
 ${workspaceProfile || "(none provided)"}
 
@@ -303,6 +308,27 @@ serve(async (req) => {
 
     const validated = await Promise.all(messages.map(processMessage));
     const modelMessages = validated.slice(-MODEL_CONTEXT_MESSAGES);
+
+    // Summarize messages that fall outside the model context window so the AI
+    // doesn't "forget" the earlier parts of a long conversation.
+    const olderMessages = validated.slice(0, Math.max(0, validated.length - MODEL_CONTEXT_MESSAGES));
+    let priorSummary = "";
+    if (olderMessages.length > 0) {
+      const lines: string[] = [];
+      for (const m of olderMessages) {
+        const role = m.role === "assistant" ? "Assistant" : (m.role === "user" ? "User" : m.role);
+        const text = typeof m.content === "string"
+          ? m.content
+          : (Array.isArray(m.content) ? m.content.map((p: any) => p.text || (p.type === "image_url" ? "[image]" : "")).join(" ") : "");
+        const trimmed = text.replace(/\s+/g, " ").trim();
+        if (trimmed) lines.push(`${role}: ${trimmed.slice(0, 400)}${trimmed.length > 400 ? "…" : ""}`);
+      }
+      priorSummary = lines.join("\n");
+      if (priorSummary.length > PRIOR_SUMMARY_CHAR_LIMIT) {
+        // Keep the tail — most recent older context matters more.
+        priorSummary = "…\n" + priorSummary.slice(-PRIOR_SUMMARY_CHAR_LIMIT);
+      }
+    }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -533,6 +559,7 @@ serve(async (req) => {
       userInput: hasImageAttachment ? clampText(`${userInstruction}\n\n${conversationText}`, USER_INPUT_CHAR_LIMIT) : clampText(lastUserText || retrievalQuery, USER_INPUT_CHAR_LIMIT),
       workspaceProfile,
       recentExchanges: clampText(recentExchanges, RECENT_EXCHANGES_CHAR_LIMIT),
+      priorSummary,
       frameworkName: pipeline.framework_name,
       sourceTitles,
       whySkeleton,

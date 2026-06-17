@@ -150,23 +150,31 @@ export default function Settings() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
               <Bot className="h-5 w-5" />
-              Your AI Provider (use your own AI)
+              AI Provider
             </CardTitle>
             <CardDescription>
-              Add your own AI API key so all processing — learning from books/videos, the AI chat, reply suggestions and more — runs on YOUR account instead of the built-in AI. This removes the usage limit.
+              Choose which AI powers the app. By default everything runs on the built-in <strong>Lovable AI</strong> (no key needed). Add your own OpenAI / Gemini / Anthropic key to switch processing to your account and remove the shared usage limit. Remove your key any time to switch back to Lovable AI.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {activeAi && (
-              <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2">
-                <div className="text-sm">
-                  <span className="text-muted-foreground">Active: </span>
-                  <span className="font-medium">{AI_PROVIDERS.find((p) => p.value === activeAi.provider)?.label.split(" (")[0]}</span>
-                  <code className="ml-2 bg-muted px-2 py-0.5 rounded text-xs">{activeAi.masked}</code>
-                </div>
-                <Button variant="ghost" size="sm" onClick={handleRemoveAiKey} disabled={aiSaving}>Remove</Button>
+            <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2">
+              <div className="text-sm">
+                <span className="text-muted-foreground">Currently using: </span>
+                {activeAi ? (
+                  <>
+                    <span className="font-medium">{AI_PROVIDERS.find((p) => p.value === activeAi.provider)?.label.split(" (")[0]}</span>
+                    <code className="ml-2 bg-muted px-2 py-0.5 rounded text-xs">{activeAi.masked}</code>
+                  </>
+                ) : (
+                  <span className="font-medium">Lovable AI (built-in)</span>
+                )}
               </div>
-            )}
+              {activeAi && (
+                <Button variant="ghost" size="sm" onClick={handleRemoveAiKey} disabled={aiSaving}>
+                  Switch to Lovable AI
+                </Button>
+              )}
+            </div>
 
             <div className="space-y-2">
               <Label>Provider</Label>
