@@ -52,10 +52,10 @@ function lovableChatTarget(): UserChatTarget | null {
       "Content-Type": "application/json",
     },
     models: {
-      fast: "google/gemini-3-flash-preview",
-      balanced: "google/gemini-3-flash-preview",
-      reasoning: "google/gemini-3-flash-preview",
-      vision: "google/gemini-3-flash-preview",
+      fast: "google/gemini-3.5-flash",
+      balanced: "google/gemini-3.5-flash",
+      reasoning: "google/gemini-3.5-flash",
+      vision: "google/gemini-3.5-flash",
     },
     isAnthropic: false,
   };
