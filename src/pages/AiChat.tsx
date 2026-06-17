@@ -170,6 +170,8 @@ function generateFollowUps(content: string): string[] {
 export default function AiChat() {
   const { user } = useAuth();
   const isMobile = useIsMobile();
+  const activeAi = useActiveAiModel();
+
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
