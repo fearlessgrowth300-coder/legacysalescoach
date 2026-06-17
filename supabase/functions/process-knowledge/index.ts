@@ -43,7 +43,7 @@ async function generateEmbedding(text: string, ai: AiProvider): Promise<number[]
 // No extraction. No JSON. Plain readable text out.
 async function cleanTranscriptChunk(rawChunk: string, ai: AiProvider): Promise<string> {
   try {
-    const _t = chatTarget(ai, "google/gemini-3-flash-preview");
+    const _t = chatTarget(ai, "google/gemini-3.5-flash");
     const r = await fetch(_t.url, {
       method: "POST",
       headers: _t.headers,
