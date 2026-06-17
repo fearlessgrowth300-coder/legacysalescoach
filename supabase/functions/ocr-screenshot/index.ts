@@ -82,19 +82,7 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: "Anthropic doesn't support vision via this endpoint. Add an OpenAI or Gemini key in Settings for screenshot OCR." }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    const aiResponse = await fetch(chat.url, {
-      method: "POST",
-      headers: chat.headers,
-      body: JSON.stringify({
-        model: chat.models.vision,
-
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `This is a screenshot of a chat/DM conversation. Perform a VISION SYNC:
+    const visionPrompt = `This is a screenshot of a chat/DM conversation. Perform a VISION SYNC:
 
 1. IDENTIFY the Name of the person (look for profile name, username, or header)
 2. IDENTIFY the Platform (Instagram, TikTok, WhatsApp, iMessage, etc.)
@@ -106,25 +94,42 @@ PLATFORM: [detected platform]
 ---
 [Each message on a new line, labeled "Them:" or "Me:" based on message alignment/color]
 
-Only return the extracted data, nothing else.`,
-              },
-              {
-                type: "image_url",
-                image_url: { url: `data:${mimeType};base64,${base64}` },
-              },
-            ],
-          },
-        ],
-        temperature: 0.1,
-      }),
-    });
+Only return the extracted data, nothing else.`;
+    const visionModels = [chat.models.vision, ...(chat.visionFallbackModels || [])]
+      .filter((model, index, list) => model && list.indexOf(model) === index);
+    let extractedText = "";
+    let lastError = "";
 
-    if (!aiResponse.ok) {
-      throw new Error(`AI OCR failed: ${aiResponse.status}`);
+    for (const model of visionModels) {
+      const aiResponse = await fetch(chat.url, {
+        method: "POST",
+        headers: chat.headers,
+        body: JSON.stringify({
+          model,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: visionPrompt },
+              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
+            ],
+          }],
+          temperature: 0.1,
+          max_tokens: 2400,
+        }),
+      });
+
+      if (!aiResponse.ok) {
+        lastError = await aiResponse.text().catch(() => "");
+        console.warn("ocr-screenshot vision failed:", model, aiResponse.status, lastError);
+        continue;
+      }
+
+      const aiData = await aiResponse.json();
+      extractedText = (aiData.choices?.[0]?.message?.content || "").trim();
+      if (extractedText) break;
     }
 
-    const aiData = await aiResponse.json();
-    const extractedText = aiData.choices?.[0]?.message?.content || "";
+    if (!extractedText) throw new Error(`AI OCR failed across vision models${lastError ? `: ${lastError}` : ""}`);
 
     return new Response(JSON.stringify({ text: extractedText }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
