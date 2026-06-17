@@ -559,6 +559,7 @@ serve(async (req) => {
       userInput: hasImageAttachment ? clampText(`${userInstruction}\n\n${conversationText}`, USER_INPUT_CHAR_LIMIT) : clampText(lastUserText || retrievalQuery, USER_INPUT_CHAR_LIMIT),
       workspaceProfile,
       recentExchanges: clampText(recentExchanges, RECENT_EXCHANGES_CHAR_LIMIT),
+      priorSummary,
       frameworkName: pipeline.framework_name,
       sourceTitles,
       whySkeleton,
