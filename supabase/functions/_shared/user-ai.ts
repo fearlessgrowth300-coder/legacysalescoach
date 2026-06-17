@@ -157,7 +157,11 @@ export async function resolveUserEmbedTarget(
   userId: string | null,
 ): Promise<UserEmbedTarget> {
   const found = await getUserAiKey(supabase, userId);
-  if (!found) throw new NoUserAiKeyError();
+  if (!found) {
+    const lovable = lovableEmbedTarget();
+    if (lovable) return lovable;
+    throw new NoUserAiKeyError();
+  }
 
   if (found.provider === "openai") {
     return {
