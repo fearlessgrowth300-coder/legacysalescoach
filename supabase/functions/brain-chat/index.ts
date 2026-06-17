@@ -400,7 +400,7 @@ serve(async (req) => {
             analysis = (vd.choices?.[0]?.message?.content || "").trim();
             console.log("[brain-chat] vision analysis chars:", analysis.length);
           } else {
-            console.warn("[brain-chat] vision call non-2xx:", vResp.status);
+            console.warn("[brain-chat] vision call non-2xx:", vResp.status, await vResp.text().catch(() => ""));
           }
         } catch (e) {
           console.warn("[brain-chat] vision analysis failed:", e);
