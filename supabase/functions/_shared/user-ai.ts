@@ -19,6 +19,7 @@ export type UserChatTarget = {
   url: string;
   headers: Record<string, string>;
   models: { fast: string; balanced: string; reasoning: string; vision: string };
+  visionFallbackModels?: string[];
   isAnthropic: boolean;
 };
 
@@ -59,6 +60,7 @@ function lovableChatTarget(): UserChatTarget | null {
       // reasoning still routes through gemini-3.5-flash above.
       vision: "google/gemini-3-flash-preview",
     },
+    visionFallbackModels: ["google/gemini-3.5-flash", "google/gemini-2.5-flash"],
     isAnthropic: false,
   };
 }
