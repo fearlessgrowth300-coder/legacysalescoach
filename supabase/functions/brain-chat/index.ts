@@ -23,10 +23,11 @@ function getCorsHeaders(req: Request) {
 
 const MAX_MESSAGE_LENGTH = 30000;
 const MAX_MESSAGES = 2000;
-const MODEL_CONTEXT_MESSAGES = 8;
+const MODEL_CONTEXT_MESSAGES = 40;
 const USER_INPUT_CHAR_LIMIT = 3600;
-const RECENT_EXCHANGES_CHAR_LIMIT = 900;
+const RECENT_EXCHANGES_CHAR_LIMIT = 4000;
 const WORKSPACE_PROFILE_CHAR_LIMIT = 500;
+const PRIOR_SUMMARY_CHAR_LIMIT = 3000;
 
 function clampText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
