@@ -19,6 +19,7 @@ export type UserChatTarget = {
   url: string;
   headers: Record<string, string>;
   models: { fast: string; balanced: string; reasoning: string; vision: string };
+  visionFallbackModels?: string[];
   isAnthropic: boolean;
 };
 
@@ -59,6 +60,7 @@ function lovableChatTarget(): UserChatTarget | null {
       // reasoning still routes through gemini-3.5-flash above.
       vision: "google/gemini-3-flash-preview",
     },
+    visionFallbackModels: ["google/gemini-3.5-flash", "openai/gpt-5-mini"],
     isAnthropic: false,
   };
 }
@@ -125,6 +127,7 @@ export async function resolveUserChatTarget(
       url: `${GEMINI_BASE}/chat/completions`,
       headers: { Authorization: `Bearer ${found.key}`, "Content-Type": "application/json" },
       models: { fast: "gemini-2.5-flash-lite", balanced: "gemini-2.5-flash", reasoning: "gemini-2.5-flash", vision: "gemini-2.5-flash" },
+      visionFallbackModels: ["gemini-2.5-pro"],
       isAnthropic: false,
     };
   }

@@ -67,10 +67,9 @@ export default function Settings() {
   };
 
   const handleRemoveAiKey = async () => {
-    if (!activeAi) return;
     setAiSaving(true);
     try {
-      await supabase.functions.invoke("manage-api-keys", { body: { action: "delete", service: activeAi.provider } });
+      await supabase.functions.invoke("manage-api-keys", { body: { action: "switch_to_lovable" } });
       setActiveAi(null);
       toast.success("AI key removed — back to the built-in AI.");
     } catch (e: any) {
@@ -179,11 +178,9 @@ export default function Settings() {
                   </>
                 )}
               </div>
-              {activeAi && (
-                <Button variant="ghost" size="sm" onClick={handleRemoveAiKey} disabled={aiSaving}>
-                  Switch to Lovable AI
-                </Button>
-              )}
+              <Button variant="ghost" size="sm" onClick={handleRemoveAiKey} disabled={aiSaving || !activeAi}>
+                Switch to Lovable AI
+              </Button>
             </div>
 
 

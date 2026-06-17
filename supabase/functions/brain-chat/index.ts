@@ -383,24 +383,28 @@ serve(async (req) => {
       if (!chat.isAnthropic) {
         try {
           const imageParts = lastUserImages.slice(0, 8).map((url) => ({ type: "image_url", image_url: { url } }));
-          const vResp = await userChat(chat, {
-            model: chat.models.vision,
-            temperature: 0.2,
-            max_tokens: 1800,
-            messages: [{
-              role: "user",
-              content: [
-                { type: "text", text: `You are a sales coach's eyes. Read the image(s) COMPLETELY and carefully — top to bottom, every message.${lastUserText ? ` The user also wrote: "${lastUserText}"` : ""}\n\nReturn plain text with these labeled sections:\nTRANSCRIPT: If it shows a conversation/DM/chat, transcribe the ENTIRE thread VERBATIM from the very FIRST message to the last — every line, in order, labeling who said what (Prospect vs You). Do NOT summarize or skip the earlier messages. Otherwise write "none".\nWHAT I SEE: Describe exactly what is in the image(s) — people, product, screen, profile/bio, captions, numbers, charts, context. Be concrete.\nSITUATION: 2-3 sentences on the full arc of the conversation (how it started, where it is now) and what the user needs help with right now.` },
-                ...imageParts,
-              ],
-            }],
-          });
-          if (vResp.ok) {
-            const vd = await vResp.json();
-            analysis = (vd.choices?.[0]?.message?.content || "").trim();
-            console.log("[brain-chat] vision analysis chars:", analysis.length);
-          } else {
-            console.warn("[brain-chat] vision call non-2xx:", vResp.status, await vResp.text().catch(() => ""));
+          const visionPrompt = `You are a sales coach's eyes. Read the image(s) COMPLETELY and carefully — top to bottom, every message.${lastUserText ? ` The user also wrote: "${lastUserText}"` : ""}\n\nReturn plain text with these labeled sections:\nTRANSCRIPT: If it shows a conversation/DM/chat, transcribe the ENTIRE thread VERBATIM from the very FIRST message to the last — every line, in order, labeling who said what (Prospect vs You). Do NOT summarize or skip the earlier messages. Otherwise write "none".\nWHAT I SEE: Describe exactly what is in the image(s) — people, product, screen, profile/bio, captions, numbers, charts, context. Be concrete.\nSITUATION: 2-3 sentences on the full arc of the conversation (how it started, where it is now) and what the user needs help with right now.`;
+          const visionModels = [chat.models.vision, ...(chat.visionFallbackModels || [])]
+            .filter((model, index, list) => model && list.indexOf(model) === index);
+          for (const model of visionModels) {
+            const vResp = await userChat(chat, {
+              model,
+              temperature: 0.2,
+              max_tokens: 2400,
+              messages: [{
+                role: "user",
+                content: [{ type: "text", text: visionPrompt }, ...imageParts],
+              }],
+            });
+            if (vResp.ok) {
+              const vd = await vResp.json();
+              analysis = (vd.choices?.[0]?.message?.content || "").trim();
+              console.log("[brain-chat] vision model success:", model, "chars:", analysis.length);
+              if (analysis.length >= 5) break;
+              console.warn("[brain-chat] vision model empty:", model, vd.choices?.[0]?.finish_reason || "unknown_finish_reason");
+            } else {
+              console.warn("[brain-chat] vision call non-2xx:", model, vResp.status, await vResp.text().catch(() => ""));
+            }
           }
         } catch (e) {
           console.warn("[brain-chat] vision analysis failed:", e);

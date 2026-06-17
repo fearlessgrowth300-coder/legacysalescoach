@@ -84,6 +84,17 @@ serve(async (req) => {
       });
     }
 
+    if (action === "switch_to_lovable") {
+      await supabase
+        .from("user_api_keys")
+        .delete()
+        .eq("user_id", user.id)
+        .in("service", ["openai", "gemini", "anthropic"]);
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { ...headers, "Content-Type": "application/json" },
+      });
+    }
+
     // Input validation
     if (!service || typeof service !== "string" || service.length > 50) {
       return new Response(JSON.stringify({ error: "Invalid service name" }), {
