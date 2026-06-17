@@ -305,6 +305,27 @@ serve(async (req) => {
     const validated = await Promise.all(messages.map(processMessage));
     const modelMessages = validated.slice(-MODEL_CONTEXT_MESSAGES);
 
+    // Summarize messages that fall outside the model context window so the AI
+    // doesn't "forget" the earlier parts of a long conversation.
+    const olderMessages = validated.slice(0, Math.max(0, validated.length - MODEL_CONTEXT_MESSAGES));
+    let priorSummary = "";
+    if (olderMessages.length > 0) {
+      const lines: string[] = [];
+      for (const m of olderMessages) {
+        const role = m.role === "assistant" ? "Assistant" : (m.role === "user" ? "User" : m.role);
+        const text = typeof m.content === "string"
+          ? m.content
+          : (Array.isArray(m.content) ? m.content.map((p: any) => p.text || (p.type === "image_url" ? "[image]" : "")).join(" ") : "");
+        const trimmed = text.replace(/\s+/g, " ").trim();
+        if (trimmed) lines.push(`${role}: ${trimmed.slice(0, 400)}${trimmed.length > 400 ? "…" : ""}`);
+      }
+      priorSummary = lines.join("\n");
+      if (priorSummary.length > PRIOR_SUMMARY_CHAR_LIMIT) {
+        // Keep the tail — most recent older context matters more.
+        priorSummary = "…\n" + priorSummary.slice(-PRIOR_SUMMARY_CHAR_LIMIT);
+      }
+    }
+
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
