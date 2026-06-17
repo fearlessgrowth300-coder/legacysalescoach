@@ -18,6 +18,8 @@ import VoiceCallAssistant from "@/components/VoiceCallAssistant";
 import SwipeToDelete from "@/components/SwipeToDelete";
 import BrainCitations, { type SelectedPrinciple } from "@/components/BrainCitations";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useActiveAiModel } from "@/hooks/useActiveAiModel";
+
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
@@ -168,6 +170,8 @@ function generateFollowUps(content: string): string[] {
 export default function AiChat() {
   const { user } = useAuth();
   const isMobile = useIsMobile();
+  const activeAi = useActiveAiModel();
+
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -1221,8 +1225,14 @@ export default function AiChat() {
             <h2 className="font-bold text-sm flex items-center gap-1.5 truncate">
               AI Brain <Zap className="h-3.5 w-3.5 text-primary shrink-0" />
             </h2>
-            <p className="text-xs text-muted-foreground truncate hidden md:block">Read-only vault — answers from uploads only.</p>
+            <p className="text-[10px] md:text-xs text-muted-foreground truncate flex items-center gap-1">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+              <span className="font-medium text-foreground/80">{activeAi.providerLabel}</span>
+              <span className="hidden sm:inline">·</span>
+              <code className="hidden sm:inline bg-primary/10 text-primary px-1.5 py-0.5 rounded text-[10px]">{activeAi.model}</code>
+            </p>
           </div>
+
           {/* Call Assistant Button */}
           <Button
             size="sm"
