@@ -204,6 +204,9 @@ ${userInput || "(no latest user input)"}
 === RECENT CONVERSATION CONTEXT ===
 ${recentExchanges || "(this is the first turn)"}
 
+=== EARLIER CONVERSATION HISTORY (summary of older messages — remember and reference these when relevant) ===
+${priorSummary || "(no earlier messages — this is the start of the conversation)"}
+
 === WORKSPACE PROFILE ===
 ${workspaceProfile || "(none provided)"}
 
