@@ -101,8 +101,19 @@ export async function resolveUserChatTarget(
   supabase: any,
   userId: string | null,
 ): Promise<UserChatTarget> {
-  const found = await getUserAiKey(supabase, userId);
-  if (!found) throw new NoUserAiKeyError();
+  // Per-user preference: "lovable" → skip user keys entirely.
+  let preferLovable = false;
+  if (userId) {
+    const { data: pref } = await supabase
+      .from("user_api_keys").select("api_key").eq("user_id", userId).eq("service", "ai_provider_choice").maybeSingle();
+    if (pref?.api_key === "lovable") preferLovable = true;
+  }
+  const found = preferLovable ? null : await getUserAiKey(supabase, userId);
+  if (!found) {
+    const lovable = lovableChatTarget();
+    if (lovable) return lovable;
+    throw new NoUserAiKeyError();
+  }
 
   if (found.provider === "openai") {
     return {
