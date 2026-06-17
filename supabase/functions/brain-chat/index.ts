@@ -80,12 +80,13 @@ function buildSystemPrompt(opts: {
   userInput: string;
   workspaceProfile: string;
   recentExchanges: string;
+  priorSummary: string;
   frameworkName: string;
   sourceTitles: string[];
   whySkeleton: string;
   openerHint: string;
 }) {
-  const { selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, workspaceProfile, recentExchanges, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
+  const { selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, workspaceProfile, recentExchanges, priorSummary, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
   const sourceList = sourceTitles.length ? sourceTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n") : "  (none)";
   return `You are an elite sales Brain. You have been given multiple principles from DIFFERENT books and videos in the user's vault.
 
