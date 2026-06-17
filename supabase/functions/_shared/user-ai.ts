@@ -55,9 +55,9 @@ function lovableChatTarget(): UserChatTarget | null {
       fast: "google/gemini-3.5-flash",
       balanced: "google/gemini-3.5-flash",
       reasoning: "google/gemini-3.5-flash",
-      // gemini-3.5-flash currently returns 403 for image_url inputs on the
-      // Lovable gateway — use 2.5-flash for vision (multimodal in→text out).
-      vision: "google/gemini-2.5-flash",
+      // Vision: gemini-3-flash-preview handles image understanding;
+      // reasoning still routes through gemini-3.5-flash above.
+      vision: "google/gemini-3-flash-preview",
     },
     isAnthropic: false,
   };
