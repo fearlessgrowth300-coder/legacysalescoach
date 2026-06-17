@@ -18,6 +18,8 @@ import VoiceCallAssistant from "@/components/VoiceCallAssistant";
 import SwipeToDelete from "@/components/SwipeToDelete";
 import BrainCitations, { type SelectedPrinciple } from "@/components/BrainCitations";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useActiveAiModel } from "@/hooks/useActiveAiModel";
+
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
