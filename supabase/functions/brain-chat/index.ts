@@ -604,7 +604,7 @@ serve(async (req) => {
         const aiResp = chat.isAnthropic
           ? await userChat(chat, {
               model: chat.models.reasoning,
-              max_tokens: 2200,
+              max_tokens: 6000,
               temperature: 0.35,
               messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
             })
@@ -613,7 +613,7 @@ serve(async (req) => {
               headers: chat.headers,
               body: JSON.stringify({
                 model: chat.models.reasoning,
-                max_tokens: 2200,
+                max_tokens: 6000,
                 temperature: 0.35,
                 messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
                 stream: true,
