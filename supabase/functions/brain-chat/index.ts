@@ -669,11 +669,7 @@ serve(async (req) => {
             if (outBuf) controller.enqueue(reEncoder.encode(outBuf));
           }
           if (buf) controller.enqueue(reEncoder.encode(buf));
-          const cited = namedSourcesInReply(fullReply, sourceTitles);
-          if (sourceTitles.length >= 3 && cited.length < 3) {
-            console.warn("[brain-chat] single-source collapse", { available: sourceTitles, cited });
-            controller.enqueue(reEncoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: forcedSourceFooter } }] })}\n\n`));
-          }
+          // Sources stay inline and natural — no appended SOURCE CHECK list.
           controller.enqueue(reEncoder.encode("data: [DONE]\n\n"));
         } finally {
           controller.close();
