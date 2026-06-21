@@ -593,9 +593,10 @@ serve(async (req) => {
     const metaEvent = `data: ${JSON.stringify({ brain_meta: brainMeta })}\n\n`;
     const loadingEvent = `data: ${JSON.stringify({ brain_meta: { loading: true } })}\n\n`;
 
-    // Strip any [[cite:...]] / [^N] tokens — old-style replies use inline source naming only.
+    // Strip any [[cite:...]] / [^N] tokens and any "SOURCE CHECK" trailing block — sources stay inline only.
     const STRIP_RE = /\[\[cite:[^\]]*\]\]|\[\^[0-9]+\]/gi;
-    const sanitize = (text: string) => text.replace(STRIP_RE, "");
+    const SOURCE_CHECK_RE = /\n*\s*SOURCE\s*CHECK\s*:[\s\S]*$/i;
+    const sanitize = (text: string) => text.replace(STRIP_RE, "").replace(SOURCE_CHECK_RE, "");
 
     const transformed = new ReadableStream({
       async start(controller) {
