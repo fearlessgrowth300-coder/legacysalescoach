@@ -199,15 +199,26 @@ Return JSON: { "comment": "the full comment with CTA", "strategy": "why this com
               try {
                 const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
-                const parsed = JSON.parse(jsonMatch[0]);
+                  const parsed = JSON.parse(jsonMatch[0]);
                   suggestedComment = parsed.comment || "";
                   profileData.commentStrategy = parsed.strategy || "";
-                  profileData.targetVideoCaption = parsed.targetVideoCaption || "";
-                  profileData.targetVideoUrl = parsed.targetVideoUrl || "";
                   profileData.whyThisVideo = parsed.whyThisVideo || "";
-                  profileData.postNumber = parsed.postNumber || null;
-                  profileData.videoLikes = parsed.videoLikes || null;
-                  profileData.videoViews = parsed.videoViews || null;
+
+                  // CRITICAL: Use postNumber to look up the REAL scraped video
+                  // Never trust AI-fabricated URLs/captions/stats.
+                  const pNum = Number(parsed.postNumber);
+                  const chosenVideo = (pNum && pNum >= 1 && pNum <= profileData.recentVideos.length)
+                    ? profileData.recentVideos[pNum - 1]
+                    : profileData.recentVideos[0];
+
+                  if (chosenVideo) {
+                    const idx = profileData.recentVideos.indexOf(chosenVideo);
+                    profileData.postNumber = idx + 1;
+                    profileData.targetVideoCaption = chosenVideo.caption || "";
+                    profileData.targetVideoUrl = chosenVideo.url || "";
+                    profileData.videoLikes = chosenVideo.likes || null;
+                    profileData.videoViews = chosenVideo.views || null;
+                  }
                 }
               } catch { suggestedComment = aiContent.substring(0, 300); }
             }
