@@ -289,6 +289,9 @@ The goal is to start a genuine conversation that leads to them wanting to know m
     } finally {
       setStartingNew(false);
     }
+  };
+
+
 
 
   // Process existing TikTok conversation (screenshot upload + OCR)
