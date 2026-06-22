@@ -652,7 +652,7 @@ The goal is to start a genuine conversation that leads to them wanting to know m
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <MessageSquare className="h-5 w-5 shrink-0" />
-                  {!chatType ? "New TikTok Chat" : chatType === "existing" ? "Existing TikTok Chat" : "Re-engage TikTok"}
+                  {!chatType ? "New TikTok Chat" : chatType === "new" ? "Start New Conversation" : chatType === "existing" ? "Existing TikTok Chat" : "Re-engage TikTok"}
                 </DialogTitle>
               </DialogHeader>
 
@@ -660,22 +660,50 @@ The goal is to start a genuine conversation that leads to them wanting to know m
               {!chatType && (
                 <div className="space-y-3 py-4">
                   <p className="text-sm text-muted-foreground">What type of conversation is this?</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("existing")}>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Card className="p-3 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("new")}>
                       <div className="text-center space-y-2">
-                        <Upload className="h-8 w-8 mx-auto text-primary" />
-                        <h4 className="font-medium text-sm">Existing Chat</h4>
-                        <p className="text-xs text-muted-foreground">Upload DMs to continue</p>
+                        <Plus className="h-7 w-7 mx-auto text-primary" />
+                        <h4 className="font-medium text-xs">New Conversation</h4>
+                        <p className="text-[10px] text-muted-foreground">Fresh cold outreach</p>
                       </div>
                     </Card>
-                    <Card className="p-4 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("reengage")}>
+                    <Card className="p-3 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("existing")}>
                       <div className="text-center space-y-2">
-                        <Ghost className="h-8 w-8 mx-auto text-primary" />
-                        <h4 className="font-medium text-sm">Re-engage</h4>
-                        <p className="text-xs text-muted-foreground">They saw but didn't reply</p>
+                        <Upload className="h-7 w-7 mx-auto text-primary" />
+                        <h4 className="font-medium text-xs">Existing Chat</h4>
+                        <p className="text-[10px] text-muted-foreground">Upload DMs to continue</p>
+                      </div>
+                    </Card>
+                    <Card className="p-3 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("reengage")}>
+                      <div className="text-center space-y-2">
+                        <Ghost className="h-7 w-7 mx-auto text-primary" />
+                        <h4 className="font-medium text-xs">Re-engage</h4>
+                        <p className="text-[10px] text-muted-foreground">They saw but didn't reply</p>
                       </div>
                     </Card>
                   </div>
+                </div>
+              )}
+
+              {/* New Conversation Flow */}
+              {chatType === "new" && (
+                <div className="space-y-4 py-4">
+                  <Button variant="ghost" size="sm" onClick={() => setChatType(null)} className="mb-2">← Back</Button>
+                  <div>
+                    <Label>Prospect Name *</Label>
+                    <Input value={prospectName} onChange={(e) => setProspectName(e.target.value)} placeholder="e.g., Sarah, John D." disabled={startingNew} />
+                  </div>
+                  <div>
+                    <Label>TikTok URL (optional)</Label>
+                    <Input value={tiktokUrl} onChange={(e) => setTiktokUrl(e.target.value)} placeholder="https://tiktok.com/@username" disabled={startingNew} />
+                    <p className="text-xs text-muted-foreground mt-1">We'll enrich their profile and generate a first-message opener.</p>
+                  </div>
+                  <DialogFooter>
+                    <Button onClick={handleStartNewChat} disabled={!prospectName.trim() || startingNew}>
+                      {startingNew ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Starting...</> : <><Sparkles className="h-4 w-4 mr-2" />Start Chat</>}
+                    </Button>
+                  </DialogFooter>
                 </div>
               )}
 
