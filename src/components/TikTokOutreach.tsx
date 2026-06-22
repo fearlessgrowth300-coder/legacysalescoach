@@ -232,6 +232,65 @@ The goal is to start a genuine conversation that leads to them wanting to know m
     }
   };
 
+  // Start a brand new TikTok chat (no existing DMs, no re-engage) — fresh cold outreach
+  const handleStartNewChat = async () => {
+    if (!user || !workspaceId || !prospectName.trim()) return;
+    setStartingNew(true);
+    try {
+      const { data: prospect, error: pErr } = await supabase
+        .from("prospects")
+        .insert({
+          user_id: user.id,
+          workspace_id: workspaceId,
+          name: prospectName.trim(),
+          tiktok_url: tiktokUrl.trim() || null,
+          platform: "tiktok" as any,
+          reply_mode: workspace?.default_reply_mode || "friend",
+          conversation_stage: "first_contact",
+          has_followed_back: true,
+        } as any)
+        .select()
+        .single();
+      if (pErr) throw pErr;
+
+      // Optionally enrich from TikTok URL
+      if (tiktokUrl.trim()) {
+        try {
+          await supabase.functions.invoke("fetch-tiktok", {
+            body: { url: tiktokUrl.trim(), workspaceId, prospectId: prospect.id },
+          });
+        } catch (e) { console.error("TikTok enrich error:", e); }
+      }
+
+      // Generate first message suggestions
+      try {
+        const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
+          body: {
+            prospectId: prospect.id,
+            message: `Starting a brand new TikTok DM with ${prospectName.trim()}${tiktokUrl.trim() ? ` (${tiktokUrl.trim()})` : ""}. No prior conversation — craft a strong opener that earns a reply.`,
+            threadType: "friend",
+            mode: "first_message",
+          },
+        });
+        if (suggestData?.suggestions?.length) {
+          await supabase.from("prospects").update({
+            suggested_first_message: JSON.stringify(suggestData.suggestions),
+          }).eq("id", prospect.id);
+        }
+      } catch (e) { console.error("first message suggest error:", e); }
+
+      queryClient.invalidateQueries({ queryKey: ["tiktok-prospects"] });
+      toast.success("Chat created!");
+      handleChatDialogChange(false);
+      navigate(`/chats/${prospect.id}`);
+    } catch (e: any) {
+      console.error("Start new chat error:", e);
+      toast.error(e.message || "Failed to start chat");
+    } finally {
+      setStartingNew(false);
+    }
+
+
   // Process existing TikTok conversation (screenshot upload + OCR)
   const processExistingTikTok = async (mode: "continue" | "reengage") => {
     if (!user || !workspaceId || screenshotFiles.length === 0) return;
