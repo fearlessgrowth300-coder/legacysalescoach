@@ -660,26 +660,32 @@ The goal is to start a genuine conversation that leads to them wanting to know m
               {!chatType && (
                 <div className="space-y-3 py-4">
                   <p className="text-sm text-muted-foreground">What type of conversation is this?</p>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-2">
                     <Card className="p-3 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("new")}>
-                      <div className="text-center space-y-2">
-                        <Plus className="h-7 w-7 mx-auto text-primary" />
-                        <h4 className="font-medium text-xs">New Conversation</h4>
-                        <p className="text-[10px] text-muted-foreground">Fresh cold outreach</p>
+                      <div className="flex items-center gap-3">
+                        <Plus className="h-7 w-7 text-primary shrink-0" />
+                        <div className="min-w-0">
+                          <h4 className="font-medium text-sm">New Conversation</h4>
+                          <p className="text-xs text-muted-foreground">Add a TikTok link and start a fresh DM</p>
+                        </div>
                       </div>
                     </Card>
                     <Card className="p-3 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("existing")}>
-                      <div className="text-center space-y-2">
-                        <Upload className="h-7 w-7 mx-auto text-primary" />
-                        <h4 className="font-medium text-xs">Existing Chat</h4>
-                        <p className="text-[10px] text-muted-foreground">Upload DMs to continue</p>
+                      <div className="flex items-center gap-3">
+                        <Upload className="h-7 w-7 text-primary shrink-0" />
+                        <div className="min-w-0">
+                          <h4 className="font-medium text-sm">Existing Chat</h4>
+                          <p className="text-xs text-muted-foreground">Upload DMs to continue</p>
+                        </div>
                       </div>
                     </Card>
                     <Card className="p-3 cursor-pointer hover:border-primary transition-colors" onClick={() => setChatType("reengage")}>
-                      <div className="text-center space-y-2">
-                        <Ghost className="h-7 w-7 mx-auto text-primary" />
-                        <h4 className="font-medium text-xs">Re-engage</h4>
-                        <p className="text-[10px] text-muted-foreground">They saw but didn't reply</p>
+                      <div className="flex items-center gap-3">
+                        <Ghost className="h-7 w-7 text-primary shrink-0" />
+                        <div className="min-w-0">
+                          <h4 className="font-medium text-sm">Re-engage</h4>
+                          <p className="text-xs text-muted-foreground">They saw but didn't reply</p>
+                        </div>
                       </div>
                     </Card>
                   </div>
