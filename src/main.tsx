@@ -19,6 +19,12 @@ if ("serviceWorker" in navigator) {
     },
     onRegisteredSW(_swUrl, registration) {
       void registration?.update();
+
+      if (registration) {
+        window.setInterval(() => {
+          void registration.update();
+        }, 60 * 60 * 1000);
+      }
     },
   });
 }
