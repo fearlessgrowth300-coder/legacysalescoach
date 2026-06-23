@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => ({
     mode === "development" && componentTagger(),
     VitePWA({
       registerType: "autoUpdate",
-      injectRegister: "auto",
+      injectRegister: null,
       includeAssets: ["favicon.ico", "robots.txt", "placeholder.svg"],
       workbox: {
         skipWaiting: true,
