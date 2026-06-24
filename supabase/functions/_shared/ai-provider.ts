@@ -40,15 +40,36 @@ export class NoUserAiKeyError extends Error {
 // openai/gemini/anthropic key. THROWS NoUserAiKeyError when none is set — there
 // is NO Lovable-AI fallback.
 export async function resolveAiProvider(supabase: any, userId: string | null): Promise<AiProvider> {
-  if (!userId) throw new NoUserAiKeyError();
-
   let found: { key: string; service: string } | null = null;
-  try {
-    found = await getLatestUserApiKey(supabase, userId, ["openai", "gemini", "anthropic"]);
-  } catch (e) {
-    console.warn("[ai-provider] key lookup failed:", e);
+  if (userId) {
+    try {
+      found = await getLatestUserApiKey(supabase, userId, ["openai", "gemini", "anthropic"]);
+    } catch (e) {
+      console.warn("[ai-provider] key lookup failed:", e);
+    }
   }
-  if (!found?.key) throw new NoUserAiKeyError();
+
+  // Fall back to the Lovable AI Gateway when the user hasn't configured their
+  // own provider key. Uses LOVABLE_API_KEY so default knowledge processing
+  // works out of the box. Embeddings use OpenAI text-embedding-3-small with
+  // `dimensions: 768` to match the existing pgvector columns.
+  if (!found?.key) {
+    const lovableKey = Deno.env.get("LOVABLE_API_KEY") || "";
+    if (!lovableKey) throw new NoUserAiKeyError();
+    return {
+      name: "lovable",
+      chatUrl: "https://ai.gateway.lovable.dev/v1/chat/completions",
+      key: lovableKey,
+      model: (t) => t === "reasoning" ? "google/gemini-2.5-flash" : t === "fast" ? "google/gemini-2.5-flash-lite" : "google/gemini-2.5-flash",
+      isAnthropic: false,
+      embed: {
+        url: "https://ai.gateway.lovable.dev/v1/embeddings",
+        key: lovableKey,
+        model: "openai/text-embedding-3-small",
+        provider: "openai",
+      },
+    };
+  }
 
   if (found.service === "openai") {
     return {
