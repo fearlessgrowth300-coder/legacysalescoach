@@ -3,14 +3,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { describeApiKey, getLatestUserApiKey, getAllUserApiKeys } from "../_shared/api-key-utils.ts";
 import { resolveAiProvider, aiEmbed, type AiProvider } from "../_shared/ai-provider.ts";
 
-// Build the chat endpoint/headers/model for the user's OWN provider key
-// (OpenAI / Gemini). NO Lovable-AI fallback. Anthropic users get a clear error
-// for this feature (the raw-fetch JSON-extraction path can't translate the
-// Messages API shape) — they should add an OpenAI or Gemini key in Settings.
+// Build the chat endpoint/headers/model for the resolved AI provider.
+// OpenAI, Gemini, and the Lovable AI Gateway all expose OpenAI-compatible chat
+// endpoints, so the same raw-fetch path works for each. Anthropic uses a
+// different Messages API shape and is blocked for this extraction pipeline.
 function chatTarget(ai: AiProvider, gatewayModel: string): { url: string; headers: Record<string, string>; model: string } {
-  if (ai.name === "lovable") {
-    throw new Error("No AI API key configured. Add your OpenAI or Gemini key in Settings.");
-  }
   if (ai.isAnthropic) {
     throw new Error("Anthropic isn't supported for knowledge extraction yet. Add an OpenAI or Gemini key in Settings.");
   }
@@ -838,10 +835,9 @@ serve(async (req) => {
     }
     const user = { id: userIdResolved };
 
-    // Resolve the user's AI provider. STRICT: requires an OpenAI or Gemini key
-    // (Anthropic isn't supported for the JSON-extraction pipeline). If no key
-    // is configured, surface a clear 400 with the exact action the user must
-    // take in Settings — no Lovable fallback exists anywhere.
+    // Resolve the user's AI provider. User keys take priority; if none exists,
+    // resolveAiProvider falls back to the Lovable AI Gateway so knowledge
+    // processing still works out of the box.
     let ai;
     try {
       ai = await resolveAiProvider(supabase, user.id);
@@ -849,8 +845,8 @@ serve(async (req) => {
       const msg = e instanceof Error ? e.message : String(e);
       return new Response(JSON.stringify({
         error: "missing_api_key",
-        message: "No AI API key configured. Add your OpenAI or Gemini key in Settings to extract principles.",
-        required: ["openai", "gemini"],
+        message: "AI is not configured for knowledge extraction.",
+        required: ["lovable_ai_gateway", "openai", "gemini"],
         detail: msg,
       }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
