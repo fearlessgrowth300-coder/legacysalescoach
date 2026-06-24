@@ -253,34 +253,49 @@ The goal is to start a genuine conversation that leads to them wanting to know m
         .single();
       if (pErr) throw pErr;
 
-      // Optionally enrich from TikTok URL
+      // Fire profile enrichment in background — it can take up to 2 min on Apify
+      // and we don't want to block the user from getting into the chat.
       if (tiktokUrl.trim()) {
-        try {
-          await supabase.functions.invoke("fetch-tiktok", {
+        supabase.functions
+          .invoke("fetch-tiktok", {
             body: { url: tiktokUrl.trim(), workspaceId, prospectId: prospect.id },
-          });
-        } catch (e) { console.error("TikTok enrich error:", e); }
+          })
+          .then(({ error }) => {
+            if (error) console.error("TikTok enrich error:", error);
+            else {
+              queryClient.invalidateQueries({ queryKey: ["selected-prospect", prospect.id] });
+              queryClient.invalidateQueries({ queryKey: ["tiktok-prospects"] });
+            }
+          })
+          .catch((e) => console.error("TikTok enrich error:", e));
       }
 
-      // Generate first message suggestions
-      try {
-        const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
+      // Kick off first-message generation in background. The Chats page also
+      // auto-retries if the prospect has no saved first message, so even if
+      // this fails the user will still get an opener.
+      supabase.functions
+        .invoke("chat-suggest", {
           body: {
             prospectId: prospect.id,
             message: `Starting a brand new TikTok DM with ${prospectName.trim()}${tiktokUrl.trim() ? ` (${tiktokUrl.trim()})` : ""}. No prior conversation — craft a strong opener that earns a reply.`,
             threadType: "friend",
             mode: "first_message",
           },
-        });
-        if (suggestData?.suggestions?.length) {
-          await supabase.from("prospects").update({
-            suggested_first_message: JSON.stringify(suggestData.suggestions),
-          }).eq("id", prospect.id);
-        }
-      } catch (e) { console.error("first message suggest error:", e); }
+        })
+        .then(({ data, error }) => {
+          if (error) {
+            console.error("first message suggest error:", error);
+            toast.error("Couldn't generate opener automatically — open the chat to retry.");
+            return;
+          }
+          if (data?.suggestions?.length) {
+            queryClient.invalidateQueries({ queryKey: ["selected-prospect", prospect.id] });
+          }
+        })
+        .catch((e) => console.error("first message suggest error:", e));
 
       queryClient.invalidateQueries({ queryKey: ["tiktok-prospects"] });
-      toast.success("Chat created!");
+      toast.success("Chat created! Generating opener…");
       handleChatDialogChange(false);
       navigate(`/chats/${prospect.id}`);
     } catch (e: any) {
