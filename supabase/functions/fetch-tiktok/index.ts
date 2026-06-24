@@ -5,7 +5,10 @@ import { resolveUserChatTarget, userChat } from "../_shared/user-ai.ts";
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
-  const isAllowed = origin.endsWith(".lovable.app") || origin.startsWith("http://localhost:");
+  const isAllowed =
+    origin.endsWith(".lovable.app") ||
+    origin.endsWith(".lovableproject.com") ||
+    origin.startsWith("http://localhost:");
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : "https://legacysalescoach.lovable.app",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
