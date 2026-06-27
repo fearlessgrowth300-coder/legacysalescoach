@@ -1331,6 +1331,12 @@ serve(async (req) => {
     const learnings = await extractStructuredLearnings(contentToProcess, sourceName, ai);
     console.log(`Pass 2 complete: ${learnings.length} principles extracted`);
 
+    if (learnings.length === 0) {
+      console.warn(`No principles extracted for standard item ${itemId}; marking error instead of leaving processing`);
+      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+      return;
+    }
+
     const storedLearnings: any[] = [];
     const seenChunkContent = new Set<string>();
     try {
