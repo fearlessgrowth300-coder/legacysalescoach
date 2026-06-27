@@ -1367,7 +1367,7 @@ export default function KnowledgeBase() {
                             }}
                           >
                             <RefreshCw className="h-3 w-3 mr-1" />
-                            {item.type !== "pdf" && ((processingCounts[item.id]?.learnings || 0) > 0 || (processingCounts[item.id]?.chunks || 0) > 0) ? "Mark Ready" : "Resume"}
+                            {item.type !== "pdf" && ((processingCounts[item.id]?.learnings || 0) > 0 || (processingCounts[item.id]?.chunks || 0) > 0) ? "Mark Ready" : item.type === "pdf" ? "Resume" : "Restart"}
                           </Button>
                         </div>
                       )}
