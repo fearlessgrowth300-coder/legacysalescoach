@@ -428,12 +428,17 @@ export default function KnowledgeBase() {
           const lastMark = markReadyRef.current[item.id] || 0;
           if (now - lastMark > 90_000) {
             markReadyRef.current[item.id] = now;
-            await supabase
+            const { error } = await supabase
               .from("knowledge_base_items")
               .update({ status: "ready" })
               .eq("id", item.id);
-            toast.success(`Recovered ${item.title || "item"} — extraction is ready`);
-            continue;
+            if (!error) {
+              toast.success(`Recovered ${item.title || "item"} — extraction is ready`);
+              continue;
+            }
+            // If RLS blocks the client-side status fix, show a manual button
+            // instead of breaking the polling loop.
+            console.warn("Auto mark-ready failed:", error.message);
           }
         }
 
@@ -1343,7 +1348,8 @@ export default function KnowledgeBase() {
                             onClick={async () => {
                               try {
                                 if (item.type !== "pdf" && ((processingCounts[item.id]?.learnings || 0) > 0 || (processingCounts[item.id]?.chunks || 0) > 0)) {
-                                  await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", item.id);
+                                  const { error } = await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", item.id);
+                                  if (error) throw error;
                                   toast.success("Marked ready");
                                 } else if (item.type === "pdf") {
                                   await supabase.functions.invoke("process-knowledge", {
