@@ -10,8 +10,12 @@ const defaultCorsHeaders = {
 function extractYouTubeId(url: string): string | null {
   try {
     const u = new URL(url);
-    if (url.includes("youtu.be")) return u.pathname.slice(1);
-    return u.searchParams.get("v");
+    if (url.includes("youtu.be")) return u.pathname.split("/").filter(Boolean)[0] || null;
+    const fromQuery = u.searchParams.get("v");
+    if (fromQuery) return fromQuery;
+    const pathParts = u.pathname.split("/").filter(Boolean);
+    const markerIndex = pathParts.findIndex((part) => ["live", "shorts", "embed"].includes(part));
+    return markerIndex >= 0 ? pathParts[markerIndex + 1] || null : null;
   } catch { return null; }
 }
 
@@ -112,8 +116,9 @@ async function fetchYouTubeData(videoId: string, userId: string | null = null) {
     if (transcript && transcript.length > 50) break;
     try {
       console.log(`Trying TranscriptAPI.com (${label})`, describeApiKey(key));
+      const transcriptUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
       const sdRes = await fetch(
-        `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`,
+        `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${encodeURIComponent(transcriptUrl)}&format=json`,
         {
           headers: { "Authorization": `Bearer ${key}` },
           signal: AbortSignal.timeout(30000),

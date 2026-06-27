@@ -1331,6 +1331,12 @@ serve(async (req) => {
     const learnings = await extractStructuredLearnings(contentToProcess, sourceName, ai);
     console.log(`Pass 2 complete: ${learnings.length} principles extracted`);
 
+    if (learnings.length === 0) {
+      console.warn(`No principles extracted for standard item ${itemId}; marking error instead of leaving processing`);
+      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+      return;
+    }
+
     const storedLearnings: any[] = [];
     const seenChunkContent = new Set<string>();
     try {
@@ -1606,7 +1612,16 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
   let videoId = "";
   try {
     const urlObj = new URL(url);
-    videoId = url.includes("youtu.be") ? urlObj.pathname.slice(1) : (urlObj.searchParams.get("v") || "");
+    if (url.includes("youtu.be")) {
+      videoId = urlObj.pathname.split("/").filter(Boolean)[0] || "";
+    } else {
+      videoId = urlObj.searchParams.get("v") || "";
+      if (!videoId) {
+        const pathParts = urlObj.pathname.split("/").filter(Boolean);
+        const markerIndex = pathParts.findIndex((part) => ["live", "shorts", "embed"].includes(part));
+        if (markerIndex >= 0) videoId = pathParts[markerIndex + 1] || "";
+      }
+    }
   } catch { /* ignore */ }
 
   if (videoId) {
@@ -1635,8 +1650,9 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
       if (content && content.length > 100) break;
       try {
         console.log(`Trying TranscriptAPI.com with ${label} key`, describeApiKey(key));
+        const transcriptUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
         const sdRes = await fetch(
-          `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${videoId}&format=json`,
+          `https://transcriptapi.com/api/v2/youtube/transcript?video_url=${encodeURIComponent(transcriptUrl)}&format=json`,
           {
             headers: { "Authorization": `Bearer ${key}` },
             signal: AbortSignal.timeout(30000),
@@ -1724,7 +1740,8 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
   }
 
   if (!content || content.length < 50) {
-    content = `YouTube video URL: ${url}. Please analyze this video based on the URL.`;
+    console.warn(`No YouTube transcript/content extracted for ${url} (videoId=${videoId || "none"})`);
+    content = "";
   }
   return content;
 }
