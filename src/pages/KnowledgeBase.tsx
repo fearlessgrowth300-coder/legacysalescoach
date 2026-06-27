@@ -61,6 +61,7 @@ export default function KnowledgeBase() {
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [pdfProgress, setPdfProgress] = useState<{ step: string; percent: number } | null>(null);
   const autoResumeRef = useRef<Record<string, number>>({});
+  const markReadyRef = useRef<Record<string, number>>({});
 
   // URL preview state
   const [urlStep, setUrlStep] = useState<"input" | "preview" | "confirm">("input");
@@ -417,23 +418,41 @@ export default function KnowledgeBase() {
       setProcessingCounts(counts);
       const now = Date.now();
       for (const item of processingItems) {
-        if (item.type !== "pdf") continue;
         const updatedAt = item.updated_at ? new Date(item.updated_at).getTime() : now;
         const stale = now - updatedAt > 120_000;
+        const countForItem = counts[item.id] || { learnings: 0, chunks: 0 };
+
+        // If an edge background task saved principles/chunks but died before
+        // flipping the item to ready, do not leave the card spinning forever.
+        if (item.type !== "pdf" && stale && (countForItem.learnings > 0 || countForItem.chunks > 0)) {
+          const lastMark = markReadyRef.current[item.id] || 0;
+          if (now - lastMark > 90_000) {
+            markReadyRef.current[item.id] = now;
+            await supabase
+              .from("knowledge_base_items")
+              .update({ status: "ready" })
+              .eq("id", item.id);
+            toast.success(`Recovered ${item.title || "item"} — extraction is ready`);
+            continue;
+          }
+        }
+
         const lastResume = autoResumeRef.current[item.id] || 0;
         if (!stale || now - lastResume < 90_000) continue;
 
-        const chapters = Array.isArray((item as any).book_brief?.chapters) ? (item as any).book_brief.chapters : [];
-        const hasOpenChapter = chapters.some((c: any) => c.status === "pending" || c.status === "extracting");
-        autoResumeRef.current[item.id] = now;
-        void supabase.functions.invoke("process-knowledge", {
-          body: {
-            itemId: item.id,
-            type: "pdf",
-            filePath: item.file_path,
-            continueBook: hasOpenChapter,
-          },
-        }).finally(() => queryClient.invalidateQueries({ queryKey: ["kb-items"] }));
+        if (item.type === "pdf") {
+          const chapters = Array.isArray((item as any).book_brief?.chapters) ? (item as any).book_brief.chapters : [];
+          const hasOpenChapter = chapters.some((c: any) => c.status === "pending" || c.status === "extracting");
+          autoResumeRef.current[item.id] = now;
+          void supabase.functions.invoke("process-knowledge", {
+            body: {
+              itemId: item.id,
+              type: "pdf",
+              filePath: item.file_path,
+              continueBook: hasOpenChapter,
+            },
+          }).finally(() => queryClient.invalidateQueries({ queryKey: ["kb-items"] }));
+        }
       }
       // Refresh items so book_brief / chapter status update live
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
@@ -1307,13 +1326,15 @@ export default function KnowledgeBase() {
                         </div>
                       )}
                       <Progress value={undefined} className="h-1.5 animate-pulse" />
-                      {/* Resume button: shows after 60s of no updates on extracting books */}
-                      {item.type === "pdf" && item.status === "extracting" && (item as any).updated_at && (
-                        (Date.now() - new Date((item as any).updated_at).getTime()) > 60_000
-                      ) && (
+                      {/* Recovery button: shows after 60s with no item update */}
+                      {(item as any).updated_at && ((Date.now() - new Date((item as any).updated_at).getTime()) > 60_000) && (
                         <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2">
                           <p className="text-xs text-muted-foreground">
-                            This book seems stuck. Resume to continue processing.
+                            {item.type === "pdf"
+                              ? "This book seems stuck. Resume to continue processing."
+                              : ((processingCounts[item.id]?.learnings || 0) > 0 || (processingCounts[item.id]?.chunks || 0) > 0)
+                                ? "Extraction finished but the status did not update. Mark it ready."
+                                : "This item seems stuck. Restart extraction."}
                           </p>
                           <Button
                             size="sm"
@@ -1321,17 +1342,26 @@ export default function KnowledgeBase() {
                             className="h-7 px-2 text-xs"
                             onClick={async () => {
                               try {
-                                await supabase.functions.invoke("process-knowledge", {
-                                  body: { itemId: item.id, type: "pdf", continueBook: true },
-                                });
-                                toast.success("Resuming processing…");
+                                if (item.type !== "pdf" && ((processingCounts[item.id]?.learnings || 0) > 0 || (processingCounts[item.id]?.chunks || 0) > 0)) {
+                                  await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", item.id);
+                                  toast.success("Marked ready");
+                                } else if (item.type === "pdf") {
+                                  await supabase.functions.invoke("process-knowledge", {
+                                    body: { itemId: item.id, type: "pdf", continueBook: true },
+                                  });
+                                  toast.success("Resuming processing…");
+                                } else {
+                                  retryItem.mutate(item);
+                                  return;
+                                }
                                 queryClient.invalidateQueries({ queryKey: ["kb-items"] });
                               } catch (e: any) {
-                                toast.error(e.message || "Resume failed");
+                                toast.error(e.message || "Recovery failed");
                               }
                             }}
                           >
-                            <RefreshCw className="h-3 w-3 mr-1" /> Resume
+                            <RefreshCw className="h-3 w-3 mr-1" />
+                            {item.type !== "pdf" && ((processingCounts[item.id]?.learnings || 0) > 0 || (processingCounts[item.id]?.chunks || 0) > 0) ? "Mark Ready" : "Resume"}
                           </Button>
                         </div>
                       )}
