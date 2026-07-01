@@ -17,6 +17,57 @@ function extractUsername(input: string): string {
   return input.replace(/^@/, "").trim();
 }
 
+function isInstagramPostUrl(input: string): boolean {
+  return /instagram\.com\/(?:p|reel|tv)\//i.test(input);
+}
+
+function summarizePost(post: any, inputUrl: string) {
+  const shortcode = post.shortCode || post.shortcode || inputUrl.match(/instagram\.com\/(?:p|reel|tv)\/([^/?#]+)/i)?.[1] || "";
+  const ownerUsername = post.ownerUsername || post.owner?.username || post.username || "unknown";
+  const postUrl = post.url || post.inputUrl || (shortcode ? `https://www.instagram.com/p/${shortcode}/` : inputUrl);
+  const caption = post.caption || post.text || post.alt || "";
+  const likes = post.likesCount || post.likes || 0;
+  const comments = post.commentsCount || post.comments || 0;
+  const views = post.videoViewCount || post.videoPlayCount || post.videoViewCountLatest || 0;
+  const type = post.type || (views ? "Video" : "Post");
+
+  const targetPost = {
+    caption: caption.substring(0, 1200),
+    likes,
+    comments,
+    views,
+    type,
+    url: postUrl,
+    shortcode,
+  };
+
+  const summary = [
+    `Instagram ${type === "Video" ? "Reel/Video" : "Post"} by @${ownerUsername}`,
+    `Post URL: ${postUrl}`,
+    caption ? `Caption: ${caption}` : "Caption: No caption found",
+    `Likes: ${likes} | Comments: ${comments}${views ? ` | Views: ${views}` : ""}`,
+    ...(post.latestComments || []).slice(0, 8).map((c: any) => `Comment by @${c.ownerUsername || c.username || "unknown"}: ${c.text || c.comment || ""}`),
+  ].filter(Boolean).join("\n");
+
+  return {
+    username: ownerUsername,
+    fullName: post.ownerFullName || post.owner?.fullName || "",
+    biography: "",
+    followersCount: 0,
+    followsCount: 0,
+    postsCount: 0,
+    isVerified: post.ownerIsVerified || false,
+    isBusinessAccount: false,
+    businessCategory: "",
+    externalUrl: "",
+    profilePicUrl: post.ownerProfilePicUrl || "",
+    recentPosts: [targetPost],
+    targetPost,
+    isPost: true,
+    summary,
+  };
+}
+
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   if (req.method === "OPTIONS") {
@@ -55,6 +106,37 @@ serve(async (req) => {
     const APIFY_API_KEY = Deno.env.get("APIFY_API_KEY");
     if (!APIFY_API_KEY) {
       throw new Error("APIFY_API_KEY is not configured");
+    }
+
+    if (isInstagramPostUrl(rawInput)) {
+      console.log(`Fetching Instagram post/reel for: ${rawInput}`);
+      const postResponse = await fetch(
+        `https://api.apify.com/v2/acts/apify~instagram-post-scraper/run-sync-get-dataset-items?token=${APIFY_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ directUrls: [rawInput], resultsLimit: 1 }),
+          signal: AbortSignal.timeout(60000),
+        }
+      );
+
+      if (!postResponse.ok) {
+        const errText = await postResponse.text();
+        console.error("Apify Instagram post error:", postResponse.status, errText);
+        throw new Error(`Apify Instagram post API error: ${postResponse.status}`);
+      }
+
+      const postResults = await postResponse.json();
+      const post = Array.isArray(postResults) && postResults.length > 0 ? postResults[0] : null;
+      if (!post) {
+        return new Response(JSON.stringify({ error: "Instagram post not found", url: rawInput }), {
+          status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify(summarizePost(post, rawInput)), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     console.log(`Fetching Instagram profile for: ${username}`);

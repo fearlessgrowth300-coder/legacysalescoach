@@ -283,12 +283,17 @@ export default function Chats() {
             body: { username: newProspectIg },
           });
           if (igData && !igData.error) {
+            const targetPost = (igData as any).targetPost;
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
             await supabase.from("prospects").update({
               detected_interests: interests || null,
               profile_pic_url: igData.profilePicUrl || null,
               instagram_username: igData.username || null,
               name: igData.fullName || newProspectName,
+              ...(targetPost ? {
+                target_video_url: targetPost.url || null,
+                target_video_caption: `Instagram post/reel\n${targetPost.caption || "No caption found"}`,
+              } : {}),
             } as any).eq("id", prospect.id);
             
           }
@@ -382,12 +387,17 @@ export default function Chats() {
             body: { username: newProspectIg },
           });
           if (igData && !igData.error) {
+            const targetPost = (igData as any).targetPost;
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
             await supabase.from("prospects").update({
               detected_interests: interests || null,
               profile_pic_url: igData.profilePicUrl || null,
               instagram_username: igData.username || null,
               name: igData.fullName || newProspectName,
+              ...(targetPost ? {
+                target_video_url: targetPost.url || null,
+                target_video_caption: `Instagram post/reel\n${targetPost.caption || "No caption found"}`,
+              } : {}),
             } as any).eq("id", prospect.id);
           }
         } catch (e) { console.error("IG fetch error:", e); }
@@ -494,24 +504,34 @@ export default function Chats() {
       // If Instagram URL provided, auto-fetch profile details via Apify
       if (newProspectIg) {
         setIsGeneratingFirst(true);
+        let profileSummary = `Instagram profile/post URL: ${newProspectIg}. Prospect name entered: ${newProspectName}.`;
         try {
-          let profileSummary = `Instagram profile URL: ${newProspectIg}. Prospect name entered: ${newProspectName}.`;
           const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
             body: { username: newProspectIg },
           });
-      if (igData && !igData.error) {
+          if (igData && !igData.error) {
+            const targetPost = (igData as any).targetPost;
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
             await supabase.from("prospects").update({
               detected_interests: interests || null,
               profile_pic_url: igData.profilePicUrl || null,
               instagram_username: igData.username || null,
               name: igData.fullName || newProspectName,
+              ...(targetPost ? {
+                target_video_url: targetPost.url || null,
+                target_video_caption: `Instagram post/reel\n${targetPost.caption || "No caption found"}`,
+              } : {}),
             } as any).eq("id", data.id);
 
             profileSummary = igData.summary || `Instagram profile: @${igData.username}. Bio: ${igData.biography || "N/A"}. Followers: ${igData.followersCount || "N/A"}. Category: ${igData.businessCategory || "N/A"}. Posts: ${igData.postsCount || 0}. ${igData.recentPosts?.map((p: any, i: number) => `Post ${i+1}: "${p.caption}" (${p.likes} likes)`).join(". ") || ""}`;
           }
+        } catch (e) {
+          console.error("Instagram auto-fetch error:", e);
+          toast.warning("Instagram scrape failed — generating from the link instead");
+        }
 
-          const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
+        try {
+          let suggestResponse = await supabase.functions.invoke("chat-suggest", {
             body: {
               prospectId: data.id,
               message: profileSummary,
@@ -519,6 +539,19 @@ export default function Chats() {
               mode: "first_message",
             },
           });
+          if (suggestResponse.error && /401|Unauthorized/i.test(String(suggestResponse.error?.message || ""))) {
+            await supabase.auth.refreshSession();
+            suggestResponse = await supabase.functions.invoke("chat-suggest", {
+              body: {
+                prospectId: data.id,
+                message: profileSummary,
+                threadType: currentThreadType,
+                mode: "first_message",
+              },
+            });
+          }
+          if (suggestResponse.error) throw suggestResponse.error;
+          const suggestData = suggestResponse.data;
           if (suggestData?.suggestions) {
             generatedSuggestions = suggestData.suggestions;
             setFirstMessageSuggestions(suggestData.suggestions);
@@ -528,7 +561,8 @@ export default function Chats() {
             }).eq("id", data.id);
           }
         } catch (e) {
-          console.error("Instagram auto-fetch error:", e);
+          console.error("First-message generation error:", e);
+          toast.error("Could not generate first-message suggestions");
         } finally {
           setIsGeneratingFirst(false);
         }
@@ -580,12 +614,18 @@ export default function Chats() {
     return match ? match[0] : null;
   };
 
+  const detectInstagramUrl = (text: string): string | null => {
+    const match = text.match(/https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\/[^\s]+/i);
+    return match ? match[0] : null;
+  };
+
   const handleSendInbound = async () => {
     if (!messageInput.trim() || !selectedProspectId) return;
     setIsAnalyzing(true);
     setIsAnalyzingIntel(true);
 
     const tiktokUrl = detectTikTokUrl(messageInput);
+    const instagramUrl = detectInstagramUrl(messageInput);
     let enrichedMessage = messageInput;
 
     // Auto-scrape TikTok profile if URL detected
@@ -616,6 +656,38 @@ export default function Chats() {
       } catch (e) {
         console.error("TikTok auto-scrape error:", e);
         toast.error("TikTok scrape failed — generating reply without it");
+      }
+    }
+
+    // Auto-scrape Instagram profile/post if URL detected
+    if (instagramUrl && activeWorkspace) {
+      toast.info("🔍 Instagram link detected — analyzing profile/post...", { duration: 3000 });
+      try {
+        const { data: igData, error: igError } = await supabase.functions.invoke("fetch-instagram", {
+          body: { username: instagramUrl },
+        });
+        if (!igError && igData && !igData.error) {
+          const targetPost = (igData as any).targetPost;
+          enrichedMessage = `${enrichedMessage}\n\n--- INSTAGRAM AUTO-SCRAPED ---\n${igData.summary || ""}`;
+          toast.success(`✅ Analyzed @${igData.username || "Instagram"}`, { duration: 4000 });
+
+          await supabase.from("prospects").update({
+            instagram_url: instagramUrl,
+            instagram_username: igData.username || undefined,
+            profile_pic_url: igData.profilePicUrl || undefined,
+            detected_interests: [igData.businessCategory, igData.biography?.substring(0, 300)].filter(Boolean).join(" | ") || undefined,
+            ...(targetPost ? {
+              target_video_url: targetPost.url || null,
+              target_video_caption: `Instagram post/reel\n${targetPost.caption || "No caption found"}`,
+            } : {}),
+          } as any).eq("id", selectedProspectId);
+          queryClient.invalidateQueries({ queryKey: ["selected-prospect"] });
+        } else if (igError) {
+          throw igError;
+        }
+      } catch (e) {
+        console.error("Instagram auto-scrape error:", e);
+        toast.error("Instagram scrape failed — generating reply from the link text");
       }
     }
 
@@ -906,9 +978,9 @@ export default function Chats() {
                       <Input value={newProspectName} onChange={(e) => setNewProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
                     </div>
                     <div>
-                      <Label>Instagram URL</Label>
-                      <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username" />
-                      <p className="text-xs text-muted-foreground mt-1">We'll analyze their profile to craft a perfect opening message</p>
+                      <Label>Instagram profile or post URL</Label>
+                      <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username or /reel/..." />
+                      <p className="text-xs text-muted-foreground mt-1">We'll analyze their page or exact post to craft a first message</p>
                     </div>
                     {isGeneratingFirst && (
                       <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
@@ -947,8 +1019,8 @@ export default function Chats() {
                           <Input value={newProspectName} onChange={(e) => setNewProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
                         </div>
                         <div>
-                          <Label>Instagram URL</Label>
-                          <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username" />
+                          <Label>Instagram profile or post URL</Label>
+                          <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username or /reel/..." />
                         </div>
                         <DialogFooter>
                           <Button onClick={() => setUploadStep("upload")} disabled={!newProspectName.trim()}>Next: Upload Screenshots</Button>
@@ -1043,8 +1115,8 @@ export default function Chats() {
                           <Input value={newProspectName} onChange={(e) => setNewProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
                         </div>
                         <div>
-                          <Label>Instagram URL</Label>
-                          <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username" />
+                          <Label>Instagram profile or post URL</Label>
+                          <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username or /reel/..." />
                         </div>
                         <DialogFooter>
                           <Button onClick={() => setUploadStep("upload")} disabled={!newProspectName.trim()}>Next: Upload Screenshots</Button>
