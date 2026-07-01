@@ -504,8 +504,8 @@ export default function Chats() {
       // If Instagram URL provided, auto-fetch profile details via Apify
       if (newProspectIg) {
         setIsGeneratingFirst(true);
+        let profileSummary = `Instagram profile/post URL: ${newProspectIg}. Prospect name entered: ${newProspectName}.`;
         try {
-          let profileSummary = `Instagram profile URL: ${newProspectIg}. Prospect name entered: ${newProspectName}.`;
           const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
             body: { username: newProspectIg },
           });
@@ -525,8 +525,13 @@ export default function Chats() {
 
             profileSummary = igData.summary || `Instagram profile: @${igData.username}. Bio: ${igData.biography || "N/A"}. Followers: ${igData.followersCount || "N/A"}. Category: ${igData.businessCategory || "N/A"}. Posts: ${igData.postsCount || 0}. ${igData.recentPosts?.map((p: any, i: number) => `Post ${i+1}: "${p.caption}" (${p.likes} likes)`).join(". ") || ""}`;
           }
+        } catch (e) {
+          console.error("Instagram auto-fetch error:", e);
+          toast.warning("Instagram scrape failed — generating from the link instead");
+        }
 
-          const { data: suggestData } = await supabase.functions.invoke("chat-suggest", {
+        try {
+          let suggestResponse = await supabase.functions.invoke("chat-suggest", {
             body: {
               prospectId: data.id,
               message: profileSummary,
@@ -534,6 +539,19 @@ export default function Chats() {
               mode: "first_message",
             },
           });
+          if (suggestResponse.error && /401|Unauthorized/i.test(String(suggestResponse.error?.message || ""))) {
+            await supabase.auth.refreshSession();
+            suggestResponse = await supabase.functions.invoke("chat-suggest", {
+              body: {
+                prospectId: data.id,
+                message: profileSummary,
+                threadType: currentThreadType,
+                mode: "first_message",
+              },
+            });
+          }
+          if (suggestResponse.error) throw suggestResponse.error;
+          const suggestData = suggestResponse.data;
           if (suggestData?.suggestions) {
             generatedSuggestions = suggestData.suggestions;
             setFirstMessageSuggestions(suggestData.suggestions);
@@ -543,7 +561,8 @@ export default function Chats() {
             }).eq("id", data.id);
           }
         } catch (e) {
-          console.error("Instagram auto-fetch error:", e);
+          console.error("First-message generation error:", e);
+          toast.error("Could not generate first-message suggestions");
         } finally {
           setIsGeneratingFirst(false);
         }
