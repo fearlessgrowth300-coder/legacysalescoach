@@ -33,6 +33,14 @@ function clampText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
+function messageText(content: any): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((p: any) => p.text || (p.type === "image_url" ? "[image]" : "")).join(" ");
+  }
+  return "";
+}
+
 async function imageToBase64(url: string): Promise<string | null> {
   try {
     const resp = await fetch(url);
@@ -318,28 +326,6 @@ serve(async (req) => {
     if (messages.length > MAX_MESSAGES) return new Response(JSON.stringify({ error: "Too many messages" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
     const validated = await Promise.all(messages.map(processMessage));
-    const modelMessages = validated.slice(-MODEL_CONTEXT_MESSAGES);
-
-    // Summarize messages that fall outside the model context window so the AI
-    // doesn't "forget" the earlier parts of a long conversation.
-    const olderMessages = validated.slice(0, Math.max(0, validated.length - MODEL_CONTEXT_MESSAGES));
-    let priorSummary = "";
-    if (olderMessages.length > 0) {
-      const lines: string[] = [];
-      for (const m of olderMessages) {
-        const role = m.role === "assistant" ? "Assistant" : (m.role === "user" ? "User" : m.role);
-        const text = typeof m.content === "string"
-          ? m.content
-          : (Array.isArray(m.content) ? m.content.map((p: any) => p.text || (p.type === "image_url" ? "[image]" : "")).join(" ") : "");
-        const trimmed = text.replace(/\s+/g, " ").trim();
-        if (trimmed) lines.push(`${role}: ${trimmed.slice(0, 400)}${trimmed.length > 400 ? "…" : ""}`);
-      }
-      priorSummary = lines.join("\n");
-      if (priorSummary.length > PRIOR_SUMMARY_CHAR_LIMIT) {
-        // Keep the tail — most recent older context matters more.
-        priorSummary = "…\n" + priorSummary.slice(-PRIOR_SUMMARY_CHAR_LIMIT);
-      }
-    }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -350,6 +336,70 @@ serve(async (req) => {
     const token = authHeader.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     if (authError || !user) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+    // Do not depend on the browser payload for memory. The UI may only send a
+    // short recent window, so reload this conversation's saved history from the
+    // database and use it as the real long-term client memory. Preserve the
+    // current browser turn when it contains base64 image data.
+    let conversationMessages: any[] = validated;
+    if (conversation_id) {
+      const { data: historyRows, error: historyError } = await supabaseAdmin
+        .from("ai_chat_messages")
+        .select("role, content, created_at")
+        .eq("conversation_id", conversation_id)
+        .eq("user_id", user.id)
+        .in("role", ["user", "assistant"])
+        .order("created_at", { ascending: false })
+        .limit(MAX_MESSAGES);
+
+      if (historyError) {
+        console.warn("[brain-chat] conversation history load failed:", historyError);
+      } else if (historyRows?.length) {
+        const dbMessages = [...historyRows].reverse().map((m: any) => ({
+          role: m.role === "assistant" ? "assistant" : "user",
+          content: String(m.content || ""),
+        }));
+
+        const clientLast = validated[validated.length - 1];
+        const dbLast = dbMessages[dbMessages.length - 1];
+        const clientLastText = messageText(clientLast?.content).replace(/\s+/g, " ").trim();
+        const dbLastText = messageText(dbLast?.content).replace(/\s+/g, " ").trim();
+
+        if (clientLast?.role === "user") {
+          const sameLatestTurn = dbLast?.role === "user" && clientLastText && dbLastText && (
+            clientLastText === dbLastText || clientLastText.startsWith(dbLastText) || dbLastText.startsWith(clientLastText)
+          );
+          if (sameLatestTurn) {
+            dbMessages[dbMessages.length - 1] = clientLast;
+          } else {
+            dbMessages.push(clientLast);
+          }
+        }
+
+        conversationMessages = dbMessages.slice(-MAX_MESSAGES);
+        console.log("[brain-chat] loaded conversation memory messages:", conversationMessages.length);
+      }
+    }
+
+    const modelMessages = conversationMessages.slice(-MODEL_CONTEXT_MESSAGES);
+
+    // Summarize messages that fall outside the model context window so the AI
+    // doesn't "forget" the earlier parts of a long conversation.
+    const olderMessages = conversationMessages.slice(0, Math.max(0, conversationMessages.length - MODEL_CONTEXT_MESSAGES));
+    let priorSummary = "";
+    if (olderMessages.length > 0) {
+      const lines: string[] = [];
+      for (const m of olderMessages) {
+        const role = m.role === "assistant" ? "Assistant" : (m.role === "user" ? "User" : m.role);
+        const trimmed = messageText(m.content).replace(/\s+/g, " ").trim();
+        if (trimmed) lines.push(`${role}: ${trimmed.slice(0, 400)}${trimmed.length > 400 ? "…" : ""}`);
+      }
+      priorSummary = lines.join("\n");
+      if (priorSummary.length > PRIOR_SUMMARY_CHAR_LIMIT) {
+        // Keep the tail — most recent older context matters more.
+        priorSummary = "…\n" + priorSummary.slice(-PRIOR_SUMMARY_CHAR_LIMIT);
+      }
+    }
 
     // Extract last user message text + images for retrieval brief
     const lastUserMsg = [...modelMessages].reverse().find((m: any) => m.role === "user");

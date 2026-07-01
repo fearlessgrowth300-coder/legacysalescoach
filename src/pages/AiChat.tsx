@@ -29,7 +29,7 @@ type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url
 type Conversation = { id: string; title: string; created_at: string; updated_at: string };
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/brain-chat`;
-const CHAT_CONTEXT_LIMIT = 8;
+const CHAT_CONTEXT_LIMIT = 80;
 
 function sliceRecentChatContext(history: Msg[], limit = CHAT_CONTEXT_LIMIT) {
   return history.length > limit ? history.slice(-limit) : history;
