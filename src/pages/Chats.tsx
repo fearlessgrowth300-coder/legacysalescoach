@@ -714,15 +714,14 @@ export default function Chats() {
     setIsAnalyzingIntel(true);
     try {
       const lastInbound = messages?.filter(m => m.direction === "inbound").pop();
-      const { data, error } = await supabase.functions.invoke("generate-reply", {
-        body: {
-          prospectId: selectedProspectId,
-          message: lastInbound?.content || "",
-          threadType: currentThreadType,
-          styleModifier: style,
-        },
-      });
+      const body = { prospectId: selectedProspectId, message: lastInbound?.content || "", threadType: currentThreadType, styleModifier: style };
+      let { data, error } = await supabase.functions.invoke("generate-reply", { body });
+      if (error && /401|Unauthorized/i.test(String(error?.message || ""))) {
+        await supabase.auth.refreshSession();
+        ({ data, error } = await supabase.functions.invoke("generate-reply", { body }));
+      }
       if (error) throw error;
+
       setSuggestions(data.suggestions || []);
       setPushyWarning(null);
       setFeedbackMap({});
