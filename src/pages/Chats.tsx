@@ -614,12 +614,18 @@ export default function Chats() {
     return match ? match[0] : null;
   };
 
+  const detectInstagramUrl = (text: string): string | null => {
+    const match = text.match(/https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\/[^\s]+/i);
+    return match ? match[0] : null;
+  };
+
   const handleSendInbound = async () => {
     if (!messageInput.trim() || !selectedProspectId) return;
     setIsAnalyzing(true);
     setIsAnalyzingIntel(true);
 
     const tiktokUrl = detectTikTokUrl(messageInput);
+    const instagramUrl = detectInstagramUrl(messageInput);
     let enrichedMessage = messageInput;
 
     // Auto-scrape TikTok profile if URL detected
@@ -650,6 +656,38 @@ export default function Chats() {
       } catch (e) {
         console.error("TikTok auto-scrape error:", e);
         toast.error("TikTok scrape failed — generating reply without it");
+      }
+    }
+
+    // Auto-scrape Instagram profile/post if URL detected
+    if (instagramUrl && activeWorkspace) {
+      toast.info("🔍 Instagram link detected — analyzing profile/post...", { duration: 3000 });
+      try {
+        const { data: igData, error: igError } = await supabase.functions.invoke("fetch-instagram", {
+          body: { username: instagramUrl },
+        });
+        if (!igError && igData && !igData.error) {
+          const targetPost = (igData as any).targetPost;
+          enrichedMessage = `${enrichedMessage}\n\n--- INSTAGRAM AUTO-SCRAPED ---\n${igData.summary || ""}`;
+          toast.success(`✅ Analyzed @${igData.username || "Instagram"}`, { duration: 4000 });
+
+          await supabase.from("prospects").update({
+            instagram_url: instagramUrl,
+            instagram_username: igData.username || undefined,
+            profile_pic_url: igData.profilePicUrl || undefined,
+            detected_interests: [igData.businessCategory, igData.biography?.substring(0, 300)].filter(Boolean).join(" | ") || undefined,
+            ...(targetPost ? {
+              target_video_url: targetPost.url || null,
+              target_video_caption: `Instagram post/reel\n${targetPost.caption || "No caption found"}`,
+            } : {}),
+          } as any).eq("id", selectedProspectId);
+          queryClient.invalidateQueries({ queryKey: ["selected-prospect"] });
+        } else if (igError) {
+          throw igError;
+        }
+      } catch (e) {
+        console.error("Instagram auto-scrape error:", e);
+        toast.error("Instagram scrape failed — generating reply from the link text");
       }
     }
 
