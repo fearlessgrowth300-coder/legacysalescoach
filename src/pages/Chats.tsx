@@ -628,14 +628,21 @@ export default function Chats() {
     });
 
     try {
-      const { data, error } = await supabase.functions.invoke("generate-reply", {
-        body: {
-          prospectId: selectedProspectId,
-          message: enrichedMessage,
-          threadType: currentThreadType,
-        },
-      });
+      const invokeGenerate = async () => {
+        const res = await supabase.functions.invoke("generate-reply", {
+          body: { prospectId: selectedProspectId, message: enrichedMessage, threadType: currentThreadType },
+        });
+        if (res.error && /401|Unauthorized/i.test(String(res.error?.message || ""))) {
+          await supabase.auth.refreshSession();
+          return await supabase.functions.invoke("generate-reply", {
+            body: { prospectId: selectedProspectId, message: enrichedMessage, threadType: currentThreadType },
+          });
+        }
+        return res;
+      };
+      const { data, error } = await invokeGenerate();
       if (error) throw error;
+
       setSuggestions(data.suggestions || []);
       setPushyWarning(null);
       setFeedbackMap({});
