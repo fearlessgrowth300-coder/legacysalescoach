@@ -396,8 +396,17 @@ serve(async (req) => {
       }
       priorSummary = lines.join("\n");
       if (priorSummary.length > PRIOR_SUMMARY_CHAR_LIMIT) {
-        // Keep the tail — most recent older context matters more.
-        priorSummary = "…\n" + priorSummary.slice(-PRIOR_SUMMARY_CHAR_LIMIT);
+        // Keep BOTH ends of the older history. The OPENING of a client thread is
+        // where the durable facts get established (who the client is, their
+        // product, their launch, their history/objections, e.g. "she got scammed
+        // $4k before"), and the TAIL carries the most recent older context.
+        // Previously we kept only the tail — which is exactly why the Brain
+        // "forgot" long-standing clients and treated them like brand-new buyers.
+        const headChars = Math.floor(PRIOR_SUMMARY_CHAR_LIMIT * 0.45);
+        const tailChars = PRIOR_SUMMARY_CHAR_LIMIT - headChars;
+        const head = priorSummary.slice(0, headChars);
+        const tail = priorSummary.slice(-tailChars);
+        priorSummary = `${head}\n…\n${tail}`;
       }
     }
 
