@@ -283,12 +283,17 @@ export default function Chats() {
             body: { username: newProspectIg },
           });
           if (igData && !igData.error) {
+            const targetPost = (igData as any).targetPost;
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
             await supabase.from("prospects").update({
               detected_interests: interests || null,
               profile_pic_url: igData.profilePicUrl || null,
               instagram_username: igData.username || null,
               name: igData.fullName || newProspectName,
+              ...(targetPost ? {
+                target_video_url: targetPost.url || null,
+                target_video_caption: `Instagram post/reel\n${targetPost.caption || "No caption found"}`,
+              } : {}),
             } as any).eq("id", prospect.id);
             
           }
@@ -382,12 +387,17 @@ export default function Chats() {
             body: { username: newProspectIg },
           });
           if (igData && !igData.error) {
+            const targetPost = (igData as any).targetPost;
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
             await supabase.from("prospects").update({
               detected_interests: interests || null,
               profile_pic_url: igData.profilePicUrl || null,
               instagram_username: igData.username || null,
               name: igData.fullName || newProspectName,
+              ...(targetPost ? {
+                target_video_url: targetPost.url || null,
+                target_video_caption: `Instagram post/reel\n${targetPost.caption || "No caption found"}`,
+              } : {}),
             } as any).eq("id", prospect.id);
           }
         } catch (e) { console.error("IG fetch error:", e); }
@@ -499,13 +509,18 @@ export default function Chats() {
           const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
             body: { username: newProspectIg },
           });
-      if (igData && !igData.error) {
+          if (igData && !igData.error) {
+            const targetPost = (igData as any).targetPost;
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
             await supabase.from("prospects").update({
               detected_interests: interests || null,
               profile_pic_url: igData.profilePicUrl || null,
               instagram_username: igData.username || null,
               name: igData.fullName || newProspectName,
+              ...(targetPost ? {
+                target_video_url: targetPost.url || null,
+                target_video_caption: `Instagram post/reel\n${targetPost.caption || "No caption found"}`,
+              } : {}),
             } as any).eq("id", data.id);
 
             profileSummary = igData.summary || `Instagram profile: @${igData.username}. Bio: ${igData.biography || "N/A"}. Followers: ${igData.followersCount || "N/A"}. Category: ${igData.businessCategory || "N/A"}. Posts: ${igData.postsCount || 0}. ${igData.recentPosts?.map((p: any, i: number) => `Post ${i+1}: "${p.caption}" (${p.likes} likes)`).join(". ") || ""}`;
@@ -906,9 +921,9 @@ export default function Chats() {
                       <Input value={newProspectName} onChange={(e) => setNewProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
                     </div>
                     <div>
-                      <Label>Instagram URL</Label>
-                      <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username" />
-                      <p className="text-xs text-muted-foreground mt-1">We'll analyze their profile to craft a perfect opening message</p>
+                      <Label>Instagram profile or post URL</Label>
+                      <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username or /reel/..." />
+                      <p className="text-xs text-muted-foreground mt-1">We'll analyze their page or exact post to craft a first message</p>
                     </div>
                     {isGeneratingFirst && (
                       <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
@@ -947,8 +962,8 @@ export default function Chats() {
                           <Input value={newProspectName} onChange={(e) => setNewProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
                         </div>
                         <div>
-                          <Label>Instagram URL</Label>
-                          <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username" />
+                          <Label>Instagram profile or post URL</Label>
+                          <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username or /reel/..." />
                         </div>
                         <DialogFooter>
                           <Button onClick={() => setUploadStep("upload")} disabled={!newProspectName.trim()}>Next: Upload Screenshots</Button>
@@ -1043,8 +1058,8 @@ export default function Chats() {
                           <Input value={newProspectName} onChange={(e) => setNewProspectName(e.target.value)} placeholder="e.g., Sarah, John D." />
                         </div>
                         <div>
-                          <Label>Instagram URL</Label>
-                          <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username" />
+                          <Label>Instagram profile or post URL</Label>
+                          <Input value={newProspectIg} onChange={(e) => setNewProspectIg(e.target.value)} placeholder="https://instagram.com/username or /reel/..." />
                         </div>
                         <DialogFooter>
                           <Button onClick={() => setUploadStep("upload")} disabled={!newProspectName.trim()}>Next: Upload Screenshots</Button>
