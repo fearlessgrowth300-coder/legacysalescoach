@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { resolveUserChatTarget, userChat } from "../_shared/user-ai.ts";
+import { generateEmbedding } from "../_shared/embeddings.ts";
 
 
 function getCorsHeaders(req: Request) {
@@ -81,10 +82,39 @@ serve(async (req) => {
     // Separate profile data from video data
     // Some scrapers return a single merged object with both profile + video fields
     const profileItem = results.find((r: any) => r.type === "profile" || r.profileUrl || r.fans !== undefined) || results[0];
-    const videos = results.filter((r: any) => r.type === "video" || r.videoUrl || r.text || r.desc || r.playCount);
-    
-    // If no separate videos found, treat all results as potential videos (scrapers sometimes merge everything)
-    const videoItems = videos.length > 0 ? videos : results.filter((r: any) => r.text || r.desc || r.playCount);
+
+    const looksLikeVideo = (r: any) =>
+      r && (r.type === "video" || r.webVideoUrl || r.videoUrl || r.playCount !== undefined ||
+        r.diggCount !== undefined || typeof r.desc === "string" ||
+        (typeof r.text === "string" && (r.diggCount !== undefined || r.playCount !== undefined || r.webVideoUrl)));
+
+    // 1) Videos that came back as their own top-level dataset items
+    let videoItems = results.filter(looksLikeVideo);
+
+    // 2) Some scrapers nest the video list inside the profile object under one
+    //    of several field names. Pull those in if the top level had none.
+    if (videoItems.length === 0) {
+      const nestedKeys = ["videos", "posts", "itemList", "topVideos", "latestVideos", "aweme_list", "items"];
+      for (const item of results) {
+        for (const key of nestedKeys) {
+          if (Array.isArray(item?.[key]) && item[key].length) {
+            videoItems = item[key].filter(looksLikeVideo);
+            if (videoItems.length) break;
+          }
+        }
+        if (videoItems.length) break;
+      }
+    }
+
+    // Diagnostic: if we STILL have no videos, log the raw shape so we can see
+    // what the actor actually returned for accounts that clearly have posts.
+    if (videoItems.length === 0) {
+      console.log("No videos parsed. results length:", results.length,
+        "| profileItem keys:", profileItem ? Object.keys(profileItem).join(",") : "none",
+        "| first result keys:", results[0] ? Object.keys(results[0]).join(",") : "none");
+    } else {
+      console.log(`Parsed ${videoItems.length} video items for @${username}`);
+    }
 
     const profileData = {
       username: profileItem.uniqueId || profileItem.username || username,
@@ -136,18 +166,60 @@ serve(async (req) => {
         if (chat) {
           const hasPosts = profileData.recentVideos.length > 0;
 
+          // ─── PULL THE USER'S BRAIN PRINCIPLES (RAG) ───
+          // Embed a query built from the prospect + niche and semantically match
+          // the user's sales_brain so the comment/DM apply their learned playbook.
+          let principlesBlock = "";
+          try {
+            const brainQuery = [
+              `Niche: ${workspace.niche_description || workspace.name}`,
+              `Prospect bio: ${profileData.bio}`,
+              hasPosts ? `Their recent posts: ${profileData.recentVideos.map((v: any) => v.caption).filter(Boolean).join(" | ")}` : "",
+              "Write a relatable, magnetic comment/DM that makes them want to reach out.",
+            ].filter(Boolean).join("\n");
+
+            const emb = await generateEmbedding(brainQuery, supabase, user.id);
+            if (emb) {
+              const { data: matched } = await supabase.rpc("match_sales_brain", {
+                query_embedding: JSON.stringify(emb),
+                match_count: 40,
+                match_threshold: 0.12,
+                p_user_id: user.id,
+              });
+              const principles = (matched || [])
+                .filter((p: any) => ["core_knowledge", "sales_principle", "content", "video", "pdf"].includes(p.source_type))
+                .slice(0, 15);
+              if (principles.length) {
+                principlesBlock = principles.map((p: any) => {
+                  const parts = [
+                    p.principle_name && `• ${p.principle_name}`,
+                    p.what_i_learned && `  What: ${p.what_i_learned}`,
+                    p.how_to_apply && `  Apply: ${p.how_to_apply}`,
+                    p.exact_words_to_use && `  Exact words: ${p.exact_words_to_use}`,
+                  ].filter(Boolean);
+                  return parts.join("\n");
+                }).join("\n\n");
+              }
+            }
+          } catch (e) { console.error("Brain retrieval error:", e); }
+
           const aiPrompt = `You are an elite TikTok outreach strategist. From a prospect's TikTok profile you produce outreach that makes the prospect WANT to talk to me — never salesy, never needy. You study their BIO and their POSTS to understand who they are, what they care about, what they're struggling with, and how they talk.
 
 MY BUSINESS CONTEXT:
 - Business: ${workspace.name}
 - Niche: ${workspace.niche_description || "Not specified"}
 - Products: ${workspace.products_detected || "Not specified"}
+${principlesBlock ? `
+MY SALES BRAIN — PRINCIPLES YOU MUST APPLY (my learned playbook from books/training):
+${principlesBlock}
 
+Every comment and DM you write MUST reflect these principles — the psychology, the framing, the exact-words style above. This is HOW I win. Do not ignore it.
+` : ""}
 PROSPECT'S PROFILE:
 ${summary}
 
 ${hasPosts ? `THEIR POSTS (analyze ALL of them):
-${profileData.recentVideos.map((v: any, i: number) => `${i + 1}. Caption: "${v.caption}" | Views: ${v.views} | Likes: ${v.likes} | Comments: ${v.comments} | URL: ${v.url}`).join("\n")}` : `THIS PROSPECT HAS NO ANALYZABLE POSTS. Work from their bio and profile only. Set "hasPosts": false, leave "comment", "targetVideoCaption", "targetVideoUrl" empty, and focus everything on the DM and story messages built from their bio.`}
+${profileData.recentVideos.map((v: any, i: number) => `${i + 1}. Caption: "${v.caption}" | Views: ${v.views} | Likes: ${v.likes} | Comments: ${v.comments} | URL: ${v.url}`).join("\n")}` : `THIS PROSPECT HAS NO ANALYZABLE POSTS. Work from their bio and profile only. Set "hasPosts": false, leave "comment", "targetVideoCaption", "targetVideoUrl" empty, and focus everything on the DM opener built from their bio.`}
 
 DEEPLY UNDERSTAND THE PERSON FIRST:
 Read the bio and every post. Figure out: their niche, their goal/dream, their frustration or struggle, their personality and tone. Everything you write must sound like it came from someone who actually watched their content — specific, human, and impossible to mistake for a copy-paste.
@@ -161,7 +233,7 @@ Write a comment to leave ON that post that makes the owner think "I NEED to talk
 - Then add ONE sharp, specific insight or lived experience that proves you actually know this space at a level they'd want access to — plant an open loop / curiosity so NOT reaching out feels like leaving value on the table.
 - Peer to peer, never a fan. No "great content", no generic praise, no emojis-spam (1-2 max).
 - DO NOT beg for a DM or pitch anything. No "DM me to learn more". Make them WANT to come to you. A soft open-ended hook is fine ("wild how few people talk about X"), but the pull comes from value + relatability, not a demand.
-- 2-4 sentences, sounds like how a real person types.` : `STEP 1 — SKIP THE COMMENT (no posts). Build the DM and story messages from the bio.`}
+- 2-4 sentences, sounds like how a real person types.` : `STEP 1 — SKIP THE COMMENT (no posts). Build the DM opener from the bio.`}
 
 STEP 3 — WRITE A DM / INBOX OPENER ("dmMessage"):
 A first message I can send straight to their inbox. It must:
@@ -170,10 +242,7 @@ A first message I can send straight to their inbox. It must:
 - End with a genuine, easy-to-answer question that makes replying feel natural
 - 1-3 short sentences. This should get a reply.
 
-STEP 4 — WRITE A STORY REPLY ("storyMessage"):
-A short, casual reaction I can send as a reply to their story/post — feels like a friend reacting in the moment. One or two lines, opens a loop, zero sales energy.
-
-Return JSON: { "comment": "${hasPosts ? "the relatable, magnetic comment" : ""}", "strategy": "why the comment works on THIS person (empty if no posts)", "targetVideoCaption": "exact caption of the chosen post (empty if no posts)", "targetVideoUrl": "URL of the chosen post (empty if no posts)", "whyThisVideo": "why this post over the others (empty if no posts)", "postNumber": ${hasPosts ? "1" : "null"}, "videoLikes": ${hasPosts ? "1234" : "null"}, "videoViews": ${hasPosts ? "56789" : "null"}, "dmMessage": "the non-salesy inbox opener", "storyMessage": "the casual story-reply message", "hasPosts": ${hasPosts} }`;
+Return JSON: { "comment": "${hasPosts ? "the relatable, magnetic comment" : ""}", "strategy": "why the comment works on THIS person (empty if no posts)", "targetVideoCaption": "exact caption of the chosen post (empty if no posts)", "targetVideoUrl": "URL of the chosen post (empty if no posts)", "whyThisVideo": "why this post over the others (empty if no posts)", "postNumber": ${hasPosts ? "1" : "null"}, "videoLikes": ${hasPosts ? "1234" : "null"}, "videoViews": ${hasPosts ? "56789" : "null"}, "dmMessage": "the non-salesy inbox opener", "hasPosts": ${hasPosts} }`;
 
           try {
             const aiRes = await userChat(chat, {
@@ -198,7 +267,6 @@ Return JSON: { "comment": "${hasPosts ? "the relatable, magnetic comment" : ""}"
                   profileData.commentStrategy = parsed.strategy || "";
                   profileData.whyThisVideo = parsed.whyThisVideo || "";
                   profileData.dmMessage = parsed.dmMessage || "";
-                  profileData.storyMessage = parsed.storyMessage || "";
                   profileData.hasPosts = parsed.hasPosts !== false;
 
                   // CRITICAL: Use postNumber to look up the REAL scraped video
@@ -236,15 +304,15 @@ Return JSON: { "comment": "${hasPosts ? "the relatable, magnetic comment" : ""}"
         ? `${statsPrefix}\n${profileData.targetVideoCaption || ""}`
         : profileData.targetVideoCaption || null;
 
-      // Stash the pre-follow outreach assets (DM opener + story reply) in the
+      // Stash the pre-follow outreach asset (DM opener) in the
       // existing suggested_first_message column as a JSON object. Pending
       // prospects never open the chat before Follow Back overwrites this with a
       // suggestions array, so there's no collision with the chat consumer.
       // Only the Analyze (pending-prospect) flow stashes these; the New
       // Conversation flow opens the chat immediately and needs
       // suggested_first_message left for its opener suggestions array.
-      const outreachAssets = (stashOutreach && (profileData.dmMessage || profileData.storyMessage))
-        ? JSON.stringify({ dm: profileData.dmMessage || "", story: profileData.storyMessage || "" })
+      const outreachAssets = (stashOutreach && profileData.dmMessage)
+        ? JSON.stringify({ dm: profileData.dmMessage || "" })
         : undefined;
 
       await supabase.from("prospects").update({
