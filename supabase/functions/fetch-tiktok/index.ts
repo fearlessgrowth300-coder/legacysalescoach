@@ -26,7 +26,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { url, workspaceId, prospectId } = await req.json();
+    const { url, workspaceId, prospectId, stashOutreach } = await req.json();
     if (!url) throw new Error("TikTok URL or username required");
 
     const username = extractUsername(url);
@@ -134,13 +134,9 @@ serve(async (req) => {
         let chat: any = null;
         try { chat = await resolveUserChatTarget(supabase, user.id); } catch { /* skip AI when no key */ }
         if (chat) {
-          const mostRecentVideo = profileData.recentVideos[0] || null;
+          const hasPosts = profileData.recentVideos.length > 0;
 
-          const videoContext = mostRecentVideo
-            ? `MOST RECENT VIDEO TO COMMENT ON:\nCaption: "${mostRecentVideo.caption}"\nViews: ${mostRecentVideo.views}, Likes: ${mostRecentVideo.likes}\n${mostRecentVideo.hashtags?.length ? `Hashtags: #${mostRecentVideo.hashtags.join(" #")}` : ""}`
-            : `No specific videos found. Use their bio and profile info to craft a comment that would work on any of their posts.`;
-
-          const aiPrompt = `You are a TikTok engagement strategist and DM funnel expert. Your goal is to craft a comment that is SO compelling the prospect HAS to reply, DM you, or follow you. The comment must act as a MAGNET that pulls them into your inbox.
+          const aiPrompt = `You are an elite TikTok outreach strategist. From a prospect's TikTok profile you produce outreach that makes the prospect WANT to talk to me — never salesy, never needy. You study their BIO and their POSTS to understand who they are, what they care about, what they're struggling with, and how they talk.
 
 MY BUSINESS CONTEXT:
 - Business: ${workspace.name}
@@ -150,39 +146,34 @@ MY BUSINESS CONTEXT:
 PROSPECT'S PROFILE:
 ${summary}
 
-AVAILABLE VIDEOS TO COMMENT ON:
-${profileData.recentVideos.map((v: any, i: number) => `${i + 1}. Caption: "${v.caption}" | Views: ${v.views} | Likes: ${v.likes} | Comments: ${v.comments} | URL: ${v.url}`).join("\n")}
+${hasPosts ? `THEIR POSTS (analyze ALL of them):
+${profileData.recentVideos.map((v: any, i: number) => `${i + 1}. Caption: "${v.caption}" | Views: ${v.views} | Likes: ${v.likes} | Comments: ${v.comments} | URL: ${v.url}`).join("\n")}` : `THIS PROSPECT HAS NO ANALYZABLE POSTS. Work from their bio and profile only. Set "hasPosts": false, leave "comment", "targetVideoCaption", "targetVideoUrl" empty, and focus everything on the DM and story messages built from their bio.`}
 
-STEP 1 — CHOOSE THE BEST VIDEO TO COMMENT ON:
-Analyze ALL their videos above. Pick the ONE video that:
-- Is most relevant to my niche/business
-- Has good engagement (not dead, but not so viral that my comment gets buried)
-- Has content that gives you the best opening to write a compelling, niche-specific comment
-- Allows you to naturally position yourself as someone they'd want to connect with
+DEEPLY UNDERSTAND THE PERSON FIRST:
+Read the bio and every post. Figure out: their niche, their goal/dream, their frustration or struggle, their personality and tone. Everything you write must sound like it came from someone who actually watched their content — specific, human, and impossible to mistake for a copy-paste.
 
-IMPORTANT: Note the video's position number from the list above (1 = most recent, 2 = second most recent, etc.) and include its exact likes and views count so the user can find it on TikTok.
+${hasPosts ? `STEP 1 — PICK THE ONE POST TO COMMENT ON:
+Choose the single post that gives the strongest opening — one where they revealed a real opinion, struggle, or win you can genuinely relate to. Not so viral your comment gets buried. Note its position number (1 = most recent), exact likes and views.
 
-STEP 2 — WRITE A KILLER COMMENT WITH CTA:
-The comment MUST include:
-1. **Specific Reference**: Mention something SPECIFIC from that video's caption or content
-2. **Peer Positioning**: Show you're in the same space, not a fan — you're an equal
-3. **Value Hook**: Share a quick insight, relatable experience, or bold take that adds value
-4. **STRONG CTA**: End with a clear call-to-action that drives them to DM you or check your profile. Examples:
-   - "I've been testing something similar — can you DM me? Would love to compare notes 🤝"
-   - "I actually have some ideas on this that might help — shoot me a DM if you're open to it"
-   - "This is exactly what I've been working on too — let's connect, DM me!"
-   - "Would love to pick your brain on this — mind if we chat in DMs?"
+STEP 2 — WRITE THE COMMENT (this is the most important output):
+Write a comment to leave ON that post that makes the owner think "I NEED to talk to this person — it would be dumb not to." Rules:
+- RELATABLE FIRST: reference the SPECIFIC point they made and agree with it in a way that makes them nod "yes, exactly / so true." They should feel understood and seen.
+- Then add ONE sharp, specific insight or lived experience that proves you actually know this space at a level they'd want access to — plant an open loop / curiosity so NOT reaching out feels like leaving value on the table.
+- Peer to peer, never a fan. No "great content", no generic praise, no emojis-spam (1-2 max).
+- DO NOT beg for a DM or pitch anything. No "DM me to learn more". Make them WANT to come to you. A soft open-ended hook is fine ("wild how few people talk about X"), but the pull comes from value + relatability, not a demand.
+- 2-4 sentences, sounds like how a real person types.` : `STEP 1 — SKIP THE COMMENT (no posts). Build the DM and story messages from the bio.`}
 
-RULES:
-- The comment must feel natural, not spammy — like a peer genuinely engaging
-- The CTA must feel like a BENEFIT to them, not just for you
-- Keep it 2-4 sentences max
-- Max 1-2 emojis
-- NO generic praise like "great content!" or "love this!"
-- The comment should make OTHER viewers curious about you too
-- Position the DM request as mutually beneficial
+STEP 3 — WRITE A DM / INBOX OPENER ("dmMessage"):
+A first message I can send straight to their inbox. It must:
+- Open by referencing something real from their bio or a post so it's clearly personal, not a template
+- Be warm, human, curious — like a peer reaching out, NOT a sales pitch (never mention my product/offer)
+- End with a genuine, easy-to-answer question that makes replying feel natural
+- 1-3 short sentences. This should get a reply.
 
-Return JSON: { "comment": "the full comment with CTA", "strategy": "why this comment + CTA will work on this specific prospect", "targetVideoCaption": "exact caption of the chosen video", "targetVideoUrl": "URL of the chosen video", "whyThisVideo": "why you picked this specific video over others", "postNumber": 1, "videoLikes": 1234, "videoViews": 56789 }`;
+STEP 4 — WRITE A STORY REPLY ("storyMessage"):
+A short, casual reaction I can send as a reply to their story/post — feels like a friend reacting in the moment. One or two lines, opens a loop, zero sales energy.
+
+Return JSON: { "comment": "${hasPosts ? "the relatable, magnetic comment" : ""}", "strategy": "why the comment works on THIS person (empty if no posts)", "targetVideoCaption": "exact caption of the chosen post (empty if no posts)", "targetVideoUrl": "URL of the chosen post (empty if no posts)", "whyThisVideo": "why this post over the others (empty if no posts)", "postNumber": ${hasPosts ? "1" : "null"}, "videoLikes": ${hasPosts ? "1234" : "null"}, "videoViews": ${hasPosts ? "56789" : "null"}, "dmMessage": "the non-salesy inbox opener", "storyMessage": "the casual story-reply message", "hasPosts": ${hasPosts} }`;
 
           try {
             const aiRes = await userChat(chat, {
@@ -206,6 +197,9 @@ Return JSON: { "comment": "the full comment with CTA", "strategy": "why this com
                   suggestedComment = parsed.comment || "";
                   profileData.commentStrategy = parsed.strategy || "";
                   profileData.whyThisVideo = parsed.whyThisVideo || "";
+                  profileData.dmMessage = parsed.dmMessage || "";
+                  profileData.storyMessage = parsed.storyMessage || "";
+                  profileData.hasPosts = parsed.hasPosts !== false;
 
                   // CRITICAL: Use postNumber to look up the REAL scraped video
                   // Never trust AI-fabricated URLs/captions/stats.
@@ -242,6 +236,17 @@ Return JSON: { "comment": "the full comment with CTA", "strategy": "why this com
         ? `${statsPrefix}\n${profileData.targetVideoCaption || ""}`
         : profileData.targetVideoCaption || null;
 
+      // Stash the pre-follow outreach assets (DM opener + story reply) in the
+      // existing suggested_first_message column as a JSON object. Pending
+      // prospects never open the chat before Follow Back overwrites this with a
+      // suggestions array, so there's no collision with the chat consumer.
+      // Only the Analyze (pending-prospect) flow stashes these; the New
+      // Conversation flow opens the chat immediately and needs
+      // suggested_first_message left for its opener suggestions array.
+      const outreachAssets = (stashOutreach && (profileData.dmMessage || profileData.storyMessage))
+        ? JSON.stringify({ dm: profileData.dmMessage || "", story: profileData.storyMessage || "" })
+        : undefined;
+
       await supabase.from("prospects").update({
         detected_interests: profileData.bio?.substring(0, 300) || null,
         profile_pic_url: profileData.profilePicUrl || null,
@@ -250,6 +255,7 @@ Return JSON: { "comment": "the full comment with CTA", "strategy": "why this com
         suggested_comment: suggestedComment || null,
         target_video_url: profileData.targetVideoUrl || null,
         target_video_caption: enrichedCaption,
+        ...(outreachAssets !== undefined ? { suggested_first_message: outreachAssets } : {}),
       }).eq("id", prospectId);
     }
 

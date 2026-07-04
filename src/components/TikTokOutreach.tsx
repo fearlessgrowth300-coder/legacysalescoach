@@ -31,6 +31,7 @@ type TikTokProspect = {
   conversation_stage: string;
   target_video_url: string | null;
   target_video_caption: string | null;
+  suggested_first_message: string | null;
 };
 
 export default function TikTokOutreach({ workspaceId }: { workspaceId: string }) {
@@ -118,6 +119,20 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
   const getInitials = (name: string) =>
     name.split(" ").map(w => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
 
+  // Pending prospects stash their DM opener + story reply as JSON in
+  // suggested_first_message ({ dm, story }). Parse defensively — after Follow
+  // Back this column becomes a suggestions array instead.
+  const parseOutreach = (raw: string | null | undefined): { dm?: string; story?: string } => {
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && !Array.isArray(parsed) && (parsed.dm || parsed.story)) {
+        return { dm: parsed.dm || undefined, story: parsed.story || undefined };
+      }
+    } catch { /* not our object */ }
+    return {};
+  };
+
   const handleAnalyze = async () => {
     if (!tiktokUrl.trim() || !user) return;
     setIsAnalyzing(true);
@@ -144,6 +159,7 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
           url: tiktokUrl.trim(),
           workspaceId,
           prospectId: prospect.id,
+          stashOutreach: true,
         },
       });
 
@@ -151,7 +167,7 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
       if (data?.error) throw new Error(data.error);
 
       setAnalysisResult(data);
-      toast.success("Profile analyzed! Comment generated.");
+      toast.success(data?.hasPosts === false ? "Profile analyzed! DM message ready." : "Profile analyzed! Comment + messages ready.");
       queryClient.invalidateQueries({ queryKey: ["tiktok-prospects"] });
     } catch (e: any) {
       console.error("TikTok analyze error:", e);
@@ -165,7 +181,7 @@ export default function TikTokOutreach({ workspaceId }: { workspaceId: string })
     navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
-    toast.success("Comment copied!");
+    toast.success("Copied!");
   };
 
   const handleFollowBack = async (prospect: TikTokProspect) => {
@@ -636,6 +652,50 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                       </Card>
                     )}
 
+                    {analysisResult.hasPosts === false && (
+                      <div className="text-xs text-muted-foreground bg-muted/40 rounded p-2 break-words">
+                        No posts to comment on — use the DM opener below to start the conversation from their bio.
+                      </div>
+                    )}
+
+                    {analysisResult.dmMessage && (
+                      <Card className="border-primary/20 overflow-hidden">
+                        <CardContent className="p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-medium flex items-center gap-1.5">
+                              <MessageSquare className="h-4 w-4 text-primary shrink-0" />
+                              DM / Inbox Opener
+                            </p>
+                            <Button size="sm" variant="outline" className="h-7 shrink-0 text-xs" onClick={() => handleCopy("dm", analysisResult.dmMessage)}>
+                              {copiedId === "dm" ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
+                              Copy
+                            </Button>
+                          </div>
+                          <p className="text-sm break-words whitespace-pre-wrap">{analysisResult.dmMessage}</p>
+                          <p className="text-xs text-muted-foreground">Send this to their inbox — non-salesy, built to get a reply.</p>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {analysisResult.storyMessage && (
+                      <Card className="border-primary/20 overflow-hidden">
+                        <CardContent className="p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-medium flex items-center gap-1.5">
+                              <Sparkles className="h-4 w-4 text-primary shrink-0" />
+                              Story Reply
+                            </p>
+                            <Button size="sm" variant="outline" className="h-7 shrink-0 text-xs" onClick={() => handleCopy("story", analysisResult.storyMessage)}>
+                              {copiedId === "story" ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
+                              Copy
+                            </Button>
+                          </div>
+                          <p className="text-sm break-words whitespace-pre-wrap">{analysisResult.storyMessage}</p>
+                          <p className="text-xs text-muted-foreground">Reply to their story with this — casual, opens a conversation.</p>
+                        </CardContent>
+                      </Card>
+                    )}
+
                     <div className="flex items-center gap-2 text-green-600 text-sm">
                       <Check className="h-4 w-4 shrink-0" />
                       <span>Added to your TikTok outreach list!</span>
@@ -839,6 +899,38 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                           <p className="text-sm break-words whitespace-pre-wrap">{(prospect as any).suggested_comment}</p>
                         </div>
                       )}
+
+                      {/* DM opener + story reply (pre-follow outreach assets) */}
+                      {(() => {
+                        const { dm, story } = parseOutreach(prospect.suggested_first_message);
+                        if (!dm && !story) return null;
+                        return (
+                          <div className="mt-2 space-y-2">
+                            {dm && (
+                              <div className="bg-muted/30 rounded p-2 space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-xs text-muted-foreground flex items-center gap-1"><MessageSquare className="h-3 w-3" /> DM opener:</p>
+                                  <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => handleCopy(`${prospect.id}-dm`, dm)}>
+                                    {copiedId === `${prospect.id}-dm` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                                  </Button>
+                                </div>
+                                <p className="text-sm break-words whitespace-pre-wrap">{dm}</p>
+                              </div>
+                            )}
+                            {story && (
+                              <div className="bg-muted/30 rounded p-2 space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-xs text-muted-foreground flex items-center gap-1"><Sparkles className="h-3 w-3" /> Story reply:</p>
+                                  <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => handleCopy(`${prospect.id}-story`, story)}>
+                                    {copiedId === `${prospect.id}-story` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                                  </Button>
+                                </div>
+                                <p className="text-sm break-words whitespace-pre-wrap">{story}</p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {/* Action buttons - stacked on mobile */}
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
