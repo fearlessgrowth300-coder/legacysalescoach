@@ -616,16 +616,12 @@ The goal is to start a genuine conversation that leads to them wanting to know m
                                   {analysisResult.videoViews && <Badge variant="outline" className="text-[10px]">👁 {Number(analysisResult.videoViews).toLocaleString()} views</Badge>}
                                 </div>
                               )}
-                              {analysisResult.targetVideoCaption && (
-                                <p className="text-sm italic break-words">"{analysisResult.targetVideoCaption}"</p>
-                              )}
+                              <p className="text-sm italic break-words">"{analysisResult.targetVideoCaption}"</p>
                               {analysisResult.targetVideoUrl && (
-                                <Button size="sm" className="h-8 mt-2 w-full text-xs" asChild>
-                                  <a href={analysisResult.targetVideoUrl} target="_blank" rel="noopener noreferrer">
-                                    <ExternalLink className="h-3.5 w-3.5 mr-1.5 shrink-0" />
-                                    Open this exact post to drop your comment
-                                  </a>
-                                </Button>
+                                <a href={analysisResult.targetVideoUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 mt-1 hover:underline">
+                                  <ExternalLink className="h-3 w-3 shrink-0" />
+                                  <span>Open this video on TikTok</span>
+                                </a>
                               )}
                               {analysisResult.whyThisVideo && (
                                 <p className="text-xs text-muted-foreground mt-1 break-words">📌 {analysisResult.whyThisVideo}</p>

@@ -116,9 +116,8 @@ serve(async (req) => {
       console.log(`Parsed ${videoItems.length} video items for @${username}`);
     }
 
-    const canonicalUser = profileItem.uniqueId || profileItem.username || username;
     const profileData = {
-      username: canonicalUser,
+      username: profileItem.uniqueId || profileItem.username || username,
       nickname: profileItem.nickname || profileItem.name || "",
       bio: profileItem.signature || profileItem.bio || profileItem.biography || "",
       followersCount: profileItem.fans || profileItem.followersCount || profileItem.followerCount || 0,
@@ -127,31 +126,16 @@ serve(async (req) => {
       videoCount: profileItem.video || profileItem.videoCount || 0,
       profilePicUrl: profileItem.avatarLarger || profileItem.avatarMedium || profileItem.profilePicUrl || "",
       verified: profileItem.verified || false,
-      recentVideos: videoItems.slice(0, 5).map((v: any) => {
-        // TikTok video URLs are deterministic: tiktok.com/@user/video/<id>.
-        // Build one from the id if the scraper didn't hand us a direct link,
-        // so we can ALWAYS give the user the exact post to comment on.
-        const vidId = v.id || v.videoId || v.awemeId || v.aweme_id || v.itemId || "";
-        const directUrl = v.webVideoUrl || v.videoUrl || v.shareUrl || "";
-        const url = directUrl || (vidId ? `https://www.tiktok.com/@${canonicalUser}/video/${vidId}` : "");
-        return {
+      recentVideos: videoItems.slice(0, 5).map((v: any) => ({
         caption: (v.text || v.desc || v.caption || "").substring(0, 500),
         likes: v.diggCount || v.likes || v.likesCount || 0,
         comments: v.commentCount || v.comments || v.commentsCount || 0,
         shares: v.shareCount || v.shares || 0,
         views: v.playCount || v.views || v.viewsCount || 0,
-        url,
+        url: v.webVideoUrl || v.videoUrl || "",
         hashtags: v.hashtags || [],
-        };
-      }),
+      })),
     };
-
-    // Diagnostic: confirm we can build a post link. If url is empty here, the
-    // scraper's video objects lack both a direct link and an id — log their keys.
-    if (profileData.recentVideos.length && !profileData.recentVideos[0].url) {
-      console.log("First video has no resolvable URL. Video keys:",
-        videoItems[0] ? Object.keys(videoItems[0]).join(",") : "none");
-    }
 
     // Build summary for AI
     const summary = [
