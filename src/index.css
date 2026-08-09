@@ -8,41 +8,41 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 214 38% 97%;
+    --foreground: 222 32% 18%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 222 32% 18%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 222 32% 18%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 174 58% 40%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 216 30% 93%;
+    --secondary-foreground: 222 28% 22%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 216 26% 93%;
+    --muted-foreground: 217 15% 43%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 245 64% 68%;
+    --accent-foreground: 244 35% 17%;
 
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 212 28% 86%;
+    --input: 212 28% 86%;
+    --ring: 174 58% 40%;
 
-    --radius: 0.5rem;
+    --radius: 0.75rem;
 
     --sidebar-background: 0 0% 98%;
 
     --sidebar-foreground: 240 5.3% 26.1%;
 
-    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary: 174 58% 40%;
 
     --sidebar-primary-foreground: 0 0% 98%;
 
@@ -52,45 +52,51 @@ All colors MUST be HSL.
 
     --sidebar-border: 220 13% 91%;
 
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-ring: 174 58% 40%;
+    --brand-periwinkle: 245 64% 68%;
+    --brand-teal: 174 58% 40%;
+    --brand-slate: 220 28% 19%;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
+    --background: 219 29% 16%;
+    --foreground: 214 30% 95%;
 
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
+    --card: 219 25% 20%;
+    --card-foreground: 214 30% 95%;
 
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 219 25% 20%;
+    --popover-foreground: 214 30% 95%;
 
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --primary: 174 56% 55%;
+    --primary-foreground: 220 30% 13%;
 
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 218 22% 25%;
+    --secondary-foreground: 214 30% 95%;
 
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --muted: 218 21% 24%;
+    --muted-foreground: 216 17% 71%;
 
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 245 72% 72%;
+    --accent-foreground: 244 40% 16%;
 
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --border: 218 18% 31%;
+    --input: 218 18% 31%;
+    --ring: 174 56% 55%;
+    --sidebar-background: 220 27% 18%;
+    --sidebar-foreground: 214 30% 95%;
+    --sidebar-primary: 174 56% 55%;
+    --sidebar-primary-foreground: 220 30% 13%;
+    --sidebar-accent: 218 22% 25%;
+    --sidebar-accent-foreground: 214 30% 95%;
+    --sidebar-border: 218 18% 31%;
+    --sidebar-ring: 174 56% 55%;
+    --brand-periwinkle: 245 72% 72%;
+    --brand-teal: 174 56% 55%;
+    --brand-slate: 219 29% 16%;
   }
 }
 
@@ -108,11 +114,261 @@ All colors MUST be HSL.
 
   body {
     @apply bg-background text-foreground;
+    min-height: 100dvh;
+    background-image:
+      radial-gradient(circle at 12% -8%, hsl(var(--primary) / 0.08), transparent 34rem),
+      radial-gradient(circle at 92% 108%, hsl(var(--brand-periwinkle) / 0.075), transparent 30rem);
+    background-attachment: fixed;
   }
 
   :root {
     --chat-header-h: 56px;
     --chat-input-h: 56px;
+  }
+}
+
+.app-shell {
+  background:
+    radial-gradient(circle at 15% 0%, hsl(var(--primary) / 0.065), transparent 28rem),
+    linear-gradient(180deg, hsl(var(--background)), hsl(var(--background) / 0.98));
+}
+
+.app-bottom-nav button {
+  position: relative;
+}
+
+.app-bottom-nav button::after {
+  content: "";
+  position: absolute;
+  top: 0.2rem;
+  left: 50%;
+  width: 1.4rem;
+  height: 2px;
+  border-radius: 999px;
+  background: hsl(var(--primary));
+  opacity: 0;
+  transform: translateX(-50%) scaleX(0.35);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.app-bottom-nav button.text-primary::after {
+  opacity: 1;
+  transform: translateX(-50%) scaleX(1);
+  box-shadow: 0 0 12px hsl(var(--primary) / 0.65);
+}
+
+.ai-typing-row {
+  animation: ai-typing-enter 220ms ease-out both;
+}
+
+.ai-typing-avatar {
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid hsl(var(--brand-periwinkle) / 0.52);
+  background: hsl(var(--brand-slate));
+  box-shadow: 0 0 18px hsl(var(--primary) / 0.18);
+}
+
+.ai-typing-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ai-typing-bubble {
+  position: relative;
+  display: flex;
+  min-width: 4.25rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.32rem;
+  border: 1px solid hsl(var(--border) / 0.9);
+  border-radius: 1.15rem 1.15rem 1.15rem 0.35rem;
+  background: linear-gradient(145deg, hsl(var(--card)), hsl(var(--muted)));
+  padding: 0.72rem 0.9rem;
+  box-shadow: 0 10px 28px hsl(220 35% 8% / 0.14), inset 0 1px hsl(0 0% 100% / 0.06);
+}
+
+.ai-typing-bubble::before,
+.ai-typing-bubble::after {
+  content: "";
+  position: absolute;
+  left: -0.42rem;
+  bottom: -0.05rem;
+  border-radius: 999px;
+  background: hsl(var(--muted));
+}
+
+.ai-typing-bubble::before { width: 0.42rem; height: 0.42rem; }
+.ai-typing-bubble::after { left: -0.72rem; bottom: -0.2rem; width: 0.22rem; height: 0.22rem; }
+
+.ai-typing-dot {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 999px;
+  background: hsl(var(--primary));
+  box-shadow: 0 0 8px hsl(var(--primary) / 0.35);
+  animation: ai-typing-dot 1.15s ease-in-out infinite;
+}
+
+.app-launch-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 43%, hsl(174 62% 55% / 0.15), transparent 20rem),
+    radial-gradient(circle at 50% 48%, hsl(245 72% 72% / 0.12), transparent 28rem),
+    #1d2835;
+  color: #f8fafc;
+  opacity: 1;
+  transition: opacity 360ms ease, transform 360ms ease;
+}
+
+.app-launch-screen--exit {
+  opacity: 0;
+  transform: scale(1.025);
+  pointer-events: none;
+}
+
+.app-launch-glow {
+  position: absolute;
+  width: 16rem;
+  height: 16rem;
+  border-radius: 999px;
+  background: hsl(176 82% 46% / 0.09);
+  filter: blur(34px);
+  animation: launch-glow 1.5s ease-in-out infinite alternate;
+}
+
+.app-launch-mark {
+  position: relative;
+  width: min(46vw, 12rem);
+  aspect-ratio: 1;
+  animation: launch-mark 950ms cubic-bezier(0.2, 0.9, 0.25, 1.2) both;
+}
+
+.app-launch-mark img {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  border-radius: 24%;
+  object-fit: cover;
+  filter: drop-shadow(0 24px 45px rgb(0 0 0 / 0.42));
+}
+
+.app-launch-orbit {
+  position: absolute;
+  z-index: 1;
+  inset: -0.8rem;
+  border: 1px solid hsl(176 82% 55% / 0.32);
+  border-radius: 999px;
+  animation: launch-orbit 1.8s linear infinite;
+}
+
+.app-launch-orbit--two {
+  inset: -1.45rem;
+  border-color: hsl(245 72% 72% / 0.3);
+  animation-direction: reverse;
+  animation-duration: 2.5s;
+}
+
+.app-launch-copy {
+  position: absolute;
+  top: calc(50% + min(31vw, 8.6rem));
+  display: grid;
+  gap: 0.35rem;
+  padding: 0 1.5rem;
+  text-align: center;
+  animation: launch-copy 700ms 320ms ease-out both;
+}
+
+.app-launch-copy p {
+  margin: 0;
+  color: hsl(245 78% 82%);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+}
+
+.app-launch-copy span {
+  color: rgb(203 213 225 / 0.75);
+  font-size: 0.75rem;
+}
+
+.app-launch-progress {
+  position: absolute;
+  bottom: max(3rem, calc(env(safe-area-inset-bottom) + 2rem));
+  width: min(44vw, 10rem);
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(148 163 184 / 0.14);
+}
+
+.app-launch-progress span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: left;
+  background: linear-gradient(90deg, hsl(174 62% 55%), hsl(245 72% 72%));
+  animation: launch-progress 1.05s cubic-bezier(0.25, 0.8, 0.25, 1) both;
+}
+
+@keyframes ai-typing-enter {
+  from { opacity: 0; transform: translateY(0.35rem) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes ai-typing-dot {
+  0%, 55%, 100% { opacity: 0.35; transform: translateY(0) scale(0.82); }
+  25% { opacity: 1; transform: translateY(-0.25rem) scale(1); }
+}
+
+@keyframes launch-mark {
+  0% { opacity: 0; transform: scale(0.72) rotate(-7deg); filter: blur(8px); }
+  65% { opacity: 1; transform: scale(1.045) rotate(1.5deg); filter: blur(0); }
+  100% { opacity: 1; transform: scale(1) rotate(0); filter: blur(0); }
+}
+
+@keyframes launch-orbit {
+  from { transform: rotate(0deg) scale(0.92); opacity: 0.25; }
+  50% { transform: rotate(180deg) scale(1.03); opacity: 0.65; }
+  to { transform: rotate(360deg) scale(0.92); opacity: 0.25; }
+}
+
+@keyframes launch-glow {
+  from { transform: scale(0.8); opacity: 0.5; }
+  to { transform: scale(1.15); opacity: 1; }
+}
+
+@keyframes launch-copy {
+  from { opacity: 0; transform: translateY(0.5rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes launch-progress {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-typing-row,
+  .ai-typing-dot,
+  .app-launch-glow,
+  .app-launch-mark,
+  .app-launch-orbit,
+  .app-launch-copy,
+  .app-launch-progress span {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 

@@ -17,6 +17,7 @@ import {
 import VoiceCallAssistant from "@/components/VoiceCallAssistant";
 import SwipeToDelete from "@/components/SwipeToDelete";
 import BrainCitations, { type SelectedPrinciple } from "@/components/BrainCitations";
+import AiTypingIndicator from "@/components/AiTypingIndicator";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useActiveAiModel } from "@/hooks/useActiveAiModel";
 
@@ -1448,13 +1449,7 @@ export default function AiChat() {
             })}
 
             {isTyping && (
-              <div className="flex justify-start">
-                <div className="bg-muted rounded-lg px-4 py-3 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <span className="w-2 h-2 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <span className="w-2 h-2 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "300ms" }} />
-                </div>
-              </div>
+              <AiTypingIndicator label="AI Brain is typing" />
             )}
 
             {!isLoading && followUps.length > 0 && messages.length > 0 && (

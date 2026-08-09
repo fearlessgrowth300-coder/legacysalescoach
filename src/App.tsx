@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -21,6 +21,7 @@ import Settings from "./pages/Settings";
 import Company from "./pages/Company";
 import NotFound from "./pages/NotFound";
 import OAuthConsent from "./pages/OAuthConsent";
+import AppLaunchScreen, { shouldShowAppLaunch } from "./components/AppLaunchScreen";
 
 
 const queryClient = new QueryClient();
@@ -30,6 +31,9 @@ function AuthenticatedRoute({ children }: { children: React.ReactNode }) {
 }
 
 const App = () => {
+  const [showLaunch, setShowLaunch] = useState(shouldShowAppLaunch);
+  const completeLaunch = useCallback(() => setShowLaunch(false), []);
+
   useEffect(() => {
     const handler = (e: PromiseRejectionEvent) => {
       e.preventDefault();
@@ -52,6 +56,8 @@ const App = () => {
   }, []);
 
   return (
+  <>
+  {showLaunch && <AppLaunchScreen onComplete={completeLaunch} />}
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
       <TooltipProvider>
@@ -82,6 +88,7 @@ const App = () => {
       </TooltipProvider>
     </AuthProvider>
   </QueryClientProvider>
+  </>
   );
 };
 
