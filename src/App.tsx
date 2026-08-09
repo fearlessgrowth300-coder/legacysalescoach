@@ -20,6 +20,8 @@ import DashboardLayout from "./components/DashboardLayout";
 import Settings from "./pages/Settings";
 import Company from "./pages/Company";
 import NotFound from "./pages/NotFound";
+import OAuthConsent from "./pages/OAuthConsent";
+
 
 const queryClient = new QueryClient();
 
@@ -59,6 +61,8 @@ const App = () => {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/.lovable/oauth/consent" element={<OAuthConsent />} />
+
             <Route path="/signup" element={<SignUp />} />
             <Route path="/install" element={<Install />} />
             <Route path="/chats" element={<AuthenticatedRoute><Chats /></AuthenticatedRoute>} />
