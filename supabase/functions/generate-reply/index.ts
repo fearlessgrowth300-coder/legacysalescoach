@@ -12,8 +12,8 @@ const corsHeaders = {
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 const PAGE_SIZE = 1000;
-const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
-const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, relevance_score";
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
+const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score";
 const MAX_SOURCE_COVERAGE_FILES = 32;
 
 const STOP_TERMS = new Set(["about", "after", "again", "also", "because", "being", "could", "doing", "from", "have", "here", "into", "just", "like", "more", "most", "much", "need", "only", "over", "really", "same", "should", "that", "their", "them", "then", "there", "these", "they", "thing", "this", "those", "through", "very", "want", "were", "what", "when", "where", "which", "with", "would", "your", "youre", "you", "she", "her", "him", "his", "was", "are", "the", "and", "for", "not", "but", "all", "can", "how", "why", "who", "its", "it"]);
@@ -94,6 +94,7 @@ serve(async (req) => {
 
   try {
     const { prospectId, message: rawMessage, threadType, styleModifier } = await req.json();
+    const activeThreadType: "friend" | "expert" = threadType === "expert" ? "expert" : "friend";
     const message = typeof rawMessage === "string" ? rawMessage.substring(0, 4000) : "";
 
     const authHeader = req.headers.get("Authorization");
@@ -148,16 +149,39 @@ serve(async (req) => {
       { data: leadEntry },
     ] = await Promise.all([
       supabase.from("workspaces").select("*").eq("id", prospect.workspace_id).single(),
-      supabase.from("chat_messages").select("*").eq("prospect_id", prospectId).eq("thread_type", threadType || "friend").order("created_at"),
-      supabase.from("knowledge_base_items").select("id, title, type").eq("user_id", user.id),
+      supabase.from("chat_messages").select("*").eq("prospect_id", prospectId).eq("thread_type", activeThreadType).order("created_at"),
+      supabase.from("knowledge_base_items").select("id, title, type, brain_type").eq("user_id", user.id),
       supabase.from("workspace_training_data").select("content, title, style_analysis").eq("workspace_id", prospect.workspace_id).eq("status", "ready").not("content", "is", null).order("created_at", { ascending: false }).limit(10),
-      supabase.from("suggestion_feedback").select("suggestion_text, suggestion_type, conversation_stage, framework_used").eq("user_id", user.id).eq("feedback", "positive").order("created_at", { ascending: false }).limit(15),
+      supabase.from("suggestion_feedback").select("suggestion_text, suggestion_type, conversation_stage, framework_used").eq("user_id", user.id).eq("workspace_id", prospect.workspace_id).eq("thread_type", activeThreadType).eq("feedback", "positive").order("created_at", { ascending: false }).limit(15),
       supabase.from("conversation_analytics").select("questioning_patterns_used, key_insights, tone_progression").eq("user_id", user.id).eq("workspace_id", prospect.workspace_id).eq("outcome", "won"),
       supabase.from("lead_registry").select("*").eq("user_id", user.id).eq("prospect_id", prospectId).maybeSingle(),
     ]);
 
     const history = allHistory || [];
     const recentMessages = history.slice(-10);
+
+    // Resolve the configured Friend -> Expert relationship so referral-stage
+    // replies can hand the prospect to the correct expert instead of inventing
+    // or using a generic destination.
+    let linkedExpertWorkspace: any = null;
+    if (activeThreadType === "friend") {
+      const { data: workspaceLinks } = await supabase
+        .from("workspace_links")
+        .select("expert_workspace_id")
+        .eq("user_id", user.id)
+        .eq("friend_workspace_id", prospect.workspace_id)
+        .limit(1);
+      const expertWorkspaceId = workspaceLinks?.[0]?.expert_workspace_id;
+      if (expertWorkspaceId) {
+        const { data: expertWorkspace } = await supabase
+          .from("workspaces")
+          .select("id, name, niche_description, positioning, products_detected, expert_description, instagram_url, store_url")
+          .eq("id", expertWorkspaceId)
+          .eq("user_id", user.id)
+          .maybeSingle();
+        linkedExpertWorkspace = expertWorkspace;
+      }
+    }
 
     // Build conversation history string
     const conversationHistory = history
@@ -181,24 +205,28 @@ serve(async (req) => {
       supabase.from("sales_brain")
         .select(PRINCIPLE_SELECT)
         .is("workspace_id", null)
+        .in("brain_type", [activeThreadType, "both"])
         .in("source_type", ["core_knowledge", "sales_principle"])
         .order("relevance_score", { ascending: false, nullsFirst: false })
         .limit(150).then(r => r.data || []),
       supabase.from("sales_brain")
         .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
+        .in("brain_type", [activeThreadType, "both"])
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false, nullsFirst: false })
         .limit(200).then(r => r.data || []),
       supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
         .is("workspace_id", null)
+        .in("brain_type", [activeThreadType, "both"])
         .eq("source_type", "core_knowledge")
         .order("relevance_score", { ascending: false })
         .limit(150).then(r => r.data || []),
       supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
+        .in("brain_type", [activeThreadType, "both"])
         .in("source_type", ["core_knowledge", "content", "video", "pdf"])
         .order("relevance_score", { ascending: false })
         .limit(200).then(r => r.data || []),
@@ -206,6 +234,7 @@ serve(async (req) => {
       supabase.from("knowledge_chunks")
         .select("id, content, category, source_type, trigger_phrases, source_id, created_at")
         .eq("user_id", user.id).eq("workspace_id", prospect.workspace_id)
+        .in("brain_type", [activeThreadType, "both"])
         .in("source_type", ["conversation", "training_conversation"])
         .order("created_at", { ascending: false }).limit(60),
       supabase.from("learned_insights")
@@ -216,7 +245,11 @@ serve(async (req) => {
     ]);
 
     const kbMap: Record<string, string> = {};
-    (kbItems || []).forEach((k: any) => { kbMap[k.id] = k.title; });
+    const kbModeMap: Record<string, string> = {};
+    (kbItems || []).forEach((k: any) => {
+      kbMap[k.id] = k.title;
+      kbModeMap[k.id] = k.brain_type || "both";
+    });
 
     const sourceCoverageIds = (kbItems || []).map((k: any) => k.id).filter(Boolean).slice(0, MAX_SOURCE_COVERAGE_FILES);
     const [sourceCoveragePrinciplesNested, sourceCoverageChunksNested] = await Promise.all([
@@ -225,6 +258,7 @@ serve(async (req) => {
           .select(PRINCIPLE_SELECT)
           .eq("user_id", user.id)
           .is("workspace_id", null)
+          .in("brain_type", [activeThreadType, "both"])
           .eq("source_id", sourceId)
           .in("source_type", ALLOWED_SOURCE_TYPES)
           .order("relevance_score", { ascending: false, nullsFirst: false })
@@ -236,6 +270,7 @@ serve(async (req) => {
           .select(CHUNK_SELECT)
           .eq("user_id", user.id)
           .is("workspace_id", null)
+          .in("brain_type", [activeThreadType, "both"])
           .eq("source_id", sourceId)
           .in("source_type", ALLOWED_SOURCE_TYPES)
           .order("relevance_score", { ascending: false, nullsFirst: false })
@@ -256,10 +291,13 @@ serve(async (req) => {
         supabase.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 180, match_threshold: 0.12, p_user_id: user.id }),
       ]);
       semanticPrinciples = (semP.data || [])
-        .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
+        .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type) && (
+          (!p.source_id && (!p.brain_type || p.brain_type === "both" || p.brain_type === activeThreadType)) ||
+          (p.source_id && (!kbModeMap[p.source_id] || kbModeMap[p.source_id] === "both" || kbModeMap[p.source_id] === activeThreadType))
+        ))
         .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
       semanticChunks = (semC.data || [])
-        .filter((c: any) => ALLOWED_SOURCE_TYPES.includes(c.source_type))
+        .filter((c: any) => ALLOWED_SOURCE_TYPES.includes(c.source_type) && (!c.brain_type || c.brain_type === "both" || c.brain_type === activeThreadType))
         .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
     }
 
@@ -328,6 +366,26 @@ serve(async (req) => {
         }).join("\n")
       : "No principles uploaded yet.";
 
+    // These chunks were previously retrieved and reported to the UI but never
+    // included in either model prompt. Keep the most relevant source-balanced
+    // excerpts concise enough to remain usable by the reasoning model.
+    const chunksText = topChunks.length > 0
+      ? topChunks.slice(0, 45).map((c: any) => {
+          const src = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : c.source_type;
+          return `• (Source: ${src}) [${c.category || "general"}]: ${(c.content || "").substring(0, 700)}`;
+        }).join("\n")
+      : "No relevant knowledge chunks retrieved.";
+
+    const learnedInsightsText = (brainInsights || []).length > 0
+      ? (brainInsights || []).slice(0, 12).map((i: any) => `• ${i.insight}${i.source ? ` (Source: ${i.source})` : ""}`).join("\n")
+      : "No workspace conversation insights yet.";
+
+    const winningPatternsText = (winningAnalytics || []).length > 0
+      ? (winningAnalytics || []).slice(0, 10).map((a: any) =>
+          `• Questions: ${(a.questioning_patterns_used || []).join(", ") || "unknown"}; Insights: ${(a.key_insights || []).join(" | ") || "none"}`
+        ).join("\n")
+      : "No verified winning conversation patterns yet.";
+
     // ===== STEP 1: RUN CONVERSATION ANALYSIS =====
     const workspaceProfile = workspace ? [
       workspace.name ? `Workspace: ${workspace.name}` : "",
@@ -337,7 +395,27 @@ serve(async (req) => {
       workspace.positioning ? `Positioning: ${workspace.positioning}` : "",
       workspace.profile_analysis ? `Profile: ${workspace.profile_analysis}` : "",
       workspace.products_detected ? `Products: ${workspace.products_detected}` : "",
+      workspace.custom_framework ? `Custom Framework:\n${workspace.custom_framework.substring(0, 8000)}` : "",
+      workspace.parsed_framework ? `Structured Framework:\n${JSON.stringify(workspace.parsed_framework).substring(0, 5000)}` : "",
+      workspace.friend_backstory ? `Friend Backstory: ${workspace.friend_backstory}` : "",
+      workspace.transformation ? `Transformation: ${workspace.transformation}` : "",
+      workspace.expert_description ? `Expert Description: ${workspace.expert_description}` : "",
+      workspace.referral_triggers ? `Referral Triggers: ${workspace.referral_triggers}` : "",
     ].filter(Boolean).join("\n") : "No workspace profile.";
+
+    const linkedExpertContext = linkedExpertWorkspace
+      ? [
+          `Linked Expert Workspace: ${linkedExpertWorkspace.name}`,
+          linkedExpertWorkspace.niche_description ? `Expert Niche: ${linkedExpertWorkspace.niche_description}` : "",
+          linkedExpertWorkspace.positioning ? `Expert Positioning: ${linkedExpertWorkspace.positioning}` : "",
+          linkedExpertWorkspace.products_detected ? `Expert Services: ${linkedExpertWorkspace.products_detected}` : "",
+          linkedExpertWorkspace.expert_description ? `Expert Identity: ${linkedExpertWorkspace.expert_description}` : "",
+          linkedExpertWorkspace.instagram_url ? `Expert Instagram: ${linkedExpertWorkspace.instagram_url}` : "",
+          linkedExpertWorkspace.store_url ? `Expert Destination: ${linkedExpertWorkspace.store_url}` : "",
+        ].filter(Boolean).join("\n")
+      : workspace?.expert_description
+        ? `Configured Expert: ${workspace.expert_description}${workspace.store_url ? `\nWorkspace Destination: ${workspace.store_url}` : ""}`
+        : "No linked Expert workspace is configured. Use only an expert explicitly named in the Custom Framework; otherwise ask permission to introduce the trusted team without inventing details.";
 
     const analysisPrompt = `You are a sales conversation intelligence engine with an OBJECTION RADAR and multi-framework analyzer. Analyze and return JSON ONLY.
 
@@ -345,14 +423,14 @@ Return: { "warmth_score": <0-100>, "stage": <"friend"|"warming"|"referral">, "pr
 
 OBJECTION RADAR: Scan EVERY message for objection language. Classify: TIME, MONEY, TRUST, CERTAINTY, PRIORITY, FEAR, TIMING, NEED_MORE_CLARITY. Recommend response type: CLARIFY, REASSURE, REFRAME, DEEPEN, ISOLATE, HAND_OFF.
 SPIN DETECTION: <4 exchanges="situation", personal but no pain="problem", pain not amplified="implication", pain+wants change="need_payoff".
-STAGE RULES: "friend" 0-40, "warming" 41-74, "referral" 75+ AND pain_expressed=true.
+STAGE RULES: "friend" 0-35, "warming" 36-64, "referral" 65+ AND (pain_expressed=true OR the prospect explicitly asks for help, price, details, a link, a call, or how the user achieved the result).
 WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.`;
 
     const analysisResponse = await userChat(chat, {
       model: chat.models.balanced,
       messages: [
         { role: "system", content: analysisPrompt },
-        { role: "user", content: `WORKSPACE_PROFILE:\n${workspaceProfile}\n\nSALES_BRAIN_PRINCIPLES:\n${principlesText.substring(0, 4000)}\n\nCONVERSATION_HISTORY:\n${conversationHistory}` },
+        { role: "user", content: `WORKSPACE_PROFILE:\n${workspaceProfile}\n\nLINKED_EXPERT:\n${linkedExpertContext}\n\nSALES_BRAIN_PRINCIPLES:\n${principlesText.substring(0, 4500)}\n\nRELEVANT_KNOWLEDGE_CHUNKS:\n${chunksText.substring(0, 4500)}\n\nWORKSPACE_LEARNINGS:\n${learnedInsightsText.substring(0, 2000)}\n\nCONVERSATION_HISTORY:\n${conversationHistory}` },
       ],
       temperature: 0.3,
       response_format: { type: "json_object" },
@@ -375,6 +453,15 @@ WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wan
     } catch {
       analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation" };
     }
+
+    // Conversation stages are progressive. A short reply later in a warm
+    // conversation must not reset an offer-ready prospect to first contact.
+    const dbStageRank: Record<string, number> = { first_contact: 0, continuing: 1, rapport: 1, pain: 2, offer: 3, close: 4 };
+    const analysisStageRank: Record<string, number> = { friend: 0, warming: 1, referral: 3 };
+    const existingStageRank = dbStageRank[prospect.conversation_stage] ?? 0;
+    const analyzedStageRank = analysisStageRank[analysisJson.stage] ?? 0;
+    if (existingStageRank >= 3 && analyzedStageRank < 3) analysisJson.stage = "referral";
+    else if (existingStageRank >= 1 && analyzedStageRank < 1) analysisJson.stage = "warming";
 
     // ===== STEP 2: GENERATE STAGE-AWARE REPLIES WITH MULTI-FRAMEWORK =====
     const styleFingerprint = buildStyleFingerprint(workspace?.style_vector);
@@ -426,9 +513,15 @@ NEVER argue with the objection. ALWAYS acknowledge first.`
     const spinInstruction = `\nSPIN STAGE: ${analysisJson.spin_stage || "situation"}
 Based on this stage, the primary variant should include a ${analysisJson.spin_stage === "situation" ? "SITUATION" : analysisJson.spin_stage === "problem" ? "PROBLEM" : analysisJson.spin_stage === "implication" ? "IMPLICATION" : "NEED-PAYOFF"} question.`;
 
+    const modeInstruction = activeThreadType === "expert"
+      ? `MODE: EXPERT. Respond as the trusted expert/consultant. Diagnose precisely, give useful clarity, handle the objection directly, and recommend the clearest next step. Do not pretend to be a peer who personally lived every detail.`
+      : `MODE: FRIEND. Respond as a warm peer using the workspace's real backstory and framework. Do not pitch early. When stage=referral, make a concrete, permission-based handoff using LINKED_EXPERT_CONTEXT. Never invent an expert, destination, proof, price, or personal result.`;
+
     const replySystemPrompt = `You are a DM reply generator using a MULTI-FRAMEWORK STACK for social media sales conversion. You are NOT a generic AI — you are a WEAPON built from the user's uploaded material. Speak with absolute certainty. Every reply must include word-for-word scripts (never just theory), explain the psychology behind why it works on humans, and warn what the prospect will likely say next. Never say "I think" or "maybe".
 
 You are given the analysis result (including objection radar and SPIN stage), workspace profile, style fingerprint, conversation history, and brain principles.
+
+${modeInstruction}
 
 Generate exactly 3 reply variants as JSON. Each must sound EXACTLY like the person in WORKSPACE_PROFILE and STYLE_FINGERPRINT. Never sound like AI.
 
@@ -496,6 +589,9 @@ ${workspaceProfile}
 STYLE_FINGERPRINT:
 ${styleFingerprint}${trainingContext}${feedbackContext}${leadContext}
 
+LINKED_EXPERT_CONTEXT:
+${linkedExpertContext}
+
 ANALYSIS:
 ${JSON.stringify(analysisJson)}
 
@@ -506,7 +602,16 @@ LATEST PROSPECT MESSAGE:
 ${message}
 
 SALES_BRAIN_PRINCIPLES:
-${principlesText.substring(0, 6000)}`;
+${principlesText.substring(0, 6500)}
+
+RELEVANT_KNOWLEDGE_CHUNKS:
+${chunksText.substring(0, 6500)}
+
+WORKSPACE_LEARNED_INSIGHTS:
+${learnedInsightsText.substring(0, 2500)}
+
+VERIFIED_WINNING_PATTERNS:
+${winningPatternsText.substring(0, 2000)}`;
 
     const replyResponse = await userChat(chat, {
       model: chat.models.reasoning,
@@ -564,13 +669,12 @@ ${principlesText.substring(0, 6000)}`;
       supabase.from("conversation_analytics").update({
         questioning_patterns_used: patterns, tone_progression: tones,
         messages_count: (existingAnalytics.messages_count || 0) + 1,
-        ai_suggestions_used: (existingAnalytics.ai_suggestions_used || 0) + 1,
       }).eq("id", existingAnalytics.id).then(() => {});
     } else {
       supabase.from("conversation_analytics").insert({
         user_id: user.id, prospect_id: prospectId, workspace_id: prospect.workspace_id,
         questioning_patterns_used: [detectedPattern], tone_progression: detectedTone ? [detectedTone] : [],
-        messages_count: 1, ai_suggestions_used: 1, outcome: prospect.outcome || "active",
+        messages_count: 1, ai_suggestions_used: 0, outcome: prospect.outcome || "active",
       }).then(() => {});
     }
 
@@ -588,10 +692,11 @@ ${principlesText.substring(0, 6000)}`;
       supabase.from("prospects").update({ conversation_summary: summary }).eq("id", prospectId).then(() => {});
     }
 
-    // Save insight + knowledge chunks
-    let learningResult: any = null;
+    // Save observational insight only. Generated suggestions are not proven
+    // winners and must not be written back as "BEST REPLY" training data until
+    // the user gives positive feedback or records a conversion.
+    const learningResult: any = null;
     if (message) {
-      const bestReply = replyJson.variants?.[0]?.message || "";
       await supabase.from("learned_insights").insert({
         user_id: user.id, workspace_id: prospect.workspace_id, prospect_id: prospectId,
         insight_type: "conversation",
@@ -599,17 +704,6 @@ ${principlesText.substring(0, 6000)}`;
         source: `Chat with ${prospect.name}`,
       });
 
-      if (bestReply.length > 20) {
-        const chunks = [{
-          user_id: user.id, workspace_id: prospect.workspace_id,
-          source_type: "conversation", category: analysisJson.stage === "referral" ? "closing_techniques" : analysisJson.stage === "warming" ? "trust_building" : "rapport_building",
-          content: `PROSPECT (${detectedProspectType}): "${message.substring(0, 500)}"\nBEST REPLY: "${bestReply.substring(0, 500)}"\nStage: ${analysisJson.stage}, Move: ${analysisJson.recommended_move}, Warmth: ${analysisJson.warmth_score}`,
-          brain_type: threadType || "both", trigger_phrases: `${detectedProspectType}, ${detectedTone}, ${analysisJson.stage}`,
-          relevance_score: 80,
-        }];
-        const { error: chunkError } = await supabase.from("knowledge_chunks").insert(chunks);
-        if (!chunkError) learningResult = { chunksAdded: chunks.length, prospectType: detectedProspectType };
-      }
     }
 
     // Lead registry update

@@ -12,7 +12,8 @@ function getCorsHeaders(req: Request) {
   const isAllowed =
     origin.endsWith(".lovable.app") ||
     origin.endsWith(".lovableproject.com") ||
-    origin.startsWith("http://localhost:");
+    origin.startsWith("http://localhost:") ||
+    origin.startsWith("http://127.0.0.1:");
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : "https://legacysalescoach.lovable.app",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
@@ -21,8 +22,8 @@ function getCorsHeaders(req: Request) {
 
 const MAX_MESSAGE_LENGTH = 4000;
 const PAGE_SIZE = 1000;
-const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, relevance_score, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
-const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, relevance_score";
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
+const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score";
 const MAX_SOURCE_COVERAGE_FILES = 32;
 
 const STOP_TERMS = new Set([
@@ -593,6 +594,7 @@ serve(async (req) => {
 
   try {
     const { prospectId, message: rawMessage, threadType, mode } = await req.json();
+    const activeThreadType: "friend" | "expert" = threadType === "expert" ? "expert" : "friend";
     
     // Input validation
     const message = typeof rawMessage === "string" ? rawMessage.substring(0, MAX_MESSAGE_LENGTH) : "";
@@ -640,106 +642,6 @@ serve(async (req) => {
       });
     }
 
-    if (mode === "first_message") {
-      const { data: workspace } = await supabase
-        .from("workspaces")
-        .select("name, niche_description, products_detected, profile_analysis, default_reply_mode")
-        .eq("id", prospect.workspace_id)
-        .eq("user_id", user.id)
-        .single();
-
-      const profileContext = [
-        `Prospect: ${prospect.name}`,
-        prospect.platform ? `Platform: ${prospect.platform}` : "",
-        prospect.detected_interests ? `Bio/interests: ${prospect.detected_interests}` : "",
-        prospect.instagram_url ? `Instagram: ${prospect.instagram_url}` : "",
-        prospect.tiktok_url ? `TikTok: ${prospect.tiktok_url}` : "",
-        prospect.suggested_comment ? `Comment already left: ${prospect.suggested_comment}` : "",
-        prospect.target_video_caption ? `Target video/post: ${prospect.target_video_caption}` : "",
-        message ? `Profile scrape summary: ${message}` : "",
-      ].filter(Boolean).join("\n").substring(0, 3500);
-
-      let firstChat: any = null;
-      try { firstChat = await resolveUserChatTarget(supabase, user.id); } catch { /* skip if no key */ }
-      let parsed: any = null;
-
-      if (firstChat) {
-        const firstMessagePrompt = `Create 3 first DM openers for this ${prospect.platform === "tiktok" ? "TikTok" : "Instagram"} prospect.
-
-MY CONTEXT:
-Business: ${workspace?.name || "Business"}
-Niche: ${workspace?.niche_description || "digital marketing"}
-Products: ${workspace?.products_detected || "not specified"}
-
-PROSPECT PROFILE:
-${profileContext}
-
-Rules:
-- Return ONLY valid JSON.
-- Each opener must feel human, short, and specific.
-- No generic praise like "love your content".
-- No pitch, no "I can help", no corporate words.
-- Use one concrete detail from the profile/video/bio when available.
-- One question max per opener.
-- Make each opener under 2 sentences.
-
-JSON shape:
-{"suggestions":[{"id":1,"type":"primary","text":"...","whyThisWorks":"...","frameworkUsed":"..."},{"id":2,"type":"alternative","text":"...","whyThisWorks":"...","frameworkUsed":"..."},{"id":3,"type":"softer","text":"...","whyThisWorks":"...","frameworkUsed":"..."}],"pushyWarning":null,"detectedTone":"profile_based","questioningPattern":"situation","frameworkApplied":"Pattern Interrupt + Specific Observation + Micro-Commitment","prospectType":"unknown","brainChunksUsed":[],"prospectFears":[],"prospectDreams":[],"conversionTriggers":[]}`;
-
-        try {
-          const aiRes = await userChat(firstChat, {
-            model: firstChat.models.fast,
-            messages: [
-              { role: "system", content: "You write natural first DMs. Return valid JSON only." },
-              { role: "user", content: firstMessagePrompt },
-            ],
-            temperature: 0.75,
-            response_format: { type: "json_object" },
-          });
-
-          if (aiRes.ok) {
-            const aiData = await aiRes.json();
-            const content = aiData.choices?.[0]?.message?.content || "";
-            const jsonMatch = content.match(/\{[\s\S]*\}/);
-            parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
-          } else {
-            console.warn("first_message fast path AI error", aiRes.status, await aiRes.text());
-          }
-        } catch (error) {
-          console.warn("first_message fast path parse/generation failed", error);
-        }
-      }
-
-
-      if (!parsed?.suggestions?.length) {
-        parsed = {
-          suggestions: buildFallbackFirstMessages(prospect, profileContext),
-          pushyWarning: null,
-          detectedTone: "profile_based",
-          questioningPattern: "situation",
-          frameworkApplied: "Pattern Interrupt + Specific Observation + Micro-Commitment",
-          prospectType: "unknown",
-          brainChunksUsed: [],
-          prospectFears: [],
-          prospectDreams: [],
-          conversionTriggers: [],
-        };
-      }
-
-      await supabase.from("prospects").update({
-        suggested_first_message: JSON.stringify(parsed.suggestions),
-        conversation_stage: prospect.conversation_stage || "first_contact",
-      }).eq("id", prospectId).eq("user_id", user.id);
-
-      parsed.conversationStage = prospect.conversation_stage || "first_contact";
-      parsed.learningResult = null;
-      parsed.brainRetrieval = { chunksRetrieved: 0, uniqueSources: 0, sources: [], insightsRetrieved: 0 };
-
-      return new Response(JSON.stringify(parsed), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
     // Get workspace info for persona context
     const { data: workspace } = await supabase
       .from("workspaces")
@@ -747,12 +649,46 @@ JSON shape:
       .eq("id", prospect.workspace_id)
       .single();
 
+    // Resolve the configured Friend -> Expert workspace relationship so the
+    // friend engine can make a real handoff to the correct expert identity.
+    let workspaceForPrompt: any = workspace;
+    if (activeThreadType === "friend" && workspace) {
+      const { data: workspaceLinks } = await supabase
+        .from("workspace_links")
+        .select("expert_workspace_id")
+        .eq("user_id", user.id)
+        .eq("friend_workspace_id", prospect.workspace_id)
+        .limit(1);
+      const expertWorkspaceId = workspaceLinks?.[0]?.expert_workspace_id;
+      if (expertWorkspaceId) {
+        const { data: linkedExpert } = await supabase
+          .from("workspaces")
+          .select("id, name, niche_description, positioning, products_detected, expert_description, instagram_url, store_url")
+          .eq("id", expertWorkspaceId)
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (linkedExpert) {
+          const linkedExpertDescription = [
+            `Linked expert workspace: ${linkedExpert.name}`,
+            linkedExpert.expert_description || linkedExpert.positioning || linkedExpert.niche_description || "",
+            linkedExpert.products_detected ? `Services: ${linkedExpert.products_detected}` : "",
+            linkedExpert.instagram_url ? `Instagram: ${linkedExpert.instagram_url}` : "",
+            linkedExpert.store_url ? `Destination: ${linkedExpert.store_url}` : "",
+          ].filter(Boolean).join("\n");
+          workspaceForPrompt = {
+            ...workspace,
+            expert_description: [workspace.expert_description, linkedExpertDescription].filter(Boolean).join("\n"),
+          };
+        }
+      }
+    }
+
     // Get ALL conversation history for summarization
     const { data: allHistory } = await supabase
       .from("chat_messages")
       .select("*")
       .eq("prospect_id", prospectId)
-      .eq("thread_type", threadType)
+      .eq("thread_type", activeThreadType)
       .order("created_at", { ascending: true });
 
     const history = allHistory || [];
@@ -780,6 +716,8 @@ JSON shape:
       .from("suggestion_feedback")
       .select("suggestion_text, suggestion_type, conversation_stage, framework_used")
       .eq("user_id", user.id)
+      .eq("workspace_id", prospect.workspace_id)
+      .eq("thread_type", activeThreadType)
       .eq("feedback", "positive")
       .order("created_at", { ascending: false })
       .limit(15);
@@ -874,12 +812,14 @@ JSON shape:
       supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
         .is("workspace_id", null)
+        .in("brain_type", [activeThreadType, "both"])
         .eq("source_type", "core_knowledge")
         .order("relevance_score", { ascending: false })
         .limit(150).then((r: any) => r.data || []),
       supabase.from("sales_brain")
         .select(PRINCIPLE_SELECT)
         .is("workspace_id", null)
+        .in("brain_type", [activeThreadType, "both"])
         .in("source_type", ["core_knowledge", "sales_principle"])
         .order("relevance_score", { ascending: false, nullsFirst: false })
         .limit(200).then((r: any) => r.data || []),
@@ -887,6 +827,7 @@ JSON shape:
         .select(CHUNK_SELECT)
         .eq("user_id", user.id)
         .is("workspace_id", null)
+        .in("brain_type", [activeThreadType, "both"])
         .in("source_type", ["core_knowledge", "content", "video", "pdf"])
         .order("relevance_score", { ascending: false })
         .limit(150).then((r: any) => r.data || []),
@@ -894,6 +835,7 @@ JSON shape:
         .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id)
         .is("workspace_id", null)
+        .in("brain_type", [activeThreadType, "both"])
         .in("source_type", ["core_knowledge", "sales_principle", "content", "video", "pdf"])
         .order("relevance_score", { ascending: false, nullsFirst: false })
         .limit(200).then((r: any) => r.data || []),
@@ -907,6 +849,7 @@ JSON shape:
         .select("id, content, category, source_type, trigger_phrases, source_id, created_at")
         .eq("user_id", user.id)
         .eq("workspace_id", prospect.workspace_id)
+        .in("brain_type", [activeThreadType, "both"])
         .in("source_type", ["conversation", "training_conversation"])
         .order("created_at", { ascending: false })
         .limit(60),
@@ -918,7 +861,7 @@ JSON shape:
         .order("created_at", { ascending: false })
         .limit(10),
       supabase.from("knowledge_base_items")
-        .select("id, title, type")
+        .select("id, title, type, brain_type")
         .eq("user_id", user.id),
       embeddingPromise,
     ]);
@@ -931,6 +874,7 @@ JSON shape:
           .select(CHUNK_SELECT)
           .eq("user_id", user.id)
           .is("workspace_id", null)
+          .in("brain_type", [activeThreadType, "both"])
           .eq("source_id", sourceId)
           .in("source_type", ["core_knowledge", "content", "video", "pdf", "sales_principle"])
           .order("relevance_score", { ascending: false, nullsFirst: false })
@@ -942,6 +886,7 @@ JSON shape:
           .select(PRINCIPLE_SELECT)
           .eq("user_id", user.id)
           .is("workspace_id", null)
+          .in("brain_type", [activeThreadType, "both"])
           .eq("source_id", sourceId)
           .in("source_type", ["core_knowledge", "sales_principle", "content", "video", "pdf"])
           .order("relevance_score", { ascending: false, nullsFirst: false })
@@ -951,6 +896,9 @@ JSON shape:
     ]);
     const sourceCoverageKnowledge = sourceCoverageKnowledgeNested.flat();
     const sourceCoveragePrinciples = sourceCoveragePrinciplesNested.flat();
+
+    const kbModeMap: Record<string, string> = {};
+    (kbItems || []).forEach((k: any) => { kbModeMap[k.id] = k.brain_type || "both"; });
 
     const brainKnowledge = mergeByIdPriority(sourceCoverageKnowledge, mergeByIdPriority(userBrainKnowledge, globalBrainKnowledge));
     const salesPrinciples = mergeByIdPriority(sourceCoveragePrinciples, mergeByIdPriority(userSalesPrinciples, globalSalesPrinciples));
@@ -975,10 +923,13 @@ JSON shape:
         }),
       ]);
       semanticPrinciples = (semPrinciples.data || [])
-        .filter((p: any) => ["core_knowledge", "sales_principle", "content", "video", "pdf"].includes(p.source_type))
+        .filter((p: any) => ["core_knowledge", "sales_principle", "content", "video", "pdf"].includes(p.source_type) && (
+          (!p.source_id && (!p.brain_type || p.brain_type === "both" || p.brain_type === activeThreadType)) ||
+          (p.source_id && (!kbModeMap[p.source_id] || kbModeMap[p.source_id] === "both" || kbModeMap[p.source_id] === activeThreadType))
+        ))
         .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
       semanticChunks = (semChunks.data || [])
-        .filter((c: any) => ["core_knowledge", "content", "video", "pdf", "sales_principle"].includes(c.source_type))
+        .filter((c: any) => ["core_knowledge", "content", "video", "pdf", "sales_principle"].includes(c.source_type) && (!c.brain_type || c.brain_type === "both" || c.brain_type === activeThreadType))
         .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
     }
 
@@ -993,7 +944,7 @@ JSON shape:
     const kbMap: Record<string, string> = {};
     (kbItems || []).forEach((k: any) => { kbMap[k.id] = k.title; });
 
-    const globalKnowledgeMap = (kbItems || []).map((k: any, i: number) =>
+    const globalKnowledgeMap = (kbItems || []).filter((k: any) => !k.brain_type || k.brain_type === "both" || k.brain_type === activeThreadType).map((k: any, i: number) =>
       `  ${i + 1}. "${k.title}" (${k.type})`
     ).join("\n");
 
@@ -1184,7 +1135,7 @@ JSON shape:
       .map((m: any) => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content}`)
       .join("\n") || "";
 
-    const systemPrompt = threadType === "expert" ? buildExpertModeInstructions(workspace, brainChunksFormatted || undefined, personaData) : buildFriendModeInstructions(workspace, brainChunksFormatted || undefined, personaData);
+    const systemPrompt = activeThreadType === "expert" ? buildExpertModeInstructions(workspaceForPrompt, brainChunksFormatted || undefined, personaData) : buildFriendModeInstructions(workspaceForPrompt, brainChunksFormatted || undefined, personaData);
 
     // Inject Layered Reasoning Protocol into the system prompt
     const layeredReasoning = `
@@ -1228,7 +1179,7 @@ Include this in the "frameworkUsed" field of the JSON response.
     // Build task instructions based on mode
     let taskInstructions = "";
     if (mode === "first_message") {
-      taskInstructions = `TASK: You have the prospect's full Instagram profile data below. Generate 3 IRRESISTIBLE opening DMs that will GUARANTEE a reply.
+      taskInstructions = `TASK: You have the prospect's full Instagram profile data below. Generate 3 highly relevant opening DMs designed to earn a genuine reply.
 
 OPENING MESSAGE PSYCHOLOGY — use these proven techniques:
 1. **Pattern Interrupt**: Say something unexpected that breaks the scroll. NOT "Hey, love your page!" — everyone says that.
@@ -1491,7 +1442,6 @@ ${jsonFormat}
           questioning_patterns_used: patterns,
           tone_progression: tones,
           messages_count: (existingAnalytics.messages_count || 0) + 1,
-          ai_suggestions_used: (existingAnalytics.ai_suggestions_used || 0) + 1,
         })
         .eq("id", existingAnalytics.id)
         .then(() => {});
@@ -1505,7 +1455,7 @@ ${jsonFormat}
           questioning_patterns_used: [detectedPattern],
           tone_progression: parsed.detectedTone ? [parsed.detectedTone] : [],
           messages_count: 1,
-          ai_suggestions_used: 1,
+          ai_suggestions_used: 0,
           outcome: prospect.outcome || "active",
         })
         .then(() => {});
@@ -1524,16 +1474,22 @@ ${jsonFormat}
     // Opener → Rapport requires at least 4 messages (2 exchanges)
     // Rapport → Pain requires at least 8 messages
     const minMessagesForStage: Record<string, number> = {
-      rapport: 4,
-      pain_discovery: 8,
-      offer: 14,
-      closing: 20,
+      rapport: 2,
+      pain_discovery: 5,
+      offer: 8,
+      closing: 12,
     };
     const newStage = stageMap[detectedPattern];
     const msgCount = history.length;
     const minRequired = newStage ? (minMessagesForStage[newStage] || 0) : 0;
-    if (newStage && prospect.conversation_stage !== newStage && msgCount >= minRequired) {
-      supabase.from("prospects").update({ conversation_stage: newStage }).eq("id", prospectId).then(() => {});
+    const stageRank: Record<string, number> = { first_contact: 0, continuing: 1, rapport: 1, pain_discovery: 2, pain: 2, offer: 3, closing: 4, close: 4 };
+    const currentStageRank = stageRank[prospect.conversation_stage] ?? 0;
+    const proposedStageRank = newStage ? (stageRank[newStage] ?? 0) : currentStageRank;
+    const effectiveStage = newStage && proposedStageRank >= currentStageRank && msgCount >= minRequired
+      ? newStage
+      : prospect.conversation_stage;
+    if (effectiveStage && prospect.conversation_stage !== effectiveStage) {
+      supabase.from("prospects").update({ conversation_stage: effectiveStage }).eq("id", prospectId).then(() => {});
     }
 
     // ===== SAVE CONVERSATION SUMMARY (every 10 messages) =====
@@ -1541,12 +1497,12 @@ ${jsonFormat}
       const summaryLines = history.slice(-20).map((m: any) => 
         `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content.substring(0, 100)}`
       );
-      const summary = `Conversation with ${prospect.name} (${history.length} messages). Stage: ${newStage || prospect.conversation_stage}. Recent topics: ${summaryLines.slice(-5).join(" | ")}`;
+      const summary = `Conversation with ${prospect.name} (${history.length} messages). Stage: ${effectiveStage || prospect.conversation_stage}. Recent topics: ${summaryLines.slice(-5).join(" | ")}`;
       supabase.from("prospects").update({ conversation_summary: summary }).eq("id", prospectId).then(() => {});
     }
 
-    // ===== EXTRACT & SAVE INSIGHT + KNOWLEDGE CHUNKING =====
-    let learningResult: any = null;
+    // ===== EXTRACT & SAVE OBSERVATIONAL INSIGHT =====
+    const learningResult: any = null;
     if (message && mode !== "refine") {
       const detectedProspectType = parsed.prospectType || "unknown";
       const urgencyCreated = parsed.detectedObjection || parsed.frameworkApplied || "none";
@@ -1562,9 +1518,12 @@ ${jsonFormat}
         source: `Chat with ${prospect.name}`,
       });
 
+      /* Legacy auto-training removed: generated suggestions are not evidence.
       // Chunk conversation into knowledge base
       const bestSuggestion = parsed.suggestions?.[0]?.text || "";
-      if (bestSuggestion.length > 20) {
+      // Do not train on an unverified generated suggestion. Positive feedback
+      // and recorded conversions are the only trusted learning signals.
+      if (false && bestSuggestion.length > 20) {
         const chunks = [];
 
         // Chunk 1: The exchange pattern (prospect message → best reply)
@@ -1574,7 +1533,7 @@ ${jsonFormat}
           source_type: "conversation",
           category: detectedPattern === "general" ? "rapport_building" : detectedPattern === "problem" ? "pain_discovery" : detectedPattern === "closing" ? "closing_techniques" : detectedPattern === "emotional_trigger" ? "trust_building" : "general",
           content: `PROSPECT (${detectedProspectType}): "${message.substring(0, 500)}"\n\nBEST REPLY: "${bestSuggestion.substring(0, 500)}"\n\nFramework: ${parsed.frameworkApplied || "natural conversation"}\nUrgency trigger: ${urgencyCreated}\nTone: ${parsed.detectedTone || "neutral"}`,
-          brain_type: threadType || "both",
+          brain_type: activeThreadType,
           trigger_phrases: `${detectedProspectType}, ${parsed.detectedTone || "neutral"}, ${detectedPattern}`,
           relevance_score: 80,
         });
@@ -1587,7 +1546,7 @@ ${jsonFormat}
             source_type: "conversation",
             category: "objection_handling",
             content: `OBJECTION (${parsed.detectedObjection}) from ${detectedProspectType}: "${message.substring(0, 300)}"\n\nHANDLING: "${bestSuggestion.substring(0, 500)}"\n\nFramework: ${parsed.frameworkApplied || "tactical empathy"}`,
-            brain_type: threadType || "both",
+            brain_type: activeThreadType,
             trigger_phrases: `${parsed.detectedObjection}, objection, ${detectedProspectType}`,
             relevance_score: 85,
           });
@@ -1598,6 +1557,7 @@ ${jsonFormat}
           learningResult = { chunksAdded: chunks.length, prospectType: detectedProspectType, urgencyCreated };
         }
       }
+      */
     }
 
     // ===== LEAD REGISTRY AUTO-UPDATE =====
@@ -1641,7 +1601,12 @@ ${jsonFormat}
     }
 
     // Include detected stage and brain retrieval metadata in response
-    parsed.conversationStage = newStage || prospect.conversation_stage;
+    parsed.conversationStage = effectiveStage || prospect.conversation_stage;
+    if (mode === "first_message" && parsed.suggestions?.length) {
+      await supabase.from("prospects").update({
+        suggested_first_message: JSON.stringify(parsed.suggestions),
+      }).eq("id", prospectId).eq("user_id", user.id);
+    }
     parsed.learningResult = learningResult;
     parsed.brainRetrieval = {
       chunksRetrieved: topChunks.length,
