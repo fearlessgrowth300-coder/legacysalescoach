@@ -16,6 +16,13 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
+  // Preserve ?next= (e.g. the OAuth consent URL) so sign-in returns there.
+  const nextParam = (() => {
+    const raw = new URLSearchParams(window.location.search).get("next");
+    if (!raw) return null;
+    return raw.startsWith("/") && !raw.startsWith("//") ? raw : null;
+  })();
+
   // Forgot password flow
   const [forgotMode, setForgotMode] = useState<"none" | "email" | "otp" | "newpass">("none");
   const [resetEmail, setResetEmail] = useState("");
@@ -24,8 +31,14 @@ export default function Login() {
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
 
   useEffect(() => {
-    if (user) navigate("/chats", { replace: true });
-  }, [user, navigate]);
+    if (!user) return;
+    if (nextParam) {
+      window.location.replace(nextParam);
+      return;
+    }
+    navigate("/chats", { replace: true });
+  }, [user, navigate, nextParam]);
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
