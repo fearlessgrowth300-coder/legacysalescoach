@@ -99,8 +99,8 @@ export default function KnowledgeBase() {
         await Promise.all(batch.map(async (it: any) => {
           const [learnRes, chunkCountRes, previewRes] = await Promise.all([
             supabase.from("sales_brain").select("id", { count: "exact", head: true }).eq("source_id", it.id),
-            supabase.from("knowledge_chunks").select("id", { count: "exact", head: true }).eq("source_id", it.id).eq("chunk_kind", "principle_summary"),
-            supabase.from("knowledge_chunks").select("id, category, content").eq("source_id", it.id).eq("chunk_kind", "principle_summary").order("created_at", { ascending: false }).limit(3),
+            supabase.from("knowledge_chunks").select("id", { count: "exact", head: true }).eq("source_id", it.id).neq("category", "source_evidence"),
+            supabase.from("knowledge_chunks").select("id, category, content").eq("source_id", it.id).neq("category", "source_evidence").order("created_at", { ascending: false }).limit(3),
           ]);
           out[it.id] = {
             learnings: learnRes.count || 0,
