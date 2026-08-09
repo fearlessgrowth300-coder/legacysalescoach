@@ -5,15 +5,14 @@ import {
 } from "../_shared/brain-pipeline.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { BRAIN_PERSONA } from "../_shared/persona.ts";
+import { buildBrainRetrievalMeta, isAllowedBrainChatOrigin } from "./lib.ts";
 
 
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
-  const isAllowed =
-    origin.endsWith(".lovable.app") ||
-    origin.endsWith(".lovableproject.com") ||
-    origin.startsWith("http://localhost:");
+  const configuredOrigins = [Deno.env.get("SITE_URL"), Deno.env.get("APP_URL")].filter(Boolean);
+  const isAllowed = isAllowedBrainChatOrigin(origin, configuredOrigins as string[]);
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : "https://legacysalescoach.lovable.app",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -450,7 +449,7 @@ serve(async (req) => {
       // photo, IG/TikTok profile, chart, meme — not just text. The provider's
       // vision model both transcribes any text AND describes what's shown. ──
       let analysis = "";
-      if (!chat.isAnthropic) {
+      {
         try {
           const imageParts = lastUserImages.slice(0, 8).map((url) => ({ type: "image_url", image_url: { url } }));
           const visionPrompt = `You are a sales coach's eyes. Read the image(s) COMPLETELY and carefully — top to bottom, every message.${lastUserText ? ` The user also wrote: "${lastUserText}"` : ""}\n\nReturn plain text with these labeled sections:\nTRANSCRIPT: If it shows a conversation/DM/chat, transcribe the ENTIRE thread VERBATIM from the very FIRST message to the last — every line, in order, labeling who said what (Prospect vs You). Do NOT summarize or skip the earlier messages. Otherwise write "none".\nWHAT I SEE: Describe exactly what is in the image(s) — people, product, screen, profile/bio, captions, numbers, charts, context. Be concrete.\nSITUATION: 2-3 sentences on the full arc of the conversation (how it started, where it is now) and what the user needs help with right now.`;
@@ -658,6 +657,7 @@ serve(async (req) => {
       framework_name: pipeline.framework_name,
       contradictions: pipeline.contradictions,
       empty_vault: false,
+      brainRetrieval: buildBrainRetrievalMeta(pipeline),
       debug: pipeline.debug,
     };
     const metaEvent = `data: ${JSON.stringify({ brain_meta: brainMeta })}\n\n`;
@@ -672,24 +672,13 @@ serve(async (req) => {
       async start(controller) {
         controller.enqueue(encoder.encode(loadingEvent));
         controller.enqueue(encoder.encode(metaEvent));
-        const aiResp = chat.isAnthropic
-          ? await userChat(chat, {
-              model: chat.models.reasoning,
-              max_tokens: 6000,
-              temperature: 0.35,
-              messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
-            })
-          : await fetch(chat.url, {
-              method: "POST",
-              headers: chat.headers,
-              body: JSON.stringify({
-                model: chat.models.reasoning,
-                max_tokens: 6000,
-                temperature: 0.35,
-                messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
-                stream: true,
-              }),
-            });
+        const aiResp = await userChat(chat, {
+          model: chat.models.reasoning,
+          max_tokens: 6000,
+          temperature: 0.35,
+          messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
+          stream: !chat.isAnthropic,
+        });
 
 
         if (!aiResp.ok || !aiResp.body) {
@@ -705,6 +694,20 @@ serve(async (req) => {
           controller.close();
           return;
         }
+
+        if (chat.isAnthropic) {
+          const data = await aiResp.json();
+          const clean = sanitize(String(data.choices?.[0]?.message?.content || ""));
+          if (!clean) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "Anthropic returned an empty response" })}\n\n`));
+          } else {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: clean } }] })}\n\n`));
+          }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+          return;
+        }
+
         const reader = aiResp.body!.getReader();
         const decoder = new TextDecoder();
         let buf = "";

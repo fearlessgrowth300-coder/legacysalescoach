@@ -7,11 +7,11 @@ export type ActiveAi = {
   model: string;
 };
 
-const PROVIDER_MODEL: Record<ActiveAi["provider"], { label: string; model: string }> = {
-  lovable: { label: "Lovable AI", model: "google/gemini-3.5-flash" },
-  openai: { label: "OpenAI", model: "gpt-4o-mini" },
+export const PROVIDER_MODEL: Record<ActiveAi["provider"], { label: string; model: string }> = {
+  lovable: { label: "Lovable AI", model: "google/gemini-2.5-flash" },
+  openai: { label: "OpenAI", model: "gpt-4o" },
   gemini: { label: "Gemini", model: "gemini-2.5-flash" },
-  anthropic: { label: "Anthropic", model: "claude-sonnet-4-6" },
+  anthropic: { label: "Anthropic", model: "claude-opus-4-8" },
 };
 
 export function useActiveAiModel(refreshKey?: unknown): ActiveAi {

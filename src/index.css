@@ -218,108 +218,25 @@ All colors MUST be HSL.
   position: fixed;
   inset: 0;
   z-index: 99999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 43%, hsl(174 62% 55% / 0.15), transparent 20rem),
-    radial-gradient(circle at 50% 48%, hsl(245 72% 72% / 0.12), transparent 28rem),
-    #1d2835;
-  color: #f8fafc;
+  background: #1d2835;
   opacity: 1;
-  transition: opacity 360ms ease, transform 360ms ease;
+  transition: opacity 180ms ease;
 }
 
 .app-launch-screen--exit {
   opacity: 0;
-  transform: scale(1.025);
   pointer-events: none;
 }
 
-.app-launch-glow {
+.app-launch-video {
   position: absolute;
-  width: 16rem;
-  height: 16rem;
-  border-radius: 999px;
-  background: hsl(176 82% 46% / 0.09);
-  filter: blur(34px);
-  animation: launch-glow 1.5s ease-in-out infinite alternate;
-}
-
-.app-launch-mark {
-  position: relative;
-  width: min(46vw, 12rem);
-  aspect-ratio: 1;
-  animation: launch-mark 950ms cubic-bezier(0.2, 0.9, 0.25, 1.2) both;
-}
-
-.app-launch-mark img {
-  position: relative;
-  z-index: 2;
+  inset: 0;
   width: 100%;
   height: 100%;
-  border-radius: 24%;
+  border: 0;
   object-fit: cover;
-  filter: drop-shadow(0 24px 45px rgb(0 0 0 / 0.42));
-}
-
-.app-launch-orbit {
-  position: absolute;
-  z-index: 1;
-  inset: -0.8rem;
-  border: 1px solid hsl(176 82% 55% / 0.32);
-  border-radius: 999px;
-  animation: launch-orbit 1.8s linear infinite;
-}
-
-.app-launch-orbit--two {
-  inset: -1.45rem;
-  border-color: hsl(245 72% 72% / 0.3);
-  animation-direction: reverse;
-  animation-duration: 2.5s;
-}
-
-.app-launch-copy {
-  position: absolute;
-  top: calc(50% + min(31vw, 8.6rem));
-  display: grid;
-  gap: 0.35rem;
-  padding: 0 1.5rem;
-  text-align: center;
-  animation: launch-copy 700ms 320ms ease-out both;
-}
-
-.app-launch-copy p {
-  margin: 0;
-  color: hsl(245 78% 82%);
-  font-size: 0.78rem;
-  font-weight: 800;
-  letter-spacing: 0.22em;
-}
-
-.app-launch-copy span {
-  color: rgb(203 213 225 / 0.75);
-  font-size: 0.75rem;
-}
-
-.app-launch-progress {
-  position: absolute;
-  bottom: max(3rem, calc(env(safe-area-inset-bottom) + 2rem));
-  width: min(44vw, 10rem);
-  height: 2px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgb(148 163 184 / 0.14);
-}
-
-.app-launch-progress span {
-  display: block;
-  width: 100%;
-  height: 100%;
-  transform-origin: left;
-  background: linear-gradient(90deg, hsl(174 62% 55%), hsl(245 72% 72%));
-  animation: launch-progress 1.05s cubic-bezier(0.25, 0.8, 0.25, 1) both;
+  object-position: center;
 }
 
 @keyframes ai-typing-enter {
@@ -332,41 +249,9 @@ All colors MUST be HSL.
   25% { opacity: 1; transform: translateY(-0.25rem) scale(1); }
 }
 
-@keyframes launch-mark {
-  0% { opacity: 0; transform: scale(0.72) rotate(-7deg); filter: blur(8px); }
-  65% { opacity: 1; transform: scale(1.045) rotate(1.5deg); filter: blur(0); }
-  100% { opacity: 1; transform: scale(1) rotate(0); filter: blur(0); }
-}
-
-@keyframes launch-orbit {
-  from { transform: rotate(0deg) scale(0.92); opacity: 0.25; }
-  50% { transform: rotate(180deg) scale(1.03); opacity: 0.65; }
-  to { transform: rotate(360deg) scale(0.92); opacity: 0.25; }
-}
-
-@keyframes launch-glow {
-  from { transform: scale(0.8); opacity: 0.5; }
-  to { transform: scale(1.15); opacity: 1; }
-}
-
-@keyframes launch-copy {
-  from { opacity: 0; transform: translateY(0.5rem); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes launch-progress {
-  from { transform: scaleX(0); }
-  to { transform: scaleX(1); }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .ai-typing-row,
-  .ai-typing-dot,
-  .app-launch-glow,
-  .app-launch-mark,
-  .app-launch-orbit,
-  .app-launch-copy,
-  .app-launch-progress span {
+  .ai-typing-dot {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
   }

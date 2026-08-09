@@ -12,7 +12,7 @@ import {
 import {
   Brain, Send, Loader2, BookOpen, Sparkles, Plus, MessageSquare,
   Image, Link, FileText, Pencil, Trash2, Check, CheckCheck, X, Menu,
-  Mic, MicOff, Pin, PinOff, Search, Star, Zap, Video, File, ArrowLeft, Phone, Volume2
+  Mic, MicOff, Pin, PinOff, Search, Star, Zap, File, ArrowLeft, Phone, Volume2
 } from "lucide-react";
 import VoiceCallAssistant from "@/components/VoiceCallAssistant";
 import SwipeToDelete from "@/components/SwipeToDelete";
@@ -226,7 +226,7 @@ export default function AiChat() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Brain status
-  const [brainStats, setBrainStats] = useState<{ videos: number; pdfs: number; conversations: number }>({ videos: 0, pdfs: 0, conversations: 0 });
+  const [brainStats, setBrainStats] = useState<{ sources: number; pdfs: number; conversations: number }>({ sources: 0, pdfs: 0, conversations: 0 });
   const [retrievalStats, setRetrievalStats] = useState<{
     chunksRetrieved: number; uniqueSources: number; sources: string[];
     semanticMatches: number; staticMatches: number; dedupSavings: number; embeddingUsed: boolean;
@@ -254,12 +254,12 @@ export default function AiChat() {
   useEffect(() => {
     if (!user) return;
     const loadStats = async () => {
-      const [{ count: videoCount }, { count: pdfCount }, { count: convCount }] = await Promise.all([
+      const [{ count: sourceCount }, { count: pdfCount }, { count: convCount }] = await Promise.all([
         supabase.from("knowledge_base_items").select("*", { count: "exact", head: true }).eq("user_id", user.id).eq("type", "url"),
         supabase.from("knowledge_base_items").select("*", { count: "exact", head: true }).eq("user_id", user.id).eq("type", "pdf"),
-        supabase.from("learned_insights").select("*", { count: "exact", head: true }).eq("user_id", user.id),
+        supabase.from("ai_conversations").select("*", { count: "exact", head: true }).eq("user_id", user.id),
       ]);
-      setBrainStats({ videos: videoCount || 0, pdfs: pdfCount || 0, conversations: convCount || 0 });
+      setBrainStats({ sources: sourceCount || 0, pdfs: pdfCount || 0, conversations: convCount || 0 });
     };
     loadStats();
   }, [user]);
@@ -1279,7 +1279,7 @@ export default function AiChat() {
           {/* Brain Status Badge - hide on mobile */}
           <div className="hidden md:flex items-center gap-1.5 shrink-0">
             <Badge variant="secondary" className="text-[10px] gap-1 py-0.5">
-              <Video className="h-2.5 w-2.5" /> {brainStats.videos}
+              <BookOpen className="h-2.5 w-2.5" /> {brainStats.sources}
             </Badge>
             <Badge variant="secondary" className="text-[10px] gap-1 py-0.5">
               <File className="h-2.5 w-2.5" /> {brainStats.pdfs}
@@ -1307,7 +1307,7 @@ export default function AiChat() {
                 </p>
                 <div className="flex items-center justify-center gap-2 mb-6">
                   <Badge variant="outline" className="text-[10px] gap-1">
-                    <Brain className="h-2.5 w-2.5" /> Currently knows {brainStats.videos} videos + {brainStats.pdfs} PDFs + {brainStats.conversations} conversations
+                    <Brain className="h-2.5 w-2.5" /> Currently knows {brainStats.sources} links/videos + {brainStats.pdfs} PDFs + {brainStats.conversations} AI chats
                   </Badge>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-xl mx-auto">
