@@ -187,6 +187,8 @@ Return ONLY the JSON.`;
           trigger_phrases: "",
           relevance_score: 75,
           embedding,
+          chunk_kind: "conversation_memory",
+          metadata: { source: "workspace_training" },
         });
         chunksStored++;
       } catch {

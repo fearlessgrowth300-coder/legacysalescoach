@@ -23,7 +23,7 @@ function getCorsHeaders(req: Request) {
 const MAX_MESSAGE_LENGTH = 12000;
 const PAGE_SIZE = 1000;
 const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
-const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score";
+const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score, chunk_kind, chunk_index, locator, metadata";
 const MAX_SOURCE_COVERAGE_FILES = 32;
 
 function keepHeadAndLatest(text: string, maxLength: number, headLength = 2000): string {
@@ -1090,7 +1090,9 @@ serve(async (req) => {
     if (topChunks.length > 0) {
       brainChunksFormatted = topChunks.map((c: any, i: number) => {
         const realSource = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : (c.source_type || "unknown");
-        return `[BRAIN CHUNK ${i + 1}] (Source: "${realSource}", Category: ${c.category}):\n${(c.content || "").substring(0, 600)}`;
+        const kind = c.chunk_kind === "source_passage" ? "Original source passage" : "Knowledge summary";
+        const location = c.locator ? `, Location: ${c.locator}` : "";
+        return `[BRAIN CHUNK ${i + 1}] (${kind}, Source: "${realSource}"${location}, Category: ${c.category}):\n${(c.content || "").substring(0, 760)}`;
       }).join("\n\n");
     }
 
@@ -1161,6 +1163,7 @@ Search ALL brain chunks across ALL sources for:
 - Psychological state matches (e.g., prospect is scared → find courage/confidence principles from uploads)
 - Strategic frameworks from uploads that apply to this conversation stage
 - Cross-source connections (combine insights from multiple uploads)
+- Treat ORIGINAL SOURCE PASSAGES as evidence and STRUCTURED PRINCIPLES as the action framework. Never invent a script or teaching that the retrieved passage does not support.
 
 **Step 3 — STRATEGIC APPLICATION:**
 Synthesize your reply using precise wording and techniques from the uploads. Connect principles from MULTIPLE sources. Never rely on just one source.

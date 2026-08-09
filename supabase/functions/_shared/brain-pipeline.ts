@@ -13,7 +13,7 @@ import type { UserChatTarget } from "./user-ai.ts";
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, source_id, category, source_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, when_not_to_use, common_mistake, real_example_or_story";
-const CHUNK_SELECT = "id, content, category, source_id, source_type, relevance_score";
+const CHUNK_SELECT = "id, content, category, source_id, source_type, relevance_score, chunk_kind, chunk_index, locator, metadata";
 const PAGE_SIZE = 1000;
 
 async function fetchAllRows<T>(
@@ -47,7 +47,7 @@ const RECENT_EXCHANGE_LIMIT = 4;
 const RECENT_EXCHANGE_CHAR_LIMIT = 280;
 const PRINCIPLES_BLOCK_CHAR_LIMIT = 5200;
 const EVIDENCE_BLOCK_CHAR_LIMIT = 4200;
-const CHUNKS_BLOCK_CHAR_LIMIT = 2000;
+const CHUNKS_BLOCK_CHAR_LIMIT = 6000;
 
 function clampText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
@@ -83,6 +83,10 @@ export type Chunk = {
   source_id: string | null;
   source_title?: string | null;
   source_type: string;
+  chunk_kind?: "source_passage" | "principle_summary" | "conversation_memory" | string;
+  chunk_index?: number | null;
+  locator?: string | null;
+  metadata?: Record<string, unknown> | null;
   relevance_score?: number;
   similarity?: number;
   _semantic?: boolean;
@@ -433,14 +437,14 @@ export async function hybridRetrieve(
     if (!emb) { semPRuns.push([]); semCRuns.push([]); return; }
     const embStr = JSON.stringify(emb);
     const [pRes, cRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 60, match_threshold: 0.22, p_user_id: null }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 40, match_threshold: 0.22, p_user_id: null }),
+      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 60, match_threshold: 0.22, p_user_id: userId }),
+      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 40, match_threshold: 0.22, p_user_id: userId }),
     ]);
     semPRuns.push((pRes.data || [])
       .filter((p: any) => ["core_knowledge", "sales_principle"].includes(p.source_type))
       .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) })));
     semCRuns.push((cRes.data || [])
-      .filter((c: any) => c.source_type === "core_knowledge")
+      .filter((c: any) => ALLOWED_SOURCE_TYPES.includes(c.source_type))
       .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) })));
   }));
 
@@ -1292,7 +1296,11 @@ Real example: ${p.real_example_or_story || "(none)"}
 
 export function buildChunksBlock(chunks: Chunk[]): string {
   if (!chunks.length) return "(none)";
-  return clampText(chunks.map((c, i) => `[CHUNK ${i + 1} | SOURCE: "${c.source_title || "Uploaded content"}" | ${c.category}] ${(c.content || "").substring(0, 220)}`).join("\n\n"), CHUNKS_BLOCK_CHAR_LIMIT);
+  return clampText(chunks.map((c, i) => {
+    const location = c.locator ? ` | LOCATION: ${c.locator}` : "";
+    const kind = c.chunk_kind === "source_passage" ? "ORIGINAL SOURCE PASSAGE" : "KNOWLEDGE SUMMARY";
+    return `[CHUNK ${i + 1} | ${kind} | SOURCE: "${c.source_title || "Uploaded content"}"${location} | ${c.category}]\n${(c.content || "").substring(0, 720)}`;
+  }).join("\n\n"), CHUNKS_BLOCK_CHAR_LIMIT);
 }
 
 export function buildEvidenceBlock(principles: Principle[]): string {

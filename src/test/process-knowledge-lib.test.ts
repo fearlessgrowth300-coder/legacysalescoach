@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chunkText, dedupePrinciples, detectChapters, mapVariantToSuggestion, prepareBookSections } from "../../supabase/functions/process-knowledge/lib";
+import { buildSourcePassages, chunkText, dedupePrinciples, detectChapters, formatTranscriptSegments, mapVariantToSuggestion, prepareBookSections } from "../../supabase/functions/process-knowledge/lib";
 
 describe("chunkText (true 10k chunking)", () => {
   it("returns the whole string when shorter than chunk size", () => {
@@ -31,6 +31,34 @@ describe("chunkText (true 10k chunking)", () => {
     const chunks = chunkText(a + b, 10000);
     // First chunk should end at the sentence boundary, not mid-A
     expect(chunks[0].endsWith(".")).toBe(true);
+  });
+});
+
+describe("source passage preservation", () => {
+  it("keeps PDF page locations on retrieval-sized passages", () => {
+    const text = [
+      "=== Page 1 ===\n" + "Trust is earned through specific evidence. ".repeat(90),
+      "=== Page 2 ===\n" + "Handle price by returning to the cost of the problem. ".repeat(90),
+    ].join("\n\n");
+    const passages = buildSourcePassages(text, { chunkSize: 2200, overlap: 200 });
+
+    expect(passages.length).toBeGreaterThan(2);
+    expect(passages.some((p) => p.metadata.page_start === 1)).toBe(true);
+    expect(passages.some((p) => p.metadata.page_end === 2)).toBe(true);
+    expect(passages.every((p) => p.content.length > 80)).toBe(true);
+  });
+
+  it("preserves transcript timestamps for later citations", () => {
+    const transcript = formatTranscriptSegments([
+      { start: 0, text: "Open with a specific observation." },
+      { start: 75, text: "Then ask a low-pressure question." },
+    ]);
+    expect(transcript).toContain("[00:00] Open with");
+    expect(transcript).toContain("[01:15] Then ask");
+
+    const passages = buildSourcePassages(transcript, { chunkSize: 1200 });
+    expect(passages[0].metadata.timestamp_start).toBe("00:00");
+    expect(passages[0].metadata.timestamp_end).toBe("01:15");
   });
 });
 

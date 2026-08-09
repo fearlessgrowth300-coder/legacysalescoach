@@ -324,6 +324,9 @@ export type Database = {
           created_at: string
           file_path: string | null
           id: string
+          indexed_at: string | null
+          source_chunk_count: number
+          source_index_version: number
           status: string
           title: string
           type: string
@@ -337,6 +340,9 @@ export type Database = {
           created_at?: string
           file_path?: string | null
           id?: string
+          indexed_at?: string | null
+          source_chunk_count?: number
+          source_index_version?: number
           status?: string
           title: string
           type?: string
@@ -350,6 +356,9 @@ export type Database = {
           created_at?: string
           file_path?: string | null
           id?: string
+          indexed_at?: string | null
+          source_chunk_count?: number
+          source_index_version?: number
           status?: string
           title?: string
           type?: string
@@ -363,10 +372,14 @@ export type Database = {
         Row: {
           brain_type: string
           category: string
+          chunk_index: number | null
+          chunk_kind: string
           content: string
           created_at: string
           embedding: string | null
           id: string
+          locator: string | null
+          metadata: Json
           relevance_score: number
           source_id: string | null
           source_type: string
@@ -377,10 +390,14 @@ export type Database = {
         Insert: {
           brain_type?: string
           category?: string
+          chunk_index?: number | null
+          chunk_kind?: string
           content: string
           created_at?: string
           embedding?: string | null
           id?: string
+          locator?: string | null
+          metadata?: Json
           relevance_score?: number
           source_id?: string | null
           source_type?: string
@@ -391,10 +408,14 @@ export type Database = {
         Update: {
           brain_type?: string
           category?: string
+          chunk_index?: number | null
+          chunk_kind?: string
           content?: string
           created_at?: string
           embedding?: string | null
           id?: string
+          locator?: string | null
+          metadata?: Json
           relevance_score?: number
           source_id?: string | null
           source_type?: string
@@ -1089,8 +1110,12 @@ export type Database = {
         Returns: {
           brain_type: string
           category: string
+          chunk_index: number
+          chunk_kind: string
           content: string
           id: string
+          locator: string
+          metadata: Json
           relevance_score: number
           similarity: number
           source_id: string

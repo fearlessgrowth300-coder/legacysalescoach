@@ -1095,6 +1095,8 @@ export default function Chats() {
           brain_type: currentThreadType,
           trigger_phrases: `${conversationStage || selectedProspect?.conversation_stage || "general"}, approved, ${currentThreadType}`,
           relevance_score: 95,
+          chunk_kind: "conversation_memory",
+          metadata: { source: "approved_suggestion_feedback" },
         });
       }
       toast.success(feedback === "positive" ? "👍 Got it! Will generate more like this" : "👎 Noted! Will adjust future suggestions");

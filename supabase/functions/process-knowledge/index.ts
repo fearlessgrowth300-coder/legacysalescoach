@@ -344,7 +344,7 @@ function parsePrinciplesJson(raw: string): any[] {
   return objects;
 }
 
-import { chunkText, dedupePrinciples, prepareBookSections, type DetectedChapter } from "./lib.ts";
+import { buildSourcePassages, chunkText, dedupePrinciples, formatTranscriptSegments, prepareBookSections, type DetectedChapter } from "./lib.ts";
 
 async function extractStructuredLearnings(content: string, sourceName: string, ai: AiProvider): Promise<any[]> {
   // ===== PASS 1: Clean each 10k chunk independently, then concatenate =====
@@ -664,6 +664,122 @@ Rules:
   }
 }
 
+const SOURCE_INDEX_VERSION = 2;
+
+function sourcePassageType(type: string, url?: string | null): "pdf" | "video" | "content" {
+  if (type === "pdf") return "pdf";
+  if (url && (url.includes("youtube.com") || url.includes("youtu.be"))) return "video";
+  return "content";
+}
+
+async function deleteSourcePassages(
+  supabase: any,
+  userId: string,
+  itemId: string,
+  range?: { from: number; to: number },
+): Promise<void> {
+  let query = supabase.from("knowledge_chunks")
+    .delete()
+    .eq("user_id", userId)
+    .eq("source_id", itemId)
+    .eq("chunk_kind", "source_passage");
+  if (range) query = query.gte("chunk_index", range.from).lte("chunk_index", range.to);
+  const { error } = await query;
+  if (error) throw new Error(`Could not replace preserved source passages: ${error.message}`);
+}
+
+async function persistSourcePassages(
+  supabase: any,
+  userId: string,
+  itemId: string,
+  brainType: string,
+  sourceName: string,
+  originalType: string,
+  sourceUrl: string | null,
+  content: string,
+  ai: AiProvider,
+  options: {
+    documentText?: string;
+    baseOffset?: number;
+    chapterIndex?: number;
+    chapterTitle?: string;
+  } = {},
+): Promise<number> {
+  const baseIndex = options.chapterIndex ? options.chapterIndex * 1000 : 0;
+  const range = { from: baseIndex, to: baseIndex + 999 };
+  const passages = buildSourcePassages(content, {
+    chunkSize: 5200,
+    overlap: 650,
+    baseOffset: options.baseOffset || 0,
+    baseIndex,
+    chapterIndex: options.chapterIndex,
+    chapterTitle: options.chapterTitle,
+    documentText: options.documentText || content,
+  });
+
+  await deleteSourcePassages(supabase, userId, itemId, range);
+  if (!passages.length) return 0;
+
+  const passageType = sourcePassageType(originalType, sourceUrl);
+  let insertedCount = 0;
+  const batchSize = 4;
+  for (let offset = 0; offset < passages.length; offset += batchSize) {
+    const batch = passages.slice(offset, offset + batchSize);
+    const embeddings = await Promise.all(batch.map((passage) =>
+      generateEmbedding(`${sourceName}\n${passage.locator}\n${passage.content}`, ai)
+    ));
+
+    for (let i = 0; i < batch.length; i++) {
+      const passage = batch[i];
+      const { error } = await supabase.from("knowledge_chunks").insert({
+        user_id: userId,
+        source_id: itemId,
+        category: "source_evidence",
+        content: passage.content,
+        brain_type: brainType,
+        trigger_phrases: "",
+        relevance_score: 80,
+        source_type: passageType,
+        embedding: embeddings[i],
+        workspace_id: null,
+        chunk_kind: "source_passage",
+        chunk_index: passage.index,
+        locator: passage.locator,
+        metadata: {
+          ...passage.metadata,
+          source_title: sourceName,
+          source_index_version: SOURCE_INDEX_VERSION,
+        },
+      });
+      if (!error) {
+        insertedCount++;
+      } else if (!/duplicate key|unique/i.test(error.message || "")) {
+        throw new Error(`Could not store source passage ${passage.index}: ${error.message}`);
+      }
+    }
+  }
+
+  console.log(`Stored ${insertedCount}/${passages.length} original source passages for ${sourceName}`);
+  return insertedCount;
+}
+
+async function markSourceIndexReady(supabase: any, userId: string, itemId: string): Promise<void> {
+  const { count, error } = await supabase.from("knowledge_chunks")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("source_id", itemId)
+    .eq("chunk_kind", "source_passage");
+  if (error) {
+    console.warn("Could not count preserved source passages", error.message);
+    return;
+  }
+  await supabase.from("knowledge_base_items").update({
+    source_index_version: SOURCE_INDEX_VERSION,
+    source_chunk_count: count || 0,
+    indexed_at: new Date().toISOString(),
+  }).eq("id", itemId);
+}
+
 // ===== Persist a single learning row + companion chunk (used by both pipelines) =====
 async function persistLearning(
   supabase: any,
@@ -760,6 +876,13 @@ async function persistLearning(
         source_type: "core_knowledge",
         embedding,
         workspace_id: null,
+        chunk_kind: "principle_summary",
+        locator: learning._chapter ? `Chapter ${learning._chapter}` : null,
+        metadata: {
+          principle_id: inserted.id,
+          chapter_index: learning._chapter || null,
+          source_title: sourceName,
+        },
       });
     }
   }
@@ -927,6 +1050,7 @@ serve(async (req) => {
       const finishBookIfComplete = async (brief: any, chapters: any[]) => {
         const hasOpenWork = chapters.some((c: any) => c.status === "pending" || c.status === "extracting");
         if (!hasOpenWork) {
+          await markSourceIndexReady(supabase, user.id, itemId);
           await supabase.from("knowledge_base_items").update({
             book_brief: { ...brief, chapters },
             status: "ready",
@@ -936,6 +1060,15 @@ serve(async (req) => {
       };
       const seenChunkContent = new Set<string>();
       const allStored: any[] = [];
+
+      if (!continueBook && typeof retryChapterIndex !== "number") {
+        await deleteSourcePassages(supabase, user.id, itemId);
+        await supabase.from("knowledge_base_items").update({
+          source_index_version: 0,
+          source_chunk_count: 0,
+          indexed_at: null,
+        }).eq("id", itemId);
+      }
 
       // === RETRY MODE: re-run a single chapter ===
       if (typeof retryChapterIndex === "number" && item.book_brief) {
@@ -966,6 +1099,17 @@ serve(async (req) => {
             .eq("user_id", user.id)
             .eq("source_id", itemId)
             .filter("metadata->>chapter", "eq", String(retryChapterIndex));
+
+          await persistSourcePassages(
+            supabase, user.id, itemId, item.brain_type, sourceName,
+            "pdf", item.url, targetDetected.text, ai,
+            {
+              documentText: contentToProcess,
+              baseOffset: targetDetected.startOffset,
+              chapterIndex: retryChapterIndex,
+              chapterTitle: targetMeta.title,
+            },
+          );
 
           const principles = await extractChapterWithFallback(
             targetDetected,
@@ -1000,6 +1144,8 @@ serve(async (req) => {
             book_brief: { ...brief, chapters: finalChapters },
             status: stillPending ? "extracting" : "ready",
           }).eq("id", itemId);
+
+          if (!stillPending) await markSourceIndexReady(supabase, user.id, itemId);
 
           console.log(`Retry chapter ${retryChapterIndex} done: ${storedCount} principles`);
           return;
@@ -1165,6 +1311,7 @@ serve(async (req) => {
           }
 
           const anyFailed = workingChapters.some((c: any) => c.status === "failed");
+          await markSourceIndexReady(supabase, user.id, itemId);
           await supabase.from("knowledge_base_items").update({
             status: anyFailed ? "ready" : "ready",
           }).eq("id", itemId);
@@ -1202,6 +1349,17 @@ serve(async (req) => {
         }
 
         try {
+          await persistSourcePassages(
+            supabase, user.id, itemId, item.brain_type, sourceName,
+            "pdf", item.url, targetDetected.text, ai,
+            {
+              documentText: contentToProcess,
+              baseOffset: targetDetected.startOffset,
+              chapterIndex: nextMeta.index,
+              chapterTitle: nextMeta.title,
+            },
+          );
+
           const principles = await extractChapterWithFallback(
             targetDetected,
             {
@@ -1328,11 +1486,17 @@ serve(async (req) => {
 
     // ============== STANDARD PIPELINE (videos / short content) ==============
     console.log(`Three-pass pipeline starting on ${contentToProcess.length} chars`);
+    await deleteSourcePassages(supabase, user.id, itemId);
+    await persistSourcePassages(
+      supabase, user.id, itemId, item.brain_type, sourceName,
+      type, item.url, contentToProcess, ai,
+    );
     const learnings = await extractStructuredLearnings(contentToProcess, sourceName, ai);
     console.log(`Pass 2 complete: ${learnings.length} principles extracted`);
 
     if (learnings.length === 0) {
       console.warn(`No principles extracted for standard item ${itemId}; marking error instead of leaving processing`);
+      await markSourceIndexReady(supabase, user.id, itemId);
       await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
       return;
     }
@@ -1367,6 +1531,7 @@ serve(async (req) => {
     }
 
     console.log(`Stored ${storedLearnings.length} weapon-grade principles (deduped) + matching chunks`);
+    await markSourceIndexReady(supabase, user.id, itemId);
     await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
     };
 
@@ -1666,7 +1831,7 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
           } else if (sdData.text && typeof sdData.text === "string" && sdData.text.length > 50) {
             transcript = sdData.text;
           } else if (Array.isArray(sdData.transcript)) {
-            transcript = sdData.transcript.map((c: any) => c.text || c.content || "").join(" ");
+            transcript = formatTranscriptSegments(sdData.transcript);
           }
           if (transcript.length > 100) {
             let title = "";
@@ -1674,7 +1839,7 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
               const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`, { signal: AbortSignal.timeout(10000) });
               if (oembedRes.ok) { title = (await oembedRes.json()).title || ""; }
             } catch { /* ignore */ }
-            content = `Video Title: ${title}\n\nTranscript:\n${transcript.substring(0, 15000)}`;
+            content = `Video Title: ${title}\n\nTranscript:\n${transcript.substring(0, 600000)}`;
             console.log(`TranscriptAPI success (${label} key), content length:`, content.length);
           }
         } else {
@@ -1713,7 +1878,7 @@ async function extractYouTubeContent(url: string, userId: string | null = null, 
                   .replace(/&#39;/g, "'").replace(/&quot;/g, '"')
                   .replace(/\s+/g, " ").trim();
                 if (transcriptText.length > 100) {
-                  content = `Video Title: ${title}\n\nTranscript:\n${transcriptText.substring(0, 15000)}`;
+                  content = `Video Title: ${title}\n\nTranscript:\n${transcriptText.substring(0, 600000)}`;
                 }
               }
             } catch (e) { console.error("Transcript fetch error:", e); }

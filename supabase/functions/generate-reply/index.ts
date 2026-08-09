@@ -13,7 +13,7 @@ const corsHeaders = {
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 const PAGE_SIZE = 1000;
 const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
-const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score";
+const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score, chunk_kind, chunk_index, locator, metadata";
 const MAX_SOURCE_COVERAGE_FILES = 32;
 
 function keepHeadAndLatest(text: string, maxLength: number, headLength = 2000): string {
@@ -390,7 +390,8 @@ serve(async (req) => {
     // excerpts concise enough to remain usable by the reasoning model.
     const chunksText = topChunks.length > 0
       ? topChunks.slice(0, 45).map((c: any) => {
-          const src = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : c.source_type;
+          const sourceTitle = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : c.source_type;
+          const src = `${sourceTitle}${c.locator ? `, ${c.locator}` : ""}${c.chunk_kind === "source_passage" ? ", original source passage" : ""}`;
           return `• (Source: ${src}) [${c.category || "general"}]: ${(c.content || "").substring(0, 700)}`;
         }).join("\n")
       : "No relevant knowledge chunks retrieved.";

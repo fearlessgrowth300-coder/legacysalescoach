@@ -29,6 +29,149 @@ export function chunkText(content: string, chunkSize = 10000, overlap = 0): stri
   return chunks;
 }
 
+export interface SourcePassage {
+  content: string;
+  index: number;
+  charStart: number;
+  charEnd: number;
+  locator: string;
+  metadata: Record<string, string | number | null>;
+}
+
+export interface SourcePassageOptions {
+  chunkSize?: number;
+  overlap?: number;
+  baseOffset?: number;
+  baseIndex?: number;
+  chapterIndex?: number;
+  chapterTitle?: string;
+  documentText?: string;
+}
+
+function markerValueAtOffset(
+  text: string,
+  offset: number,
+  pattern: RegExp,
+): string | null {
+  let value: string | null = null;
+  let match: RegExpExecArray | null;
+  pattern.lastIndex = 0;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > offset) break;
+    value = match[1];
+    if (match[0].length === 0) pattern.lastIndex++;
+  }
+  return value;
+}
+
+function pageAtOffset(text: string, offset: number): number | null {
+  const value = markerValueAtOffset(text, offset, /^=== Page (\d+) ===/gim);
+  return value ? Number(value) : null;
+}
+
+function timestampAtOffset(text: string, offset: number): string | null {
+  return markerValueAtOffset(text, offset, /^\[((?:\d{1,2}:)?\d{1,2}:\d{2})\]/gm);
+}
+
+/**
+ * Split preserved source text into retrieval-sized passages while retaining
+ * stable source location metadata. PDF extraction already emits Page markers;
+ * timestamped transcript segments use [HH:MM:SS] markers.
+ */
+export function buildSourcePassages(
+  content: string,
+  options: SourcePassageOptions = {},
+): SourcePassage[] {
+  if (!content?.trim()) return [];
+
+  const chunkSize = Math.max(1200, options.chunkSize ?? 5200);
+  const overlap = Math.max(0, Math.min(options.overlap ?? 650, Math.floor(chunkSize * 0.3)));
+  const baseOffset = options.baseOffset ?? 0;
+  const baseIndex = options.baseIndex ?? 0;
+  const documentText = options.documentText || content;
+  const passages: SourcePassage[] = [];
+  let start = 0;
+
+  while (start < content.length) {
+    let end = Math.min(start + chunkSize, content.length);
+    if (end < content.length) {
+      const lastPeriod = content.lastIndexOf(". ", end);
+      const lastNewline = content.lastIndexOf("\n", end);
+      const breakPoint = Math.max(lastPeriod, lastNewline);
+      if (breakPoint > start + chunkSize * 0.55) end = breakPoint + 1;
+    }
+
+    const raw = content.substring(start, end);
+    const leadingWhitespace = raw.length - raw.trimStart().length;
+    const trailingWhitespace = raw.length - raw.trimEnd().length;
+    const passageText = raw.trim();
+    const charStart = baseOffset + start + leadingWhitespace;
+    const charEnd = baseOffset + end - trailingWhitespace;
+
+    if (passageText.length >= 80) {
+      const pageStart = pageAtOffset(documentText, charStart);
+      const pageEnd = pageAtOffset(documentText, Math.max(charStart, charEnd - 1));
+      const timestampStart = timestampAtOffset(documentText, charStart);
+      const timestampEnd = timestampAtOffset(documentText, Math.max(charStart, charEnd - 1));
+      const passageNumber = passages.length + 1;
+      let locator = `Passage ${passageNumber}`;
+      if (pageStart) {
+        locator = pageEnd && pageEnd !== pageStart ? `Pages ${pageStart}-${pageEnd}` : `Page ${pageStart}`;
+      } else if (timestampStart) {
+        locator = timestampEnd && timestampEnd !== timestampStart
+          ? `${timestampStart}-${timestampEnd}`
+          : timestampStart;
+      } else if (options.chapterTitle) {
+        locator = `${options.chapterTitle} - passage ${passageNumber}`;
+      }
+
+      passages.push({
+        content: passageText,
+        index: baseIndex + passages.length,
+        charStart,
+        charEnd,
+        locator,
+        metadata: {
+          page_start: pageStart,
+          page_end: pageEnd,
+          timestamp_start: timestampStart,
+          timestamp_end: timestampEnd,
+          chapter_index: options.chapterIndex ?? null,
+          chapter_title: options.chapterTitle ?? null,
+          char_start: charStart,
+          char_end: charEnd,
+        },
+      });
+    }
+
+    if (end >= content.length) break;
+    start = Math.max(end - overlap, start + 1);
+  }
+
+  return passages;
+}
+
+function formatTimestamp(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const secs = safe % 60;
+  return hours > 0
+    ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`
+    : `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+/** Preserve timestamp metadata returned by transcript providers. */
+export function formatTranscriptSegments(segments: any[]): string {
+  return segments.map((segment) => {
+    const text = String(segment?.text || segment?.content || "").trim();
+    if (!text) return "";
+    const rawStart = Number(segment?.start ?? segment?.offset ?? segment?.startTime ?? 0);
+    const seconds = rawStart > 100000 ? rawStart / 1000 : rawStart;
+    return `[${formatTimestamp(Number.isFinite(seconds) ? seconds : 0)}] ${text}`;
+  }).filter(Boolean).join("\n");
+}
+
 // Dedupe principles by lowercased principle_name, keeping the entry with the
 // most captured content (longest combined fields).
 export function dedupePrinciples<T extends Record<string, any>>(items: T[]): T[] {

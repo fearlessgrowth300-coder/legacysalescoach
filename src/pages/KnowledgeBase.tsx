@@ -99,8 +99,8 @@ export default function KnowledgeBase() {
         await Promise.all(batch.map(async (it: any) => {
           const [learnRes, chunkCountRes, previewRes] = await Promise.all([
             supabase.from("sales_brain").select("id", { count: "exact", head: true }).eq("source_id", it.id),
-            supabase.from("knowledge_chunks").select("id", { count: "exact", head: true }).eq("source_id", it.id),
-            supabase.from("knowledge_chunks").select("id, category, content").eq("source_id", it.id).order("created_at", { ascending: false }).limit(3),
+            supabase.from("knowledge_chunks").select("id", { count: "exact", head: true }).eq("source_id", it.id).eq("chunk_kind", "principle_summary"),
+            supabase.from("knowledge_chunks").select("id, category, content").eq("source_id", it.id).eq("chunk_kind", "principle_summary").order("created_at", { ascending: false }).limit(3),
           ]);
           out[it.id] = {
             learnings: learnRes.count || 0,
@@ -1298,6 +1298,15 @@ export default function KnowledgeBase() {
                       <div className="flex items-center gap-1.5 sm:gap-2 mt-1 flex-wrap">
                         <Badge variant="outline" className="text-[10px] sm:text-xs">{item.type.toUpperCase()}</Badge>
                         <Badge variant="outline" className="text-[10px] sm:text-xs">{item.brain_type}</Badge>
+                        {(item as any).source_index_version >= 2 ? (
+                          <Badge variant="secondary" className="text-[10px] sm:text-xs">
+                            <CheckCircle2 className="h-3 w-3 mr-1" />Full source indexed
+                          </Badge>
+                        ) : item.status === "ready" ? (
+                          <Badge variant="outline" className="text-[10px] sm:text-xs text-amber-600 border-amber-500/40">
+                            Re-index for full source
+                          </Badge>
+                        ) : null}
                         {item.url && <p className="text-[10px] sm:text-xs text-muted-foreground truncate max-w-[120px] sm:max-w-[200px] md:max-w-none">{item.url}</p>}
                       </div>
                     </div>
@@ -1428,7 +1437,9 @@ export default function KnowledgeBase() {
                             ) : (
                               <RefreshCw className="h-3 w-3 mr-1" />
                             )}
-                            {getInsightCountForItem(item.id) === 0 ? "Extract" : "Re-extract"}
+                            {((item as any).source_index_version ?? 0) < 2
+                              ? "Upgrade source"
+                              : getInsightCountForItem(item.id) === 0 ? "Extract" : "Re-extract"}
                           </Button>
                         </div>
                       )}
