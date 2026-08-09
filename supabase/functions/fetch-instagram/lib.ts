@@ -10,6 +10,7 @@ export function isInstagramPostUrl(input: string): boolean {
 
 export function pickInstagramProfilePicture(value: any): string {
   return value?.profilePicUrlHD ||
+    value?.profilePicUrlHd ||
     value?.profilePicUrl ||
     value?.profilePictureUrl ||
     value?.profile_pic_url ||
@@ -43,4 +44,25 @@ export function normalizeInstagramProfile(profile: any, fallbackUsername: string
       url: post?.url || post?.inputUrl || "",
     })),
   };
+}
+
+export type ApifyRunState = "pending" | "succeeded" | "failed";
+
+/** Maps an Apify run status onto the polling contract used by the client. */
+export function classifyApifyRunStatus(status: string): ApifyRunState {
+  const normalized = (status || "").toUpperCase();
+  if (normalized === "SUCCEEDED") return "succeeded";
+  if (normalized === "READY" || normalized === "RUNNING") return "pending";
+  return "failed";
+}
+
+export function avatarExtensionForContentType(contentType: string): "jpg" | "png" | "webp" {
+  if (contentType.includes("png")) return "png";
+  if (contentType.includes("webp")) return "webp";
+  return "jpg";
+}
+
+export function avatarStoragePath(userId: string, username: string, extension: string): string {
+  const safeUsername = (username || "").replace(/[^a-z0-9._-]/gi, "_").toLowerCase() || "instagram";
+  return `${userId}/instagram/${safeUsername}.${extension}`;
 }
