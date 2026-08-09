@@ -23,6 +23,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import AiTypingIndicator from "@/components/AiTypingIndicator";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import TikTokOutreach from "@/components/TikTokOutreach";
 import ConversationIntelligencePanel, { type ConversationAnalysis } from "@/components/ConversationIntelligencePanel";
@@ -1839,13 +1840,11 @@ export default function Chats() {
                     </div>
                   );
                 })}
+                {(isAnalyzing || isRefining) && (
+                  <AiTypingIndicator label={isRefining ? "Legacy Coach is refining your message" : "Legacy Coach is writing reply suggestions"} />
+                )}
                 {isGeneratingFirst && !messages?.length && suggestions.length === 0 && (
-                  <div className="flex justify-center py-6">
-                    <div className="flex items-center gap-2 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Generating first message...
-                    </div>
-                  </div>
+                  <AiTypingIndicator label="Legacy Coach is creating your opener" className="py-4" />
                 )}
                 <div ref={messagesEndRef} />
               </div>

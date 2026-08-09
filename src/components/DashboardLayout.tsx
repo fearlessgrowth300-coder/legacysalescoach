@@ -74,14 +74,14 @@ function MobileShell({ children }: { children: ReactNode }) {
   const isMoreActive = moreTabs.some(t => location.pathname.startsWith(t.path));
 
   return (
-    <div className="flex flex-col h-[100dvh] bg-background">
+    <div className="app-shell flex flex-col h-[100dvh] bg-background">
       {/* Main content area */}
       <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         {children}
       </main>
 
       {/* Bottom tab bar */}
-      <nav className="shrink-0 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 safe-area-bottom">
+      <nav className="app-bottom-nav shrink-0 border-t border-border/70 bg-card/90 shadow-[0_-12px_35px_hsl(222_70%_3%/0.22)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/75 safe-area-bottom">
         <div className="flex items-center justify-around h-14 px-1">
           {primaryTabs.map((tab) => {
             const isActive = location.pathname.startsWith(tab.path);
