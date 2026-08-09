@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -176,12 +176,14 @@ export default function Chats() {
   const [screenshotContextNote, setScreenshotContextNote] = useState("");
   const [pendingScreenshot, setPendingScreenshot] = useState<ProcessedScreenshot | null>(null);
   const [pendingScreenshotNote, setPendingScreenshotNote] = useState("");
+  const [avatarRefreshVersion, setAvatarRefreshVersion] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const screenshotInputRef = useRef<HTMLInputElement>(null);
   const bulkScreenshotInputRef = useRef<HTMLInputElement>(null);
   const autoFirstMessageAttempted = useRef<Record<string, boolean>>({});
+  const avatarRefreshAttempted = useRef<Record<string, boolean>>({});
 
   const getInitials = (name: string) => {
     return name.split(" ").map(w => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
@@ -225,7 +227,7 @@ export default function Chats() {
   });
 
   // Get messages for selected prospect
-  const { data: messages } = useQuery({
+  const { data: messages, isFetched: messagesFetched } = useQuery({
     queryKey: ["messages", selectedProspectId, currentThreadType],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -256,12 +258,83 @@ export default function Chats() {
   });
   const selectedProspect = selectedProspectData || prospects?.find((p) => p.id === selectedProspectId);
 
+  const refreshSelectedProspectAvatar = useCallback(async () => {
+    if (!selectedProspectId || !selectedProspect || !activeWorkspace?.id || !user?.id) return;
+    if (avatarRefreshAttempted.current[selectedProspectId]) return;
+
+    const prospect = selectedProspect as any;
+    const instagramSource = prospect.instagram_url || prospect.instagram_username;
+    const tiktokSource = prospect.tiktok_url;
+    if (!instagramSource && !tiktokSource) return;
+
+    avatarRefreshAttempted.current[selectedProspectId] = true;
+
+    try {
+      let profilePicUrl = "";
+      if (prospect.platform === "tiktok" && tiktokSource) {
+        const { data, error } = await supabase.functions.invoke("fetch-tiktok", {
+          body: {
+            url: tiktokSource,
+            workspaceId: activeWorkspace.id,
+            prospectId: selectedProspectId,
+            stashOutreach: false,
+          },
+        });
+        if (error) throw error;
+        if (data?.error) throw new Error(data.error);
+        profilePicUrl = data?.profilePicUrl || "";
+      } else if (instagramSource) {
+        const { data, error } = await supabase.functions.invoke("fetch-instagram", {
+          body: { username: instagramSource },
+        });
+        if (error) throw error;
+        if (data?.error) throw new Error(data.error);
+        profilePicUrl = data?.profilePicUrl || "";
+      }
+
+      if (!profilePicUrl) return;
+
+      const { error: updateError } = await supabase
+        .from("prospects")
+        .update({ profile_pic_url: profilePicUrl } as any)
+        .eq("id", selectedProspectId)
+        .eq("user_id", user.id);
+      if (updateError) throw updateError;
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["selected-prospect", selectedProspectId] }),
+        queryClient.invalidateQueries({ queryKey: ["prospects"] }),
+      ]);
+      // Remount the image even when the provider returns the same URL after a
+      // transient failure, allowing the browser to make one clean retry.
+      setAvatarRefreshVersion((version) => version + 1);
+    } catch (error) {
+      console.error("Profile photo refresh failed:", error);
+    }
+  }, [activeWorkspace?.id, queryClient, selectedProspect, selectedProspectId, user?.id]);
+
   // Persist the prospect's chosen conversation mode across navigation instead
   // of silently resetting every chat to Friend mode.
   useEffect(() => {
     if (!selectedProspectId || !selectedProspect) return;
     setCurrentThreadType(selectedProspect.reply_mode === "expert" ? "expert" : "friend");
   }, [selectedProspectId, selectedProspect]);
+
+  // Clear transient suggestions immediately when changing chats or thread modes,
+  // so one conversation can never display another conversation's replies.
+  useEffect(() => {
+    setSuggestions([]);
+    setPushyWarning(null);
+    setFeedbackMap({});
+  }, [selectedProspectId, currentThreadType]);
+
+  // Repair missing profile photos lazily when the conversation is opened. Broken
+  // remote CDN URLs use the same refresh path from AvatarImage.onError below.
+  useEffect(() => {
+    if (selectedProspect && !(selectedProspect as any).profile_pic_url) {
+      void refreshSelectedProspectAvatar();
+    }
+  }, [refreshSelectedProspectAvatar, selectedProspect]);
 
   // Auto-switch to instagram tab when viewing a TikTok prospect chat (so chat UI shows, not TikTok outreach)
   useEffect(() => {
@@ -276,7 +349,10 @@ export default function Chats() {
 
   // Auto-load first message suggestions for prospects with saved suggestions
   useEffect(() => {
-    if (selectedProspect && !messages?.length) {
+    // Wait for the messages request to finish. During loading, `messages` is
+    // undefined and used to look like an empty conversation, restoring stale
+    // first-message suggestions before the real history arrived.
+    if (messagesFetched && selectedProspect && messages?.length === 0) {
       const savedFirst = (selectedProspect as any).suggested_first_message;
       if (savedFirst) {
         try {
@@ -293,7 +369,7 @@ export default function Chats() {
         }
       }
     }
-  }, [selectedProspectId, selectedProspect, messages]);
+  }, [selectedProspectId, selectedProspect, messages, messagesFetched]);
 
   useEffect(() => {
     if (!selectedProspectId || !selectedProspect || !messages || messages.length > 0 || suggestions.length > 0 || isGeneratingFirst) return;
@@ -954,7 +1030,7 @@ export default function Chats() {
 
   const handleUseSuggestion = async (suggestion: Suggestion) => {
     if (!selectedProspectId) return;
-    await supabase.from("chat_messages").insert({
+    const { error: messageError } = await supabase.from("chat_messages").insert({
       user_id: user!.id,
       prospect_id: selectedProspectId,
       content: suggestion.text,
@@ -962,6 +1038,20 @@ export default function Chats() {
       thread_type: currentThreadType,
       is_ai_suggestion: true,
     });
+    if (messageError) {
+      console.error("Failed to record used suggestion:", messageError);
+      toast.error("Could not record this response. Please try again.");
+      return;
+    }
+
+    // First-message suggestions are stored on the prospect for navigation
+    // recovery. Consume that persisted value after a reply is used so it cannot
+    // reappear the next time the chat is opened.
+    const { error: clearSuggestionError } = await supabase
+      .from("prospects")
+      .update({ suggested_first_message: null } as any)
+      .eq("id", selectedProspectId)
+      .eq("user_id", user!.id);
     const { data: analytics } = await supabase
       .from("conversation_analytics")
       .select("id, ai_suggestions_used")
@@ -976,8 +1066,17 @@ export default function Chats() {
     setSuggestions([]);
     setPushyWarning(null);
     setFeedbackMap({});
-    queryClient.invalidateQueries({ queryKey: ["messages"] });
-    toast.success("Response recorded!");
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["messages", selectedProspectId, currentThreadType] }),
+      queryClient.invalidateQueries({ queryKey: ["selected-prospect", selectedProspectId] }),
+      queryClient.invalidateQueries({ queryKey: ["prospects"] }),
+    ]);
+    if (clearSuggestionError) {
+      console.error("Response was recorded but saved suggestions were not cleared:", clearSuggestionError);
+      toast.warning("Response recorded, but the saved suggestion could not be cleared.");
+    } else {
+      toast.success("Response recorded!");
+    }
   };
 
   const handleFeedback = async (suggestion: Suggestion, feedback: "positive" | "negative") => {
@@ -1144,7 +1243,7 @@ export default function Chats() {
   const showChat = !isMobile || !!selectedProspectId;
 
   return (
-    <div className="flex h-[calc(100dvh-4rem)] overflow-x-hidden" style={{ touchAction: "pan-y" }}>
+    <div className="flex h-full min-h-0 overflow-x-hidden" style={{ touchAction: "pan-y" }}>
       {/* Sidebar - Prospect List */}
       {showSidebar && (
       <div className={`${isMobile ? "w-full" : "w-80"} border-r flex flex-col bg-muted/30`}>
@@ -1499,12 +1598,10 @@ export default function Chats() {
                     <Avatar className="h-10 w-10 shrink-0">
                       {(prospect as any).profile_pic_url ? (
                         <AvatarImage
+                          key={(prospect as any).profile_pic_url}
                           src={(prospect as any).profile_pic_url}
                           alt={prospect.name}
                           referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            e.currentTarget.style.display = "none";
-                          }}
                         />
                       ) : null}
                       <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
@@ -1555,12 +1652,11 @@ export default function Chats() {
               <Avatar className="h-8 w-8 md:h-10 md:w-10 shrink-0">
                 {(selectedProspect as any)?.profile_pic_url ? (
                   <AvatarImage
+                    key={`${(selectedProspect as any).profile_pic_url}-${avatarRefreshVersion}`}
                     src={(selectedProspect as any).profile_pic_url}
                     alt={selectedProspect?.name}
                     referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      e.currentTarget.style.display = "none";
-                    }}
+                    onError={() => void refreshSelectedProspectAvatar()}
                   />
                 ) : null}
                 <AvatarFallback className="bg-primary/10 text-primary text-xs md:text-sm font-medium">
@@ -1757,7 +1853,7 @@ export default function Chats() {
 
             {/* AI Suggestions */}
             {suggestions.length > 0 && (
-              <div className="p-4 border-t bg-muted/30">
+              <div className="min-h-0 max-h-[55dvh] shrink overflow-y-auto overscroll-contain border-t bg-muted/30 p-3 md:max-h-[45dvh] md:p-4">
                 {pushyWarning && (
                   <div className="flex items-center gap-2 text-amber-600 mb-3 text-sm">
                     <AlertTriangle className="h-4 w-4" /><span>{pushyWarning}</span>
@@ -1803,7 +1899,7 @@ export default function Chats() {
             )}
 
             {/* Input Area */}
-            <div className="p-3 md:p-4 border-t chat-input-safe">
+            <div className="shrink-0 p-3 md:p-4 border-t chat-input-safe">
               <input
                 ref={screenshotInputRef}
                 type="file"
