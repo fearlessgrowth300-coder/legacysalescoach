@@ -11,6 +11,7 @@
 // feature" error (e.g. vision-only flows).
 
 import { decryptStoredApiKey } from "./api-key-utils.ts";
+import { toAnthropicContent } from "./anthropic-content.ts";
 
 export type UserAiProvider = "openai" | "gemini" | "anthropic" | "lovable";
 
@@ -181,6 +182,8 @@ export async function resolveUserEmbedTarget(
     };
   }
   // Anthropic has no embeddings — caller must surface a clear error.
+  const lovable = lovableEmbedTarget();
+  if (lovable) return lovable;
   throw new Error("Anthropic has no embeddings API. Add an OpenAI or Gemini key in Settings to enable semantic search.");
 }
 
@@ -224,7 +227,10 @@ export async function userChat(
       ? m.content
       : Array.isArray(m.content) ? m.content.map((p: any) => p.text || "").join("\n") : "";
     if (m.role === "system") { systemParts.push(text); continue; }
-    msgs.push({ role: m.role === "assistant" ? "assistant" : "user", content: text });
+    msgs.push({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: toAnthropicContent(m.content),
+    });
   }
   let system = systemParts.join("\n\n");
   if (opts.response_format?.type === "json_object") {

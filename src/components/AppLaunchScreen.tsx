@@ -15,8 +15,8 @@ export default function AppLaunchScreen({ onComplete }: AppLaunchScreenProps) {
 
   useEffect(() => {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const exitTimer = window.setTimeout(() => setExiting(true), reducedMotion ? 150 : 1050);
-    const completeTimer = window.setTimeout(onComplete, reducedMotion ? 250 : 1420);
+    const exitTimer = window.setTimeout(() => setExiting(true), reducedMotion ? 150 : 1850);
+    const completeTimer = window.setTimeout(onComplete, reducedMotion ? 250 : 2050);
 
     return () => {
       window.clearTimeout(exitTimer);
@@ -26,17 +26,19 @@ export default function AppLaunchScreen({ onComplete }: AppLaunchScreenProps) {
 
   return (
     <div className={`app-launch-screen ${exiting ? "app-launch-screen--exit" : ""}`} aria-label="Opening Legacy Sales Coach">
-      <div className="app-launch-glow" aria-hidden="true" />
-      <div className="app-launch-mark" aria-hidden="true">
-        <span className="app-launch-orbit app-launch-orbit--one" />
-        <span className="app-launch-orbit app-launch-orbit--two" />
-        <img src="/legacy-coach-512.png" alt="" />
-      </div>
-      <div className="app-launch-copy">
-        <p>LEGACY SALES COACH</p>
-        <span>Turn every conversation into confident growth</span>
-      </div>
-      <div className="app-launch-progress" aria-hidden="true"><span /></div>
+      <video
+        className="app-launch-video"
+        src="/launch-animation.mp4"
+        autoPlay
+        muted
+        playsInline
+        preload="auto"
+        aria-hidden="true"
+        onLoadedMetadata={(event) => {
+          event.currentTarget.playbackRate = 2.15;
+          void event.currentTarget.play().catch(() => undefined);
+        }}
+      />
     </div>
   );
 }

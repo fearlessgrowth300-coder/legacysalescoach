@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Settings as SettingsIcon, Key, Save, AlertTriangle, Bot, Trash2, Plus } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { PROVIDER_MODEL, type ActiveAi } from "@/hooks/useActiveAiModel";
 
 const AI_PROVIDERS = [
   { value: "gemini", label: "Google Gemini (free tier — recommended)", help: "Get a free key at aistudio.google.com/apikey", placeholder: "AIza..." },
@@ -164,16 +165,14 @@ export default function Settings() {
                     <span className="font-medium">{AI_PROVIDERS.find((p) => p.value === activeAi.provider)?.label.split(" (")[0]}</span>
                     <code className="ml-2 bg-muted px-2 py-0.5 rounded text-xs">{activeAi.masked}</code>
                     <code className="ml-2 bg-primary/10 text-primary px-2 py-0.5 rounded text-xs font-medium">
-                      {activeAi.provider === "openai" ? "gpt-4o-mini"
-                        : activeAi.provider === "gemini" ? "gemini-2.5-flash"
-                        : "claude-sonnet-4-6"}
+                      {PROVIDER_MODEL[activeAi.provider as ActiveAi["provider"]]?.model}
                     </code>
                   </>
                 ) : (
                   <>
                     <span className="font-medium">Lovable AI (built-in)</span>
                     <code className="ml-2 bg-primary/10 text-primary px-2 py-0.5 rounded text-xs font-medium">
-                      google/gemini-3.5-flash
+                      {PROVIDER_MODEL.lovable.model}
                     </code>
                   </>
                 )}
