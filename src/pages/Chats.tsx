@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { fetchInstagramProfile } from "@/lib/fetch-instagram";
+import { needsAvatarRefresh } from "@/lib/prospect-avatar";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { useNavigate, useParams } from "react-router-dom";
@@ -285,10 +287,7 @@ export default function Chats() {
         if (data?.error) throw new Error(data.error);
         profilePicUrl = data?.profilePicUrl || "";
       } else if (instagramSource) {
-        const { data, error } = await supabase.functions.invoke("fetch-instagram", {
-          body: { username: instagramSource },
-        });
-        if (error) throw error;
+        const data = await fetchInstagramProfile(instagramSource);
         if (data?.error) throw new Error(data.error);
         profilePicUrl = data?.profilePicUrl || "";
       }
@@ -332,7 +331,7 @@ export default function Chats() {
   // Repair missing profile photos lazily when the conversation is opened. Broken
   // remote CDN URLs use the same refresh path from AvatarImage.onError below.
   useEffect(() => {
-    if (selectedProspect && !(selectedProspect as any).profile_pic_url) {
+    if (selectedProspect && needsAvatarRefresh((selectedProspect as any).profile_pic_url)) {
       void refreshSelectedProspectAvatar();
     }
   }, [refreshSelectedProspectAvatar, selectedProspect]);
@@ -548,9 +547,7 @@ export default function Chats() {
       // 2. If Instagram URL, fetch profile
       if (newProspectIg) {
         try {
-          const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
-            body: { username: newProspectIg },
-          });
+          const igData = await fetchInstagramProfile(newProspectIg);
           if (igData && !igData.error) {
             const targetPost = (igData as any).targetPost;
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
@@ -643,9 +640,7 @@ export default function Chats() {
 
       if (newProspectIg) {
         try {
-          const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
-            body: { username: newProspectIg },
-          });
+          const igData = await fetchInstagramProfile(newProspectIg);
           if (igData && !igData.error) {
             const targetPost = (igData as any).targetPost;
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
@@ -757,9 +752,7 @@ export default function Chats() {
         setIsGeneratingFirst(true);
         let profileSummary = `Instagram profile/post URL: ${newProspectIg}. Prospect name entered: ${newProspectName}.`;
         try {
-          const { data: igData } = await supabase.functions.invoke("fetch-instagram", {
-            body: { username: newProspectIg },
-          });
+          const igData = await fetchInstagramProfile(newProspectIg);
           if (igData && !igData.error) {
             const targetPost = (igData as any).targetPost;
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
@@ -913,10 +906,8 @@ export default function Chats() {
     if (instagramUrl && activeWorkspace) {
       toast.info("🔍 Instagram link detected — analyzing profile/post...", { duration: 3000 });
       try {
-        const { data: igData, error: igError } = await supabase.functions.invoke("fetch-instagram", {
-          body: { username: instagramUrl },
-        });
-        if (!igError && igData && !igData.error) {
+        const igData = await fetchInstagramProfile(instagramUrl);
+        if (igData && !igData.error) {
           const targetPost = (igData as any).targetPost;
           enrichedMessage = `${enrichedMessage}\n\n--- INSTAGRAM AUTO-SCRAPED ---\n${igData.summary || ""}`;
           toast.success(`✅ Analyzed @${igData.username || "Instagram"}`, { duration: 4000 });
@@ -932,8 +923,6 @@ export default function Chats() {
             } : {}),
           } as any).eq("id", selectedProspectId);
           queryClient.invalidateQueries({ queryKey: ["selected-prospect"] });
-        } else if (igError) {
-          throw igError;
         }
       } catch (e) {
         console.error("Instagram auto-scrape error:", e);
@@ -1657,7 +1646,9 @@ export default function Chats() {
                     src={(selectedProspect as any).profile_pic_url}
                     alt={selectedProspect?.name}
                     referrerPolicy="no-referrer"
-                    onError={() => void refreshSelectedProspectAvatar()}
+                    onLoadingStatusChange={(status) => {
+                      if (status === "error") void refreshSelectedProspectAvatar();
+                    }}
                   />
                 ) : null}
                 <AvatarFallback className="bg-primary/10 text-primary text-xs md:text-sm font-medium">
