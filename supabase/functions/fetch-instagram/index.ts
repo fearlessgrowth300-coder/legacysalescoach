@@ -1,11 +1,18 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import {
+  avatarExtensionForContentType,
+  avatarStoragePath,
+  classifyApifyRunStatus,
   extractInstagramUsername,
   isInstagramPostUrl,
   normalizeInstagramProfile,
   pickInstagramProfilePicture,
 } from "./lib.ts";
+
+const AVATAR_BUCKET = "prospect-avatars";
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 365 * 5;
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
@@ -22,7 +29,57 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-async function fetchInstagramProfile(username: string, apiKey: string): Promise<any | null> {
+async function startProfileRun(username: string, apiKey: string) {
+  const response = await fetch(
+    `https://api.apify.com/v2/acts/apify~instagram-profile-scraper/runs?token=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usernames: [username], resultsLimit: 1 }),
+      signal: AbortSignal.timeout(20000),
+    },
+  );
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error("Apify run start error:", response.status, errText);
+    throw new Error(`Apify Instagram profile API error: ${response.status}`);
+  }
+  const payload = await response.json();
+  return {
+    runId: payload?.data?.id as string,
+    datasetId: payload?.data?.defaultDatasetId as string,
+  };
+}
+
+async function getRunStatus(runId: string, apiKey: string): Promise<string> {
+  const response = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${apiKey}`, {
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error("Apify run status error:", response.status, errText);
+    throw new Error(`Apify run status error: ${response.status}`);
+  }
+  const payload = await response.json();
+  return payload?.data?.status || "";
+}
+
+async function readFirstDatasetItem(datasetId: string, apiKey: string): Promise<any | null> {
+  const response = await fetch(
+    `https://api.apify.com/v2/datasets/${datasetId}/items?limit=1&token=${apiKey}`,
+    { signal: AbortSignal.timeout(30000) },
+  );
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error("Apify dataset read error:", response.status, errText);
+    throw new Error(`Apify dataset read error: ${response.status}`);
+  }
+  const items = await response.json();
+  return Array.isArray(items) && items.length > 0 ? items[0] : null;
+}
+
+/** Synchronous profile fetch, used only to enrich a post/reel owner. */
+async function fetchInstagramProfileSync(username: string, apiKey: string): Promise<any | null> {
   const response = await fetch(
     `https://api.apify.com/v2/acts/apify~instagram-profile-scraper/run-sync-get-dataset-items?token=${apiKey}`,
     {
@@ -41,34 +98,62 @@ async function fetchInstagramProfile(username: string, apiKey: string): Promise<
   return Array.isArray(results) && results.length > 0 ? results[0] : null;
 }
 
+/**
+ * Downloads the Instagram CDN avatar and stores it permanently in Cloud storage.
+ * Returns "" when caching fails so the client can retry later instead of
+ * persisting an expiring CDN URL.
+ */
 async function cacheProfilePicture(supabaseAdmin: any, userId: string, username: string, sourceUrl: string): Promise<string> {
   if (!sourceUrl) return "";
   try {
     const response = await fetch(sourceUrl, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; LegacySalesCoach/1.0)" },
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(15000),
     });
-    if (!response.ok) return sourceUrl;
+    if (!response.ok) {
+      console.warn("Instagram avatar download failed:", response.status);
+      return "";
+    }
 
-    const contentType = response.headers.get("content-type") || "image/jpeg";
-    if (!contentType.startsWith("image/")) return sourceUrl;
-    const extension = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
-    const safeUsername = username.replace(/[^a-z0-9._-]/gi, "_").toLowerCase() || "instagram";
-    const path = `${userId}/instagram/${safeUsername}.${extension}`;
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.startsWith("image/")) {
+      console.warn("Instagram avatar is not an image:", contentType);
+      return "";
+    }
+
     const bytes = new Uint8Array(await response.arrayBuffer());
-    const { error } = await supabaseAdmin.storage.from("prospect-avatars").upload(path, bytes, {
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_AVATAR_BYTES) {
+      console.warn("Instagram avatar rejected by size:", bytes.byteLength);
+      return "";
+    }
+
+    const extension = avatarExtensionForContentType(contentType);
+    const path = avatarStoragePath(userId, username, extension);
+    const { error } = await supabaseAdmin.storage.from(AVATAR_BUCKET).upload(path, bytes, {
       contentType,
       cacheControl: "86400",
       upsert: true,
     });
     if (error) {
       console.warn("Instagram avatar cache upload failed:", error.message);
-      return sourceUrl;
+      return "";
     }
-    return supabaseAdmin.storage.from("prospect-avatars").getPublicUrl(path).data.publicUrl || sourceUrl;
+
+    const { data: bucket } = await supabaseAdmin.storage.getBucket(AVATAR_BUCKET);
+    if (bucket?.public) {
+      return supabaseAdmin.storage.from(AVATAR_BUCKET).getPublicUrl(path).data.publicUrl || "";
+    }
+    const { data: signed, error: signError } = await supabaseAdmin.storage
+      .from(AVATAR_BUCKET)
+      .createSignedUrl(path, SIGNED_URL_TTL_SECONDS);
+    if (signError) {
+      console.warn("Instagram avatar signing failed:", signError.message);
+      return "";
+    }
+    return signed?.signedUrl || "";
   } catch (error) {
     console.warn("Instagram avatar cache failed:", error);
-    return sourceUrl;
+    return "";
   }
 }
 
@@ -137,39 +222,35 @@ serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
   try {
-    // Auth gate: require valid JWT or service-role key
+    // Auth gate: require valid JWT
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return json({ error: "Unauthorized" }, 401);
     }
     const token = authHeader.replace("Bearer ", "").trim();
     const supabaseAuth = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: authHeader } } }
+      { global: { headers: { Authorization: authHeader } } },
     );
     const { data: claims, error: claimsErr } = await supabaseAuth.auth.getClaims(token);
     if (claimsErr || !claims?.claims?.sub) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return json({ error: "Unauthorized" }, 401);
     }
 
-    const { username: rawInput } = await req.json();
+    const { username: rawInput, runId, datasetId } = await req.json();
     if (!rawInput) {
-      return new Response(JSON.stringify({ error: "username or URL required" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return json({ error: "username or URL required" }, 400);
     }
 
     const username = extractInstagramUsername(rawInput);
     const APIFY_API_KEY = Deno.env.get("APIFY_API_KEY");
     if (!APIFY_API_KEY) {
-      throw new Error("APIFY_API_KEY is not configured");
+      return json({ error: "APIFY_API_KEY is not configured — add it in Cloud secrets" }, 400);
     }
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -186,7 +267,7 @@ serve(async (req) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ directUrls: [rawInput], resultsLimit: 1 }),
           signal: AbortSignal.timeout(60000),
-        }
+        },
       );
 
       if (!postResponse.ok) {
@@ -198,16 +279,14 @@ serve(async (req) => {
       const postResults = await postResponse.json();
       const post = Array.isArray(postResults) && postResults.length > 0 ? postResults[0] : null;
       if (!post) {
-        return new Response(JSON.stringify({ error: "Instagram post not found", url: rawInput }), {
-          status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return json({ error: "Instagram post not found", url: rawInput }, 404);
       }
 
       const postData = summarizePost(post, rawInput);
       let enriched: any = postData;
       if (postData.username && postData.username !== "unknown") {
         try {
-          const profile = await fetchInstagramProfile(postData.username, APIFY_API_KEY);
+          const profile = await fetchInstagramProfileSync(postData.username, APIFY_API_KEY);
           if (profile) {
             const profileData = normalizeInstagramProfile(profile, postData.username);
             enriched = {
@@ -229,33 +308,43 @@ serve(async (req) => {
         enriched.profilePicUrl || postData.profilePicUrl,
       );
 
-      return new Response(JSON.stringify(enriched), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return json(enriched);
     }
 
-    console.log(`Fetching Instagram profile for: ${username}`);
+    // Asynchronous profile flow: start a run, then poll it from the client.
+    if (!runId || !datasetId) {
+      console.log(`Starting async Instagram profile run for: ${username}`);
+      const started = await startProfileRun(username, APIFY_API_KEY);
+      if (!started.runId || !started.datasetId) {
+        return json({ error: "Could not start Instagram analysis — please try again" }, 502);
+      }
+      return json({ pending: true, runId: started.runId, datasetId: started.datasetId, retryAfterMs: 3000 }, 202);
+    }
 
-    const profile = await fetchInstagramProfile(username, APIFY_API_KEY);
+    const status = await getRunStatus(String(runId), APIFY_API_KEY);
+    const state = classifyApifyRunStatus(status);
+    if (state === "pending") {
+      return json({ pending: true, runId, datasetId, retryAfterMs: 3000, status }, 202);
+    }
+    if (state === "failed") {
+      return json({ error: `Instagram analysis ${status.toLowerCase() || "failed"} — please try again`, status }, 502);
+    }
 
+    const profile = await readFirstDatasetItem(String(datasetId), APIFY_API_KEY);
     if (!profile) {
-      return new Response(JSON.stringify({ error: "Profile not found", username }), {
-        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return json({ error: "Profile not found", username }, 404);
     }
 
     const data = normalizeInstagramProfile(profile, username);
     data.profilePicUrl = await cacheProfilePicture(supabaseAdmin, userId, data.username, data.profilePicUrl);
     const summary = buildProfileSummary(data);
 
-    return new Response(JSON.stringify({ ...data, summary }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return json({ ...data, summary });
   } catch (error) {
     console.error("fetch-instagram error:", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 });
