@@ -30,6 +30,113 @@ import ConversationIntelligencePanel, { type ConversationAnalysis } from "@/comp
 import SuggestionCard, { ReferralWarningBanner, type Suggestion } from "@/components/SuggestionCard";
 type FeedbackMap = Record<number, "positive" | "negative">;
 
+type ScreenshotSpeaker = "me" | "them" | "unknown";
+type ScreenshotMessage = {
+  speaker: ScreenshotSpeaker;
+  text: string;
+  timestamp?: string | null;
+  status?: string | null;
+  reply_to?: string | null;
+  order?: number;
+};
+type ScreenshotAnalysis = {
+  name?: string | null;
+  platform?: string | null;
+  messages?: ScreenshotMessage[];
+  latest_speaker?: ScreenshotSpeaker;
+  latest_message?: string | null;
+  visual_context?: string[];
+  status_signals?: string[];
+  conversation_summary?: string | null;
+  uncertainty_notes?: string[];
+};
+type ProcessedScreenshot = {
+  filePath: string;
+  text: string;
+  analysis: ScreenshotAnalysis | null;
+};
+
+const SCREENSHOT_TRANSCRIPT_MARKER = "--- SCREENSHOT TRANSCRIPT ---";
+
+const parseTranscriptMessages = (text: string): ScreenshotMessage[] => {
+  const messages: ScreenshotMessage[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || /^NAME:|^PLATFORM:|^---+$/.test(line)) continue;
+    const match = line.match(/^(Them|Me|Unknown)\s*:\s*(.*)$/i);
+    if (match) {
+      const speaker = match[1].toLowerCase() === "me" ? "me" : match[1].toLowerCase() === "them" ? "them" : "unknown";
+      if (match[2].trim()) messages.push({ speaker, text: match[2].trim(), order: messages.length + 1 });
+    } else if (messages.length > 0) {
+      messages[messages.length - 1].text += `\n${line}`;
+    }
+  }
+  return messages;
+};
+
+const normalizeScreenshotMessage = (message: ScreenshotMessage) =>
+  `${message.speaker}:${message.text}`.toLowerCase().replace(/\s+/g, " ").trim();
+
+// Conversation screenshots commonly overlap. Remove only an exact tail/head
+// overlap so repeated real messages elsewhere in the thread are preserved.
+const mergeScreenshotMessages = (screenshots: ProcessedScreenshot[]) => {
+  const merged: Array<ScreenshotMessage & { filePath: string }> = [];
+  for (const screenshot of screenshots) {
+    const current = (screenshot.analysis?.messages || [])
+      .filter((message) => message?.text?.trim())
+      .map((message, index) => ({ ...message, order: message.order ?? index + 1, filePath: screenshot.filePath }))
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    let overlap = 0;
+    const maxOverlap = Math.min(merged.length, current.length);
+    for (let size = maxOverlap; size > 0; size--) {
+      const previousTail = merged.slice(-size).map(normalizeScreenshotMessage);
+      const currentHead = current.slice(0, size).map(normalizeScreenshotMessage);
+      if (previousTail.every((value, index) => value === currentHead[index])) {
+        overlap = size;
+        break;
+      }
+    }
+    merged.push(...current.slice(overlap));
+  }
+  return merged;
+};
+
+const buildScreenshotContext = (screenshots: ProcessedScreenshot[], userNote = "") => {
+  const visualAnalyses = screenshots.map((screenshot, index) => ({
+    screenshot: index + 1,
+    name: screenshot.analysis?.name || null,
+    platform: screenshot.analysis?.platform || null,
+    latest_speaker: screenshot.analysis?.latest_speaker || null,
+    latest_message: screenshot.analysis?.latest_message || null,
+    visual_context: screenshot.analysis?.visual_context || [],
+    status_signals: screenshot.analysis?.status_signals || [],
+    conversation_summary: screenshot.analysis?.conversation_summary || null,
+    uncertainty_notes: screenshot.analysis?.uncertainty_notes || [],
+  }));
+  return [
+    userNote.trim() ? `SALESPERSON NOTE:\n${userNote.trim()}` : "",
+    `SCREENSHOT VISUAL ANALYSIS:\n${JSON.stringify(visualAnalyses)}`,
+  ].filter(Boolean).join("\n\n");
+};
+
+function ChatScreenshotPreview({ filePath }: { filePath: string }) {
+  const [signedUrl, setSignedUrl] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    supabase.storage.from("chat-screenshots").createSignedUrl(filePath, 3600).then(({ data, error }) => {
+      if (active && !error && data?.signedUrl) setSignedUrl(data.signedUrl);
+    });
+    return () => { active = false; };
+  }, [filePath]);
+
+  if (!signedUrl) {
+    return <div className="mb-2 h-20 w-28 rounded border bg-background/40 flex items-center justify-center"><Image className="h-5 w-5 opacity-50" /></div>;
+  }
+  return <img src={signedUrl} alt="Conversation screenshot" className="mb-2 max-h-48 max-w-full rounded border object-contain" />;
+}
+
 export default function Chats() {
   const { prospectId } = useParams();
   const navigate = useNavigate();
@@ -66,6 +173,9 @@ export default function Chats() {
   const [prospectType, setProspectType] = useState<string | null>(null);
   const [conversationAnalysis, setConversationAnalysis] = useState<ConversationAnalysis | null>(null);
   const [isAnalyzingIntel, setIsAnalyzingIntel] = useState(false);
+  const [screenshotContextNote, setScreenshotContextNote] = useState("");
+  const [pendingScreenshot, setPendingScreenshot] = useState<ProcessedScreenshot | null>(null);
+  const [pendingScreenshotNote, setPendingScreenshotNote] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -244,6 +354,7 @@ export default function Chats() {
       setUploadStep("info");
       setExtractedConversation("");
       setFirstMessageSuggestions([]);
+      setScreenshotContextNote("");
     }
   };
 
@@ -260,6 +371,80 @@ export default function Chats() {
     URL.revokeObjectURL(screenshotPreviews[index]);
     setScreenshotFiles((prev) => prev.filter((_, i) => i !== index));
     setScreenshotPreviews((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const uploadAndAnalyzeScreenshot = async (file: File, index: number, userContext = ""): Promise<ProcessedScreenshot | null> => {
+    if (!user) return null;
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+    const filePath = `${user.id}/${Date.now()}-${index}-${crypto.randomUUID()}-${safeName}`;
+    const { error: uploadError } = await supabase.storage.from("chat-screenshots").upload(filePath, file);
+    if (uploadError) {
+      console.error("Screenshot upload error:", uploadError);
+      return null;
+    }
+
+    const { data, error } = await supabase.functions.invoke("ocr-screenshot", {
+      body: { filePath, userContext },
+    });
+    if (error || !data?.text) {
+      console.error("Screenshot analysis error:", error || "No text returned");
+      return null;
+    }
+    return {
+      filePath,
+      text: data.text,
+      analysis: (data.analysis || null) as ScreenshotAnalysis | null,
+    };
+  };
+
+  const saveScreenshotConversation = async (prospectId: string, screenshots: ProcessedScreenshot[], userNote = "") => {
+    if (!user) return;
+    const extractedMessages = mergeScreenshotMessages(screenshots);
+    const rows: any[] = [];
+    const baseTime = Date.now() - (extractedMessages.length + (userNote.trim() ? 1 : 0)) * 1000;
+
+    if (userNote.trim()) {
+      rows.push({
+        user_id: user.id,
+        prospect_id: prospectId,
+        content: userNote.trim(),
+        direction: "context",
+        thread_type: currentThreadType,
+        screenshot_url: screenshots[0]?.filePath || null,
+        created_at: new Date(baseTime).toISOString(),
+      });
+    }
+
+    if (extractedMessages.length > 0) {
+      extractedMessages.forEach((message, index) => {
+        rows.push({
+          user_id: user.id,
+          prospect_id: prospectId,
+          content: message.text.trim(),
+          direction: message.speaker === "me" ? "outbound" : message.speaker === "them" ? "inbound" : "unknown",
+          thread_type: currentThreadType,
+          screenshot_url: message.filePath,
+          created_at: new Date(baseTime + (index + (userNote.trim() ? 1 : 0)) * 1000).toISOString(),
+        });
+      });
+    } else {
+      screenshots.forEach((screenshot, index) => {
+        rows.push({
+          user_id: user.id,
+          prospect_id: prospectId,
+          content: screenshot.text,
+          direction: "inbound",
+          thread_type: currentThreadType,
+          screenshot_url: screenshot.filePath,
+          created_at: new Date(Date.now() + index * 1000).toISOString(),
+        });
+      });
+    }
+
+    if (rows.length > 0) {
+      const { error } = await supabase.from("chat_messages").insert(rows);
+      if (error) throw error;
+    }
   };
 
   // Process all screenshots via OCR and create prospect
@@ -307,33 +492,23 @@ export default function Chats() {
         } catch (e) { console.error("IG fetch error:", e); }
       }
 
-      // 3. Upload and OCR all screenshots sequentially
-      const allTexts: string[] = [];
+      // 3. Upload and visually analyze all screenshots sequentially so their
+      // chronological order is preserved and overlapping screens can be merged.
+      const processedScreenshots: ProcessedScreenshot[] = [];
       for (let i = 0; i < screenshotFiles.length; i++) {
-        const file = screenshotFiles[i];
-        const filePath = `${user.id}/${Date.now()}-${i}-${file.name}`;
-        const { error: uploadError } = await supabase.storage.from("chat-screenshots").upload(filePath, file);
-        if (uploadError) { console.error("Upload error:", uploadError); continue; }
-
-        const { data, error } = await supabase.functions.invoke("ocr-screenshot", { body: { filePath } });
-        if (!error && data?.text) {
-          allTexts.push(`[Screenshot ${i + 1}]:\n${data.text}`);
-        }
+        const processed = await uploadAndAnalyzeScreenshot(screenshotFiles[i], i, screenshotContextNote);
+        if (processed) processedScreenshots.push(processed);
       }
+      if (processedScreenshots.length === 0) throw new Error("None of the screenshots could be analyzed");
 
-      const fullConversation = allTexts.join("\n\n");
+      const fullConversation = processedScreenshots
+        .map((screenshot, index) => `[Screenshot ${index + 1}]:\n${screenshot.text}`)
+        .join("\n\n");
+      const screenshotContext = buildScreenshotContext(processedScreenshots, screenshotContextNote);
       setExtractedConversation(fullConversation);
 
-      // 4. Save the extracted conversation as inbound messages
-      if (fullConversation) {
-        await supabase.from("chat_messages").insert({
-          user_id: user.id,
-          prospect_id: prospect.id,
-          content: fullConversation,
-          direction: "inbound",
-          thread_type: currentThreadType,
-        });
-      }
+      // 4. Save each detected bubble with the correct speaker/direction.
+      await saveScreenshotConversation(prospect.id, processedScreenshots, screenshotContextNote);
 
       // 5. Ask AI for next reply suggestion based on full conversation
       const { data: suggestData, error: suggestError } = await supabase.functions.invoke("chat-suggest", {
@@ -342,6 +517,7 @@ export default function Chats() {
           message: fullConversation,
           threadType: currentThreadType,
           mode: "continue",
+          screenshotContext,
         },
       });
 
@@ -410,29 +586,19 @@ export default function Chats() {
         } catch (e) { console.error("IG fetch error:", e); }
       }
 
-      const allTexts: string[] = [];
+      const processedScreenshots: ProcessedScreenshot[] = [];
       for (let i = 0; i < screenshotFiles.length; i++) {
-        const file = screenshotFiles[i];
-        const filePath = `${user.id}/${Date.now()}-${i}-${file.name}`;
-        const { error: uploadError } = await supabase.storage.from("chat-screenshots").upload(filePath, file);
-        if (uploadError) { console.error("Upload error:", uploadError); continue; }
-        const { data, error } = await supabase.functions.invoke("ocr-screenshot", { body: { filePath } });
-        if (!error && data?.text) {
-          allTexts.push(`[Screenshot ${i + 1}]:\n${data.text}`);
-        }
+        const processed = await uploadAndAnalyzeScreenshot(screenshotFiles[i], i, screenshotContextNote);
+        if (processed) processedScreenshots.push(processed);
       }
+      if (processedScreenshots.length === 0) throw new Error("None of the screenshots could be analyzed");
 
-      const fullConversation = allTexts.join("\n\n");
+      const fullConversation = processedScreenshots
+        .map((screenshot, index) => `[Screenshot ${index + 1}]:\n${screenshot.text}`)
+        .join("\n\n");
+      const screenshotContext = buildScreenshotContext(processedScreenshots, screenshotContextNote);
 
-      if (fullConversation) {
-        await supabase.from("chat_messages").insert({
-          user_id: user.id,
-          prospect_id: prospect.id,
-          content: fullConversation,
-          direction: "inbound",
-          thread_type: currentThreadType,
-        });
-      }
+      await saveScreenshotConversation(prospect.id, processedScreenshots, screenshotContextNote);
 
       const { data: suggestData, error: suggestError } = await supabase.functions.invoke("chat-suggest", {
         body: {
@@ -440,6 +606,7 @@ export default function Chats() {
           message: fullConversation || "The prospect has ghosted me. They saw my last message but didn't reply.",
           threadType: currentThreadType,
           mode: "reengage",
+          screenshotContext,
         },
       });
 
@@ -594,19 +761,18 @@ export default function Chats() {
     setIsOcrProcessing(true);
 
     try {
-      const filePath = `${user.id}/${Date.now()}-${file.name}`;
-      const { error: uploadError } = await supabase.storage.from("chat-screenshots").upload(filePath, file);
-      if (uploadError) throw uploadError;
+      const existingNote = messageInput.trim();
+      const processed = await uploadAndAnalyzeScreenshot(file, 0, existingNote);
+      if (!processed) throw new Error("Could not analyze screenshot");
 
-      const { data, error } = await supabase.functions.invoke("ocr-screenshot", { body: { filePath } });
-      if (error) throw error;
-
-      if (data?.text) {
-        setMessageInput(data.text);
-        toast.success("Text extracted from screenshot!");
-      } else {
-        toast.error("Could not extract text from screenshot");
-      }
+      setPendingScreenshot(processed);
+      setPendingScreenshotNote(existingNote);
+      setMessageInput([
+        existingNote,
+        SCREENSHOT_TRANSCRIPT_MARKER,
+        processed.text,
+      ].filter(Boolean).join("\n\n"));
+      toast.success("Screenshot read with speaker order and visual context");
     } catch (e: any) {
       console.error("OCR error:", e);
       toast.error("Failed to process screenshot");
@@ -698,23 +864,58 @@ export default function Chats() {
       }
     }
 
-    await supabase.from("chat_messages").insert({
-      user_id: user!.id,
-      prospect_id: selectedProspectId,
-      content: messageInput,
-      direction: "inbound",
-      thread_type: currentThreadType,
-    });
+    let screenshotForRequest = pendingScreenshot;
+    let screenshotContext = "";
+    if (pendingScreenshot) {
+      const markerIndex = messageInput.indexOf(SCREENSHOT_TRANSCRIPT_MARKER);
+      const userNote = markerIndex >= 0
+        ? messageInput.slice(0, markerIndex).trim()
+        : pendingScreenshotNote;
+      const editedTranscript = markerIndex >= 0
+        ? messageInput.slice(markerIndex + SCREENSHOT_TRANSCRIPT_MARKER.length).trim()
+        : messageInput.trim();
+      const editedMessages = parseTranscriptMessages(editedTranscript);
+      screenshotForRequest = {
+        ...pendingScreenshot,
+        text: editedTranscript || pendingScreenshot.text,
+        analysis: {
+          ...(pendingScreenshot.analysis || {}),
+          ...(editedMessages.length > 0 ? { messages: editedMessages } : {}),
+        },
+      };
+      screenshotContext = buildScreenshotContext([screenshotForRequest], userNote);
+      await saveScreenshotConversation(selectedProspectId, [screenshotForRequest], userNote);
+    } else {
+      await supabase.from("chat_messages").insert({
+        user_id: user!.id,
+        prospect_id: selectedProspectId,
+        content: messageInput,
+        direction: "inbound",
+        thread_type: currentThreadType,
+      });
+    }
 
     try {
       const invokeGenerate = async () => {
         const res = await supabase.functions.invoke("generate-reply", {
-          body: { prospectId: selectedProspectId, message: enrichedMessage, threadType: currentThreadType },
+          body: {
+            prospectId: selectedProspectId,
+            message: enrichedMessage,
+            threadType: currentThreadType,
+            screenshotPath: screenshotForRequest?.filePath || null,
+            screenshotContext,
+          },
         });
         if (res.error && /401|Unauthorized/i.test(String(res.error?.message || ""))) {
           await supabase.auth.refreshSession();
           return await supabase.functions.invoke("generate-reply", {
-            body: { prospectId: selectedProspectId, message: enrichedMessage, threadType: currentThreadType },
+            body: {
+              prospectId: selectedProspectId,
+              message: enrichedMessage,
+              threadType: currentThreadType,
+              screenshotPath: screenshotForRequest?.filePath || null,
+              screenshotContext,
+            },
           });
         }
         return res;
@@ -743,6 +944,8 @@ export default function Chats() {
     }
 
     setMessageInput("");
+    setPendingScreenshot(null);
+    setPendingScreenshotNote("");
     queryClient.invalidateQueries({ queryKey: ["messages"] });
     queryClient.invalidateQueries({ queryKey: ["prospects"] });
     setIsAnalyzing(false);
@@ -1078,6 +1281,17 @@ export default function Chats() {
                           </Button>
                         </div>
 
+                        <div>
+                          <Label>Anything the AI should know? (optional)</Label>
+                          <Textarea
+                            value={screenshotContextNote}
+                            onChange={(e) => setScreenshotContextNote(e.target.value)}
+                            placeholder="Example: We met in a Facebook group, this is the full conversation, and I want to know what to say next."
+                            className="mt-1 min-h-[72px]"
+                          />
+                          <p className="text-xs text-muted-foreground mt-1">This note is analyzed together with the screenshots but kept separate from the prospect's words.</p>
+                        </div>
+
                         {screenshotPreviews.length > 0 && (
                           <div>
                             <p className="text-sm font-medium mb-2">{screenshotFiles.length} screenshot(s) selected</p>
@@ -1172,6 +1386,17 @@ export default function Chats() {
                           <Button variant="outline" onClick={() => bulkScreenshotInputRef.current?.click()}>
                             <Image className="h-4 w-4 mr-2" />Add Screenshots
                           </Button>
+                        </div>
+
+                        <div>
+                          <Label>What happened outside the screenshot? (optional)</Label>
+                          <Textarea
+                            value={screenshotContextNote}
+                            onChange={(e) => setScreenshotContextNote(e.target.value)}
+                            placeholder="Example: They viewed my last message three days ago and have not replied."
+                            className="mt-1 min-h-[72px]"
+                          />
+                          <p className="text-xs text-muted-foreground mt-1">The AI will combine this note with visible timestamps, seen status, reactions, and the full transcript.</p>
                         </div>
 
                         {screenshotPreviews.length > 0 && (
@@ -1493,16 +1718,31 @@ export default function Chats() {
             {/* Messages */}
             <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollAreaRef}>
               <div className="space-y-4">
-                {messages?.map((message) => (
-                  <div key={message.id} className={`flex ${message.direction === "outbound" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[85%] md:max-w-[70%] rounded-lg p-3 ${message.direction === "outbound" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                      {message.direction === "inbound" && message.detected_tone && (
-                        <p className="text-xs mt-1 opacity-70">Tone: {message.detected_tone}</p>
-                      )}
+                {messages?.map((message, index) => {
+                  const isContext = message.direction === "context";
+                  const isUnknown = message.direction === "unknown";
+                  const isOutbound = message.direction === "outbound";
+                  const showScreenshot = Boolean(message.screenshot_url) && messages[index - 1]?.screenshot_url !== message.screenshot_url;
+                  return (
+                    <div key={message.id} className={`flex ${isContext || isUnknown ? "justify-center" : isOutbound ? "justify-end" : "justify-start"}`}>
+                      <div className={`max-w-[85%] md:max-w-[70%] rounded-lg p-3 ${
+                        isContext
+                          ? "border border-dashed bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100"
+                          : isUnknown
+                            ? "border border-dashed bg-muted/50"
+                          : isOutbound ? "bg-primary text-primary-foreground" : "bg-muted"
+                      }`}>
+                        {showScreenshot && message.screenshot_url && <ChatScreenshotPreview filePath={message.screenshot_url} />}
+                        {isContext && <p className="text-[10px] uppercase tracking-wide font-semibold opacity-70 mb-1">Salesperson context</p>}
+                        {isUnknown && <p className="text-[10px] uppercase tracking-wide font-semibold opacity-70 mb-1">Unknown speaker — verify this message</p>}
+                        <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                        {message.direction === "inbound" && message.detected_tone && (
+                          <p className="text-xs mt-1 opacity-70">Tone: {message.detected_tone}</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {isGeneratingFirst && !messages?.length && suggestions.length === 0 && (
                   <div className="flex justify-center py-6">
                     <div className="flex items-center gap-2 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
@@ -1575,6 +1815,28 @@ export default function Chats() {
                   e.target.value = "";
                 }}
               />
+              {pendingScreenshot && (
+                <div className="mb-2 flex items-center justify-between gap-2 rounded-md border bg-muted/50 px-3 py-2">
+                  <div className="flex min-w-0 items-center gap-2 text-xs">
+                    <Camera className="h-4 w-4 shrink-0 text-primary" />
+                    <span className="truncate">Screenshot attached. Its image, visual signals, speaker order, and edited transcript will be analyzed together.</span>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0"
+                    onClick={() => {
+                      setPendingScreenshot(null);
+                      setMessageInput(pendingScreenshotNote);
+                      setPendingScreenshotNote("");
+                    }}
+                    title="Remove attached screenshot"
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              )}
               {/* Mode toggle */}
               <div className="flex items-center gap-2 mb-2">
                 <Button
@@ -1602,7 +1864,13 @@ export default function Chats() {
                     placeholder={isOcrProcessing ? "Extracting text from screenshot..." : isRefineMode ? "Paste your draft message here and we'll perfect it..." : "Paste the prospect's message here..."}
                     className="min-h-[80px] pr-12"
                     disabled={isOcrProcessing}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); isRefineMode ? handleRefineDraft() : handleSendInbound(); } }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        if (isRefineMode) handleRefineDraft();
+                        else handleSendInbound();
+                      }
+                    }}
                   />
                   <Button
                     variant="ghost"
