@@ -146,6 +146,13 @@ export default function Chats() {
   });
   const selectedProspect = selectedProspectData || prospects?.find((p) => p.id === selectedProspectId);
 
+  // Persist the prospect's chosen conversation mode across navigation instead
+  // of silently resetting every chat to Friend mode.
+  useEffect(() => {
+    if (!selectedProspectId || !selectedProspect) return;
+    setCurrentThreadType(selectedProspect.reply_mode === "expert" ? "expert" : "friend");
+  }, [selectedProspectId, selectedProspect]);
+
   // Auto-switch to instagram tab when viewing a TikTok prospect chat (so chat UI shows, not TikTok outreach)
   useEffect(() => {
     if (selectedProspectId && selectedProspect && (selectedProspect as any).platform === "tiktok" && platformTab === "tiktok") {
@@ -752,6 +759,17 @@ export default function Chats() {
       thread_type: currentThreadType,
       is_ai_suggestion: true,
     });
+    const { data: analytics } = await supabase
+      .from("conversation_analytics")
+      .select("id, ai_suggestions_used")
+      .eq("user_id", user!.id)
+      .eq("prospect_id", selectedProspectId)
+      .maybeSingle();
+    if (analytics) {
+      await supabase.from("conversation_analytics").update({
+        ai_suggestions_used: (analytics.ai_suggestions_used || 0) + 1,
+      }).eq("id", analytics.id);
+    }
     setSuggestions([]);
     setPushyWarning(null);
     setFeedbackMap({});
@@ -774,6 +792,19 @@ export default function Chats() {
         conversation_stage: conversationStage || selectedProspect?.conversation_stage,
         framework_used: suggestion.frameworkUsed || null,
       });
+      if (feedback === "positive") {
+        const lastInbound = messages?.filter((m) => m.direction === "inbound").pop();
+        await supabase.from("knowledge_chunks").insert({
+          user_id: user!.id,
+          workspace_id: activeWorkspace.id,
+          source_type: "conversation",
+          category: conversationStage === "offer" ? "closing_techniques" : "approved_reply",
+          content: `PROSPECT: "${(lastInbound?.content || "").substring(0, 500)}"\nAPPROVED REPLY: "${suggestion.text.substring(0, 500)}"\nFramework: ${suggestion.frameworkUsed || "natural conversation"}`,
+          brain_type: currentThreadType,
+          trigger_phrases: `${conversationStage || selectedProspect?.conversation_stage || "general"}, approved, ${currentThreadType}`,
+          relevance_score: 95,
+        });
+      }
       toast.success(feedback === "positive" ? "👍 Got it! Will generate more like this" : "👎 Noted! Will adjust future suggestions");
     } catch (e) {
       console.error("Feedback error:", e);
@@ -1325,7 +1356,15 @@ export default function Chats() {
                 </p>
               </div>
               {!isMobile && (
-                <Select value={currentThreadType} onValueChange={(v: "friend" | "expert") => { setCurrentThreadType(v); setSuggestions([]); }}>
+                <Select value={currentThreadType} onValueChange={async (v: "friend" | "expert") => {
+                  setCurrentThreadType(v);
+                  setSuggestions([]);
+                  if (selectedProspectId) {
+                    await supabase.from("prospects").update({ reply_mode: v }).eq("id", selectedProspectId);
+                    queryClient.invalidateQueries({ queryKey: ["selected-prospect", selectedProspectId] });
+                    queryClient.invalidateQueries({ queryKey: ["prospects"] });
+                  }
+                }}>
                   <SelectTrigger className="w-32 h-8"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="friend"><div className="flex items-center gap-2"><Heart className="h-3 w-3 text-pink-500" />Friend</div></SelectItem>
@@ -1342,10 +1381,16 @@ export default function Chats() {
                 <DropdownMenuContent align="end" side="bottom" className="z-[100]">
                   {isMobile && (
                     <>
-                      <DropdownMenuItem onClick={() => { setCurrentThreadType("friend"); setSuggestions([]); }}>
+                      <DropdownMenuItem onClick={async () => {
+                        setCurrentThreadType("friend"); setSuggestions([]);
+                        if (selectedProspectId) await supabase.from("prospects").update({ reply_mode: "friend" }).eq("id", selectedProspectId);
+                      }}>
                         <Heart className="h-3 w-3 mr-2 text-pink-500" />Friend Mode
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => { setCurrentThreadType("expert"); setSuggestions([]); }}>
+                      <DropdownMenuItem onClick={async () => {
+                        setCurrentThreadType("expert"); setSuggestions([]);
+                        if (selectedProspectId) await supabase.from("prospects").update({ reply_mode: "expert" }).eq("id", selectedProspectId);
+                      }}>
                         <Briefcase className="h-3 w-3 mr-2 text-blue-500" />Expert Mode
                       </DropdownMenuItem>
                     </>
