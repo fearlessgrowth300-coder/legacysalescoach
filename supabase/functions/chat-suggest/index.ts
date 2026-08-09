@@ -20,11 +20,18 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-const MAX_MESSAGE_LENGTH = 4000;
+const MAX_MESSAGE_LENGTH = 12000;
 const PAGE_SIZE = 1000;
 const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
 const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score";
 const MAX_SOURCE_COVERAGE_FILES = 32;
+
+function keepHeadAndLatest(text: string, maxLength: number, headLength = 2000): string {
+  if (!text || text.length <= maxLength) return text || "";
+  const safeHead = Math.min(headLength, Math.floor(maxLength / 3));
+  const tailLength = maxLength - safeHead - 48;
+  return `${text.slice(0, safeHead)}\n\n[older middle content omitted]\n\n${text.slice(-tailLength)}`;
+}
 
 const STOP_TERMS = new Set([
   "about", "after", "again", "also", "because", "being", "could", "doing", "from", "have", "here", "into", "just", "like", "more", "most", "much", "need", "only", "over", "really", "same", "should", "that", "their", "them", "then", "there", "these", "they", "thing", "this", "those", "through", "very", "want", "were", "what", "when", "where", "which", "with", "would", "your", "youre", "you", "she", "her", "him", "his", "was", "are", "the", "and", "for", "not", "but", "all", "can", "how", "why", "who", "its", "it"
@@ -593,11 +600,12 @@ serve(async (req) => {
   }
 
   try {
-    const { prospectId, message: rawMessage, threadType, mode } = await req.json();
+    const { prospectId, message: rawMessage, threadType, mode, screenshotContext: rawScreenshotContext } = await req.json();
     const activeThreadType: "friend" | "expert" = threadType === "expert" ? "expert" : "friend";
     
     // Input validation
-    const message = typeof rawMessage === "string" ? rawMessage.substring(0, MAX_MESSAGE_LENGTH) : "";
+    const message = typeof rawMessage === "string" ? keepHeadAndLatest(rawMessage, MAX_MESSAGE_LENGTH) : "";
+    const screenshotContext = typeof rawScreenshotContext === "string" ? keepHeadAndLatest(rawScreenshotContext, 8000, 1200) : "";
     
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -692,6 +700,7 @@ serve(async (req) => {
       .order("created_at", { ascending: true });
 
     const history = allHistory || [];
+    const speakerMessages = history.filter((m: any) => m.direction === "inbound" || m.direction === "outbound");
     
     // Build conversation memory: summarize older messages, keep recent ones verbatim
     const recentCount = 10;
@@ -701,7 +710,7 @@ serve(async (req) => {
     let conversationMemory = "";
     if (olderMessages.length > 0) {
       const olderSummary = olderMessages
-        .map((m: any) => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content.substring(0, 150)}`)
+        .map((m: any) => `${m.direction === "outbound" ? "You" : m.direction === "context" ? "Salesperson note" : m.direction === "unknown" ? "Unknown speaker" : "Prospect"}: ${m.content.substring(0, 150)}`)
         .join("\n");
       conversationMemory = `EARLIER CONVERSATION SUMMARY (${olderMessages.length} older messages):\n${olderSummary}\n\n`;
     }
@@ -785,7 +794,7 @@ serve(async (req) => {
       prospect.conversation_stage || "",
       prospect.instagram_username || "",
     ].filter(Boolean).join(" ");
-    const brainQuery = `${message} ${prospectProfile} ${last3Messages}`.substring(0, 500);
+    const brainQuery = keepHeadAndLatest(`${message} ${screenshotContext} ${prospectProfile} ${last3Messages}`, 2400, 500);
 
     // Generate embedding for semantic search (runs in parallel with DB queries)
     const embeddingPromise = generateEmbedding(brainQuery.substring(0, 1000), supabase, user.id);
@@ -1008,7 +1017,7 @@ serve(async (req) => {
     // message wins. We combine: (a) semantic similarity from pgvector,
     // (b) keyword overlap with the prospect's last message, (c) overlap with
     // recent thread context as a tiebreaker.
-    const messageTerms = extractMeaningfulTerms(message);
+    const messageTerms = extractMeaningfulTerms(`${message} ${screenshotContext}`);
     const contextTerms = extractMeaningfulTerms(last3Messages);
 
     function scoreAgainstMessage(text: string, semanticScore: number): number {
@@ -1132,7 +1141,7 @@ serve(async (req) => {
     const knowledgeContext = "";
     
     const conversationHistory = recentMessages
-      .map((m: any) => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content}`)
+      .map((m: any) => `${m.direction === "outbound" ? "You" : m.direction === "context" ? "Salesperson note" : m.direction === "unknown" ? "Unknown speaker" : "Prospect"}: ${m.content}`)
       .join("\n") || "";
 
     const systemPrompt = activeThreadType === "expert" ? buildExpertModeInstructions(workspaceForPrompt, brainChunksFormatted || undefined, personaData) : buildFriendModeInstructions(workspaceForPrompt, brainChunksFormatted || undefined, personaData);
@@ -1354,6 +1363,9 @@ ${prospect.suggested_comment ? `COMMENT YOU LEFT ON THEIR POST: "${prospect.sugg
 PREVIOUS CONVERSATION:
 ${conversationHistory}
 
+SCREENSHOT VISUAL CONTEXT:
+${screenshotContext || "No screenshot visual metadata supplied."}
+
 ${taskInstructions}
 ${jsonFormat}
 
@@ -1480,7 +1492,7 @@ ${jsonFormat}
       closing: 12,
     };
     const newStage = stageMap[detectedPattern];
-    const msgCount = history.length;
+    const msgCount = history.filter((m: any) => m.direction === "inbound" || m.direction === "outbound").length;
     const minRequired = newStage ? (minMessagesForStage[newStage] || 0) : 0;
     const stageRank: Record<string, number> = { first_contact: 0, continuing: 1, rapport: 1, pain_discovery: 2, pain: 2, offer: 3, closing: 4, close: 4 };
     const currentStageRank = stageRank[prospect.conversation_stage] ?? 0;
@@ -1493,11 +1505,11 @@ ${jsonFormat}
     }
 
     // ===== SAVE CONVERSATION SUMMARY (every 10 messages) =====
-    if (history.length > 0 && history.length % 10 === 0) {
+    if (speakerMessages.length > 0 && speakerMessages.length % 10 === 0) {
       const summaryLines = history.slice(-20).map((m: any) => 
-        `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content.substring(0, 100)}`
+        `${m.direction === "outbound" ? "You" : m.direction === "context" ? "Salesperson note" : m.direction === "unknown" ? "Unknown speaker" : "Prospect"}: ${m.content.substring(0, 100)}`
       );
-      const summary = `Conversation with ${prospect.name} (${history.length} messages). Stage: ${effectiveStage || prospect.conversation_stage}. Recent topics: ${summaryLines.slice(-5).join(" | ")}`;
+      const summary = `Conversation with ${prospect.name} (${speakerMessages.length} messages). Stage: ${effectiveStage || prospect.conversation_stage}. Recent topics: ${summaryLines.slice(-5).join(" | ")}`;
       supabase.from("prospects").update({ conversation_summary: summary }).eq("id", prospectId).then(() => {});
     }
 

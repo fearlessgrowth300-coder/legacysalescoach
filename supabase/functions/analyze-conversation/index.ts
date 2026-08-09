@@ -57,7 +57,7 @@ serve(async (req) => {
     }
 
     const conversationHistory = (messages || []).map((m: any) =>
-      `${m.direction === "outbound" ? "YOU" : "PROSPECT"}: ${m.content}`
+      `${m.direction === "outbound" ? "YOU" : m.direction === "context" ? "SALESPERSON NOTE" : m.direction === "unknown" ? "UNKNOWN SPEAKER" : "PROSPECT"}: ${m.content}`
     ).join("\n");
 
     if (!conversationHistory.trim()) {

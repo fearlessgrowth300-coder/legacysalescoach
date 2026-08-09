@@ -16,6 +16,23 @@ const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, sour
 const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score";
 const MAX_SOURCE_COVERAGE_FILES = 32;
 
+function keepHeadAndLatest(text: string, maxLength: number, headLength = 2000): string {
+  if (!text || text.length <= maxLength) return text || "";
+  const safeHead = Math.min(headLength, Math.floor(maxLength / 3));
+  const tailLength = maxLength - safeHead - 48;
+  return `${text.slice(0, safeHead)}\n\n[older middle content omitted]\n\n${text.slice(-tailLength)}`;
+}
+
+async function createScreenshotSignedUrl(supabase: any, userId: string, rawPath: unknown): Promise<string | null> {
+  if (typeof rawPath !== "string" || !rawPath.startsWith(`${userId}/`)) return null;
+  const { data, error } = await supabase.storage.from("chat-screenshots").createSignedUrl(rawPath, 300);
+  if (error || !data?.signedUrl) {
+    console.warn("[generate-reply] could not sign screenshot", error);
+    return null;
+  }
+  return data.signedUrl;
+}
+
 const STOP_TERMS = new Set(["about", "after", "again", "also", "because", "being", "could", "doing", "from", "have", "here", "into", "just", "like", "more", "most", "much", "need", "only", "over", "really", "same", "should", "that", "their", "them", "then", "there", "these", "they", "thing", "this", "those", "through", "very", "want", "were", "what", "when", "where", "which", "with", "would", "your", "youre", "you", "she", "her", "him", "his", "was", "are", "the", "and", "for", "not", "but", "all", "can", "how", "why", "who", "its", "it"]);
 
 function extractMeaningfulTerms(text: string, maxTerms = 48): string[] {
@@ -93,9 +110,10 @@ serve(async (req) => {
   }
 
   try {
-    const { prospectId, message: rawMessage, threadType, styleModifier } = await req.json();
+    const { prospectId, message: rawMessage, threadType, styleModifier, screenshotPath, screenshotContext: rawScreenshotContext } = await req.json();
     const activeThreadType: "friend" | "expert" = threadType === "expert" ? "expert" : "friend";
-    const message = typeof rawMessage === "string" ? rawMessage.substring(0, 4000) : "";
+    const message = typeof rawMessage === "string" ? keepHeadAndLatest(rawMessage, 12000) : "";
+    const screenshotContext = typeof rawScreenshotContext === "string" ? keepHeadAndLatest(rawScreenshotContext, 6000, 1000) : "";
 
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -158,6 +176,7 @@ serve(async (req) => {
     ]);
 
     const history = allHistory || [];
+    const speakerMessages = history.filter((m: any) => m.direction === "inbound" || m.direction === "outbound");
     const recentMessages = history.slice(-10);
 
     // Resolve the configured Friend -> Expert relationship so referral-stage
@@ -185,12 +204,12 @@ serve(async (req) => {
 
     // Build conversation history string
     const conversationHistory = history
-      .map((m: any) => `${m.direction === "outbound" ? "YOU" : "PROSPECT"}: ${m.content}`)
+      .map((m: any) => `${m.direction === "outbound" ? "YOU" : m.direction === "context" ? "SALESPERSON NOTE" : m.direction === "unknown" ? "UNKNOWN SPEAKER" : "PROSPECT"}: ${m.content}`)
       .join("\n");
 
     // ===== BRAIN RETRIEVAL (RAG) =====
     const last3 = recentMessages.slice(-3).map((m: any) => m.content).join(" ");
-    const brainQuery = `${message} ${prospect.detected_interests || ""} ${last3}`.substring(0, 1000);
+    const brainQuery = keepHeadAndLatest(`${message} ${screenshotContext} ${prospect.detected_interests || ""} ${last3}`, 2400, 500);
     const embeddingPromise = generateEmbedding(brainQuery, supabase, user.id);
 
     const [
@@ -307,7 +326,7 @@ serve(async (req) => {
     const mergedPrinciples = deduplicatePrinciples(mergeByIdPriority(semanticPrinciples, allPrinciples), "relevance_score");
     const mergedChunks = deduplicateChunks(mergeByIdPriority(semanticChunks, allChunks), "relevance_score");
 
-    const messageTerms = extractMeaningfulTerms(`${message} ${last3}`);
+    const messageTerms = extractMeaningfulTerms(`${message} ${screenshotContext} ${last3}`);
     function sourceNameFor(item: any) {
       return item.source_id && kbMap[item.source_id] ? kbMap[item.source_id] : (item.source_name || item.source_type || "unknown");
     }
@@ -424,13 +443,42 @@ Return: { "warmth_score": <0-100>, "stage": <"friend"|"warming"|"referral">, "pr
 OBJECTION RADAR: Scan EVERY message for objection language. Classify: TIME, MONEY, TRUST, CERTAINTY, PRIORITY, FEAR, TIMING, NEED_MORE_CLARITY. Recommend response type: CLARIFY, REASSURE, REFRAME, DEEPEN, ISOLATE, HAND_OFF.
 SPIN DETECTION: <4 exchanges="situation", personal but no pain="problem", pain not amplified="implication", pain+wants change="need_payoff".
 STAGE RULES: "friend" 0-35, "warming" 36-64, "referral" 65+ AND (pain_expressed=true OR the prospect explicitly asks for help, price, details, a link, a call, or how the user achieved the result).
-WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.`;
+WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.
+VISUAL EVIDENCE: When a screenshot is supplied, use visible speaker alignment, reactions, quoted replies, timestamps, read/seen/delivered status, unanswered-message state, and attachments. If OCR conflicts with the image, trust the image and mention the conflict in signals_detected. Treat salesperson notes as context, never as the prospect's words.`;
+
+    const analysisUserPrompt = `WORKSPACE_PROFILE:
+${workspaceProfile}
+
+LINKED_EXPERT:
+${linkedExpertContext}
+
+SCREENSHOT_VISUAL_CONTEXT:
+${screenshotContext || "No screenshot supplied."}
+
+SALES_BRAIN_PRINCIPLES:
+${principlesText.substring(0, 4500)}
+
+RELEVANT_KNOWLEDGE_CHUNKS:
+${chunksText.substring(0, 4500)}
+
+WORKSPACE_LEARNINGS:
+${learnedInsightsText.substring(0, 2000)}
+
+CONVERSATION_HISTORY:
+${conversationHistory}`;
+    const screenshotSignedUrl = await createScreenshotSignedUrl(supabase, user.id, screenshotPath);
+    const analysisUserContent: any = screenshotSignedUrl && !chat.isAnthropic
+      ? [
+          { type: "text", text: `${analysisUserPrompt}\n\nInspect the attached original screenshot as primary evidence. Reconcile it with the extracted transcript, note any OCR/speaker errors, and use visible reactions, timestamps, read status, quoted replies, and attachments in the analysis.` },
+          { type: "image_url", image_url: { url: screenshotSignedUrl } },
+        ]
+      : analysisUserPrompt;
 
     const analysisResponse = await userChat(chat, {
-      model: chat.models.balanced,
+      model: screenshotSignedUrl && !chat.isAnthropic ? chat.models.vision : chat.models.balanced,
       messages: [
         { role: "system", content: analysisPrompt },
-        { role: "user", content: `WORKSPACE_PROFILE:\n${workspaceProfile}\n\nLINKED_EXPERT:\n${linkedExpertContext}\n\nSALES_BRAIN_PRINCIPLES:\n${principlesText.substring(0, 4500)}\n\nRELEVANT_KNOWLEDGE_CHUNKS:\n${chunksText.substring(0, 4500)}\n\nWORKSPACE_LEARNINGS:\n${learnedInsightsText.substring(0, 2000)}\n\nCONVERSATION_HISTORY:\n${conversationHistory}` },
+        { role: "user", content: analysisUserContent },
       ],
       temperature: 0.3,
       response_format: { type: "json_object" },
@@ -592,6 +640,9 @@ ${styleFingerprint}${trainingContext}${feedbackContext}${leadContext}
 LINKED_EXPERT_CONTEXT:
 ${linkedExpertContext}
 
+SCREENSHOT_VISUAL_CONTEXT:
+${screenshotContext || "No screenshot supplied."}
+
 ANALYSIS:
 ${JSON.stringify(analysisJson)}
 
@@ -686,9 +737,9 @@ ${winningPatternsText.substring(0, 2000)}`;
     }
 
     // Save conversation summary every 10 messages
-    if (history.length > 0 && history.length % 10 === 0) {
-      const summaryLines = history.slice(-10).map((m: any) => `${m.direction === "inbound" ? "P" : "Y"}: ${m.content.substring(0, 80)}`);
-      const summary = `${prospect.name} (${history.length} msgs). Stage: ${analysisJson.stage}. Warmth: ${analysisJson.warmth_score}. ${summaryLines.slice(-3).join(" | ")}`;
+    if (speakerMessages.length > 0 && speakerMessages.length % 10 === 0) {
+      const summaryLines = history.slice(-10).map((m: any) => `${m.direction === "outbound" ? "Y" : m.direction === "context" ? "NOTE" : m.direction === "unknown" ? "UNKNOWN" : "P"}: ${m.content.substring(0, 80)}`);
+      const summary = `${prospect.name} (${speakerMessages.length} msgs). Stage: ${analysisJson.stage}. Warmth: ${analysisJson.warmth_score}. ${summaryLines.slice(-3).join(" | ")}`;
       supabase.from("prospects").update({ conversation_summary: summary }).eq("id", prospectId).then(() => {});
     }
 
