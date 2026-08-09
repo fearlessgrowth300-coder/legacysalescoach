@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "sdk_version": "0.26.1",
+  "path": "/mcp",
+  "auth": {
+    "type": "oauth",
+    "issuer": "https://xbliaagchrfnhhwnnayo.supabase.co/auth/v1",
+    "accepted_audiences": [
+      "authenticated"
+    ]
+  },
+  "mcp": {
+    "server": {
+      "name": "code-mirror-hub",
+      "version": "0.1.0",
+      "title": "Code Mirror Hub"
+    },
+    "tools": [
+      {
+        "name": "list_prospects",
+        "title": "List prospects",
+        "description": "List the signed-in user's sales prospects with platform, stage and outcome.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "description": "Max prospects to return (default 20)."
+            },
+            "search": {
+              "type": "string",
+              "description": "Filter by prospect name (case-insensitive)."
+            }
+          },
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "get_prospect_thread",
+        "title": "Get prospect conversation",
+        "description": "Read the message thread for one prospect, oldest first, including AI suggestions.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "prospect_id": {
+              "type": "string",
+              "description": "The prospect's id (from list_prospects)."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "description": "Max messages to return (default 50)."
+            }
+          },
+          "required": [
+            "prospect_id"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "search_sales_brain",
+        "title": "Search sales brain",
+        "description": "Search the user's extracted sales principles (their knowledge brain) by keyword.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search principle names, lessons and application notes."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 25,
+              "description": "Max principles to return (default 8)."
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "list_knowledge_items",
+        "title": "List knowledge sources",
+        "description": "List the user's knowledge base sources (videos, PDFs, links) and their extraction status.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "description": "Filter by status, e.g. pending, processing, ready, failed."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "description": "Max items to return (default 25)."
+            }
+          },
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "log_prospect_message",
+        "title": "Log a prospect message",
+        "description": "Append a message to a prospect's thread (inbound from the prospect or outbound from the user).",
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "prospect_id": {
+              "type": "string",
+              "description": "The prospect's id (from list_prospects)."
+            },
+            "content": {
+              "type": "string",
+              "description": "Message text to store."
+            },
+            "direction": {
+              "type": "string",
+              "enum": [
+                "inbound",
+                "outbound"
+              ],
+              "description": "inbound = from the prospect, outbound = sent by the user."
+            }
+          },
+          "required": [
+            "prospect_id",
+            "content",
+            "direction"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      }
+    ]
+  }
+}
