@@ -1,24 +1,88 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import {
+  extractInstagramUsername,
+  isInstagramPostUrl,
+  normalizeInstagramProfile,
+  pickInstagramProfilePicture,
+} from "./lib.ts";
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
-  const isAllowed = origin.endsWith(".lovable.app") || origin.startsWith("http://localhost:");
+  const configuredOrigins = [Deno.env.get("SITE_URL"), Deno.env.get("APP_URL")].filter(Boolean) as string[];
+  const isAllowed = origin.endsWith(".lovable.app") ||
+    origin.endsWith(".lovableproject.com") ||
+    origin.startsWith("http://localhost:") ||
+    origin.startsWith("http://127.0.0.1:") ||
+    origin.startsWith("http://[::1]:") ||
+    configuredOrigins.includes(origin);
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : "https://legacysalescoach.lovable.app",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
   };
 }
 
-function extractUsername(input: string): string {
-  // Handle full URLs or plain usernames
-  const match = input.match(/instagram\.com\/([^/?#]+)/);
-  if (match) return match[1];
-  return input.replace(/^@/, "").trim();
+async function fetchInstagramProfile(username: string, apiKey: string): Promise<any | null> {
+  const response = await fetch(
+    `https://api.apify.com/v2/acts/apify~instagram-profile-scraper/run-sync-get-dataset-items?token=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usernames: [username], resultsLimit: 1 }),
+      signal: AbortSignal.timeout(60000),
+    },
+  );
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error("Apify Instagram profile error:", response.status, errText);
+    throw new Error(`Apify Instagram profile API error: ${response.status}`);
+  }
+  const results = await response.json();
+  return Array.isArray(results) && results.length > 0 ? results[0] : null;
 }
 
-function isInstagramPostUrl(input: string): boolean {
-  return /instagram\.com\/(?:p|reel|tv)\//i.test(input);
+async function cacheProfilePicture(supabaseAdmin: any, userId: string, username: string, sourceUrl: string): Promise<string> {
+  if (!sourceUrl) return "";
+  try {
+    const response = await fetch(sourceUrl, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; LegacySalesCoach/1.0)" },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!response.ok) return sourceUrl;
+
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    if (!contentType.startsWith("image/")) return sourceUrl;
+    const extension = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+    const safeUsername = username.replace(/[^a-z0-9._-]/gi, "_").toLowerCase() || "instagram";
+    const path = `${userId}/instagram/${safeUsername}.${extension}`;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const { error } = await supabaseAdmin.storage.from("prospect-avatars").upload(path, bytes, {
+      contentType,
+      cacheControl: "86400",
+      upsert: true,
+    });
+    if (error) {
+      console.warn("Instagram avatar cache upload failed:", error.message);
+      return sourceUrl;
+    }
+    return supabaseAdmin.storage.from("prospect-avatars").getPublicUrl(path).data.publicUrl || sourceUrl;
+  } catch (error) {
+    console.warn("Instagram avatar cache failed:", error);
+    return sourceUrl;
+  }
+}
+
+function buildProfileSummary(data: any): string {
+  return [
+    `Instagram Profile: @${data.username} (${data.fullName})`,
+    `Bio: ${data.biography}`,
+    `Followers: ${data.followersCount} | Following: ${data.followsCount} | Posts: ${data.postsCount}`,
+    data.isBusinessAccount ? `Business Category: ${data.businessCategory}` : "",
+    data.externalUrl ? `Website: ${data.externalUrl}` : "",
+    "",
+    "Recent Posts:",
+    ...data.recentPosts.map((p: any, i: number) => `${i + 1}. ${p.caption || "No caption"} (${p.likes} likes, ${p.comments} comments)`),
+  ].filter(Boolean).join("\n");
 }
 
 function summarizePost(post: any, inputUrl: string) {
@@ -60,7 +124,7 @@ function summarizePost(post: any, inputUrl: string) {
     isBusinessAccount: false,
     businessCategory: "",
     externalUrl: "",
-    profilePicUrl: post.ownerProfilePicUrl || "",
+    profilePicUrl: pickInstagramProfilePicture(post),
     recentPosts: [targetPost],
     targetPost,
     isPost: true,
@@ -102,11 +166,16 @@ serve(async (req) => {
       });
     }
 
-    const username = extractUsername(rawInput);
+    const username = extractInstagramUsername(rawInput);
     const APIFY_API_KEY = Deno.env.get("APIFY_API_KEY");
     if (!APIFY_API_KEY) {
       throw new Error("APIFY_API_KEY is not configured");
     }
+    const supabaseAdmin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const userId = String(claims.claims.sub);
 
     if (isInstagramPostUrl(rawInput)) {
       console.log(`Fetching Instagram post/reel for: ${rawInput}`);
@@ -134,35 +203,40 @@ serve(async (req) => {
         });
       }
 
-      return new Response(JSON.stringify(summarizePost(post, rawInput)), {
+      const postData = summarizePost(post, rawInput);
+      let enriched: any = postData;
+      if (postData.username && postData.username !== "unknown") {
+        try {
+          const profile = await fetchInstagramProfile(postData.username, APIFY_API_KEY);
+          if (profile) {
+            const profileData = normalizeInstagramProfile(profile, postData.username);
+            enriched = {
+              ...profileData,
+              isPost: true,
+              targetPost: postData.targetPost,
+              recentPosts: [postData.targetPost, ...profileData.recentPosts.filter((item: any) => item.url !== postData.targetPost.url)].slice(0, 5),
+              summary: `${buildProfileSummary(profileData)}\n\nExact post/reel selected:\n${postData.summary}`,
+            };
+          }
+        } catch (error) {
+          console.warn("Owner profile enrichment failed; using exact post only:", error);
+        }
+      }
+      enriched.profilePicUrl = await cacheProfilePicture(
+        supabaseAdmin,
+        userId,
+        enriched.username || postData.username,
+        enriched.profilePicUrl || postData.profilePicUrl,
+      );
+
+      return new Response(JSON.stringify(enriched), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     console.log(`Fetching Instagram profile for: ${username}`);
 
-    // Run the Apify Instagram Profile Scraper actor synchronously
-    const actorResponse = await fetch(
-      `https://api.apify.com/v2/acts/apify~instagram-profile-scraper/run-sync-get-dataset-items?token=${APIFY_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          usernames: [username],
-          resultsLimit: 1,
-        }),
-        signal: AbortSignal.timeout(60000),
-      }
-    );
-
-    if (!actorResponse.ok) {
-      const errText = await actorResponse.text();
-      console.error("Apify error:", actorResponse.status, errText);
-      throw new Error(`Apify API error: ${actorResponse.status}`);
-    }
-
-    const results = await actorResponse.json();
-    const profile = Array.isArray(results) && results.length > 0 ? results[0] : null;
+    const profile = await fetchInstagramProfile(username, APIFY_API_KEY);
 
     if (!profile) {
       return new Response(JSON.stringify({ error: "Profile not found", username }), {
@@ -170,39 +244,9 @@ serve(async (req) => {
       });
     }
 
-    // Extract the most useful data
-    const data = {
-      username: profile.username || username,
-      fullName: profile.fullName || "",
-      biography: profile.biography || "",
-      followersCount: profile.followersCount || 0,
-      followsCount: profile.followsCount || 0,
-      postsCount: profile.postsCount || 0,
-      isVerified: profile.verified || false,
-      isBusinessAccount: profile.isBusinessAccount || false,
-      businessCategory: profile.businessCategoryName || "",
-      externalUrl: profile.externalUrl || "",
-      profilePicUrl: profile.profilePicUrlHD || profile.profilePicUrl || "",
-      // Recent posts for context
-      recentPosts: (profile.latestPosts || []).slice(0, 5).map((post: any) => ({
-        caption: (post.caption || "").substring(0, 300),
-        likes: post.likesCount || 0,
-        comments: post.commentsCount || 0,
-        type: post.type || "unknown",
-      })),
-    };
-
-    // Build a text summary for AI consumption
-    const summary = [
-      `Instagram Profile: @${data.username} (${data.fullName})`,
-      `Bio: ${data.biography}`,
-      `Followers: ${data.followersCount} | Following: ${data.followsCount} | Posts: ${data.postsCount}`,
-      data.isBusinessAccount ? `Business Category: ${data.businessCategory}` : "",
-      data.externalUrl ? `Website: ${data.externalUrl}` : "",
-      "",
-      "Recent Posts:",
-      ...data.recentPosts.map((p: any, i: number) => `${i + 1}. ${p.caption} (${p.likes} likes, ${p.comments} comments)`),
-    ].filter(Boolean).join("\n");
+    const data = normalizeInstagramProfile(profile, username);
+    data.profilePicUrl = await cacheProfilePicture(supabaseAdmin, userId, data.username, data.profilePicUrl);
+    const summary = buildProfileSummary(data);
 
     return new Response(JSON.stringify({ ...data, summary }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
