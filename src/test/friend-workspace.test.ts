@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { friendDraftPayload, stringList } from "@/lib/friend-workspace";
+import { friendDraftPayload, normalizeFriendProfileDraft, stringList } from "@/lib/friend-workspace";
 
 describe("friend workspace helpers", () => {
   it("normalizes profile lists without keeping bullets", () => {
@@ -18,5 +18,25 @@ describe("friend workspace helpers", () => {
     expect(payload.audience_description).toBe("beginner parents");
     expect(payload.pain_points).toBe("no time\ninformation overload");
     expect(payload.offer_truth).toMatchObject({ name: "Starter Course" });
+  });
+
+  it("converts the legacy Cloud persona response into a visible Friend review draft", () => {
+    const draft = normalizeFriendProfileDraft({
+      workspace_name: "Legacy Driven Growth",
+      tone: "warm and direct",
+      audience: "mums building online income",
+      positioning: "supportive peer",
+      energy: "encouraging",
+    }, "The Instagram bio and recent posts focus on helping mums earn online.", "Starter Course");
+
+    expect(draft.friend_persona).toMatchObject({
+      display_name: "Legacy Driven Growth",
+      role: "supportive peer",
+      voice_notes: "warm and direct; encouraging",
+    });
+    expect(draft.audience_description).toBe("mums building online income");
+    expect(draft.profile_evidence).toContain("Instagram bio");
+    expect(draft.offer_truth).toMatchObject({ name: "Starter Course" });
+    expect(draft.legacy_profile_shape).toBe(true);
   });
 });

@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { fetchInstagramProfile } from "@/lib/fetch-instagram";
-import { friendDraftPayload, objectValue, storyLines } from "@/lib/friend-workspace";
+import { friendDraftPayload, normalizeFriendProfileDraft, objectValue, storyLines } from "@/lib/friend-workspace";
 import { supabase } from "@/integrations/supabase/client";
 import { CheckCircle2, FileCheck2, Loader2, ScanSearch, ShieldCheck, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
@@ -208,7 +208,11 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
         body: { workspaceId: workspace.id, profileSnapshot: snapshots.join("\n\n"), draftOnly: true },
       });
       if (error || data?.error) throw new Error(data?.error || error?.message || "Automatic profile analysis failed");
-      let nextDraft = objectValue(data?.draft || data?.persona);
+      let nextDraft = normalizeFriendProfileDraft(
+        data?.draft || data?.persona,
+        data?.profileAnalysis,
+        data?.productsDetected,
+      );
 
       // The Edge Function persists the draft before responding. Verify that
       // persisted value when a proxy/provider returns a success envelope
@@ -221,7 +225,7 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
           .eq("user_id", userId)
           .single();
         if (savedDraftError) throw savedDraftError;
-        nextDraft = objectValue((savedWorkspace as any)?.auto_profile_draft);
+        nextDraft = normalizeFriendProfileDraft((savedWorkspace as any)?.auto_profile_draft);
       }
 
       if (Object.keys(nextDraft).length === 0) {

@@ -17,6 +17,69 @@ export function objectValue(value: unknown): Record<string, any> {
     : {};
 }
 
+export function normalizeFriendProfileDraft(
+  draftValue: unknown,
+  profileAnalysis?: unknown,
+  productsDetected?: unknown,
+): Record<string, any> {
+  const draft = objectValue(draftValue);
+  const fallbackEvidence = String(profileAnalysis || "").trim();
+  const detectedProducts = String(productsDetected || "").trim();
+  const modernPersona = objectValue(draft.friend_persona || draft.persona);
+
+  if (Object.keys(modernPersona).length > 0 || draft.profile_evidence || draft.audience_description) {
+    return {
+      ...draft,
+      profile_evidence: draft.profile_evidence || fallbackEvidence,
+    };
+  }
+
+  // Older Cloud deployments return the expert-persona shape. Preserve that
+  // useful result as a review-only Friend draft while the Edge Function is
+  // being upgraded, instead of rendering a card full of "Not inferred".
+  const isLegacyPersona = [
+    draft.workspace_name,
+    draft.tone,
+    draft.audience,
+    draft.positioning,
+    draft.energy,
+    draft.niche_detected,
+    draft.framework_summary,
+  ].some((value) => String(value || "").trim());
+
+  if (!isLegacyPersona && !fallbackEvidence) return {};
+
+  const voice = [draft.tone, draft.energy]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join("; ");
+  const safeDetectedOffer = detectedProducts && !/^none detected$/i.test(detectedProducts)
+    ? { name: detectedProducts, description: "", personal_experience: "", price: "", who_it_is_for: "", who_it_is_not_for: "", referral_url: "" }
+    : {};
+
+  return {
+    friend_persona: {
+      display_name: String(draft.workspace_name || "").trim(),
+      role: String(draft.positioning || "").trim(),
+      voice_notes: voice,
+      audience: String(draft.audience || draft.audience_type || "").trim(),
+    },
+    audience_description: String(draft.audience || draft.audience_type || "").trim(),
+    pain_points: [],
+    common_objections: [],
+    friend_backstory: "",
+    transformation: "",
+    approved_stories: [],
+    expert_description: "",
+    referral_triggers: [],
+    offer_truth: safeDetectedOffer,
+    forbidden_claims: [],
+    profile_evidence: fallbackEvidence || String(draft.framework_summary || "").trim(),
+    confidence_notes: "Legacy profile analysis was converted for review. Verify every field before approval.",
+    legacy_profile_shape: true,
+  };
+}
+
 export function storyLines(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 20);
