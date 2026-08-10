@@ -69,6 +69,12 @@ async function syncApprovedFriendPersona(supabase: any, userId: string, workspac
     `Approved Friend Persona: ${persona.display_name || workspace.name}`,
     persona.role ? `Role: ${persona.role}` : "",
     persona.voice_notes ? `Voice: ${persona.voice_notes}` : "",
+    persona.instagram_bio ? `Instagram bio: ${persona.instagram_bio}` : "",
+    persona.behavior_guidelines ? `Friend behavior: ${persona.behavior_guidelines}` : "",
+    persona.conversation_examples ? `Approved conversation style examples: ${String(persona.conversation_examples).substring(0, 12000)}` : "",
+    persona.strategy_name ? `Strategy used: ${persona.strategy_name}` : "",
+    persona.strategy_description ? `Strategy experience: ${persona.strategy_description}` : "",
+    persona.strategy_website ? `Strategy website: ${persona.strategy_website}` : "",
     workspace.audience_description ? `Audience: ${workspace.audience_description}` : "",
     workspace.pain_points ? `Audience pains: ${workspace.pain_points}` : "",
     workspace.common_objections ? `Common objections: ${workspace.common_objections}` : "",
@@ -78,11 +84,16 @@ async function syncApprovedFriendPersona(supabase: any, userId: string, workspac
     offer.name ? `Offer used/recommended: ${offer.name}` : "",
     offer.description ? `Offer description: ${offer.description}` : "",
     offer.personal_experience ? `Genuine product experience: ${offer.personal_experience}` : "",
+    offer.course_url ? `Course website: ${offer.course_url}` : "",
+    offer.results_summary ? `Approved course result summary: ${offer.results_summary}` : "",
     offer.price ? `Verified price: ${offer.price}` : "",
     offer.who_it_is_for ? `Offer fit: ${offer.who_it_is_for}` : "",
     offer.who_it_is_not_for ? `Not a fit: ${offer.who_it_is_not_for}` : "",
     offer.referral_url ? `Approved referral destination: ${offer.referral_url}` : "",
     workspace.expert_description ? `Expert/team: ${workspace.expert_description}` : "",
+    persona.expert_name ? `Expert/team name: ${persona.expert_name}` : "",
+    persona.expert_reference ? `Refer to expert/team as: ${persona.expert_reference}` : "",
+    persona.expert_website ? `Expert/team website: ${persona.expert_website}` : "",
     workspace.referral_triggers ? `Referral triggers: ${workspace.referral_triggers}` : "",
     workspace.forbidden_claims ? `Forbidden claims: ${workspace.forbidden_claims}` : "",
     ...(proofAssets || []).map((proof: any) =>
@@ -130,7 +141,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { workspaceId, profileSnapshot, draftOnly, syncApproved } = await req.json();
+    const { workspaceId, profileSnapshot, setupContext, draftOnly, syncApproved } = await req.json();
     if (!workspaceId) throw new Error("workspaceId required");
 
     const authHeader = req.headers.get("Authorization");
@@ -205,6 +216,7 @@ serve(async (req) => {
 
 
     const isAutomaticFriendDraft = workspace.workspace_type === "friend" && Boolean(draftOnly);
+    const ownerSetup = safeObject(setupContext);
     let profileAnalysis = workspace.profile_analysis || "Analysis completed";
     let productsDetected = workspace.products_detected || "None detected";
 
@@ -289,6 +301,9 @@ Existing framework: ${workspace.custom_framework || "None"}
 Profile evidence:
 ${scrapedParts.join("\n\n")}
 
+OWNER-SUPPLIED SETUP (treat as draft facts supplied by the owner; preserve them accurately for review):
+${JSON.stringify(ownerSetup, null, 2).substring(0, 24000)}
+
 TRUTH RULES:
 - Infer communication style, audience themes, pains and objections from visible evidence.
 - NEVER invent a personal purchase, income, sales result, transformation, testimonial, price, guarantee, mentor relationship or expert endorsement.
@@ -302,7 +317,18 @@ Return JSON with exactly this shape:
     "display_name": "short persona name",
     "role": "how this person is positioned relative to friends",
     "voice_notes": "tone, vocabulary, length, emoji and energy observations",
-    "audience": "primary audience"
+    "audience": "primary audience",
+    "instagram_bio": "bio from the verified Instagram snapshot",
+    "avatar_url": "verified cached Instagram profile picture URL",
+    "conversation_examples": "owner-provided conversation examples, preserved without inventing messages",
+    "behavior_guidelines": "adaptive genuine-peer behavior learned from the examples",
+    "strategy_name": "owner-provided strategy name",
+    "strategy_website": "owner-provided strategy website",
+    "strategy_description": "how the owner says the strategy works and helped",
+    "expert_name": "owner-provided expert or team name",
+    "expert_reference": "the exact owner-selected wording: the team, he, she, the expert, or my mentor",
+    "expert_website": "owner-provided expert website",
+    "expert_help": "what the expert or team helps with"
   },
   "audience_description": "specific audience and lifestyle",
   "pain_points": ["evidence-supported audience pains"],
@@ -316,6 +342,8 @@ Return JSON with exactly this shape:
     "name": "detected product/course name or empty",
     "description": "what visible evidence says it does",
     "personal_experience": "only explicit first-person use, otherwise empty",
+    "course_url": "owner-provided course website or empty",
+    "results_summary": "owner-provided results, kept as a review claim until proof and approval",
     "price": "only an explicitly visible current price, otherwise empty",
     "who_it_is_for": "evidence-supported fit",
     "who_it_is_not_for": "evidence-supported limitation or empty",

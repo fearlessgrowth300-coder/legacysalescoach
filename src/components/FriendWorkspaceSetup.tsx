@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { fetchInstagramProfile } from "@/lib/fetch-instagram";
-import { friendDraftPayload, normalizeFriendProfileDraft, objectValue, storyLines } from "@/lib/friend-workspace";
+import { DEFAULT_FRIEND_BEHAVIOR, friendDraftPayload, mergeAutomaticFriendDraft, normalizeFriendProfileDraft, objectValue, storyLines } from "@/lib/friend-workspace";
 import { supabase } from "@/integrations/supabase/client";
 import { CheckCircle2, FileCheck2, Loader2, ScanSearch, ShieldCheck, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
@@ -60,6 +60,17 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
   const [forbiddenClaims, setForbiddenClaims] = useState("");
   const [learningMode, setLearningMode] = useState<"review" | "positive_outcomes">("review");
   const [draft, setDraft] = useState<Record<string, any>>(objectValue(workspace.auto_profile_draft));
+  const [instagramBio, setInstagramBio] = useState("");
+  const [profilePicUrl, setProfilePicUrl] = useState("");
+  const [courseUrl, setCourseUrl] = useState("");
+  const [courseResults, setCourseResults] = useState("");
+  const [conversationExamples, setConversationExamples] = useState("");
+  const [behaviorGuidelines, setBehaviorGuidelines] = useState(DEFAULT_FRIEND_BEHAVIOR);
+  const [strategyName, setStrategyName] = useState("");
+  const [strategyWebsite, setStrategyWebsite] = useState("");
+  const [strategyDescription, setStrategyDescription] = useState("");
+  const [expertName, setExpertName] = useState("");
+  const [expertReference, setExpertReference] = useState("the expert");
 
   const [proofTitle, setProofTitle] = useState("");
   const [proofType, setProofType] = useState("sales");
@@ -80,6 +91,9 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
     hydratedWorkspaceRef.current = workspace.id;
     const persona = objectValue(workspace.friend_persona);
     const offer = objectValue(workspace.offer_truth);
+    const automaticDraft = objectValue(workspace.auto_profile_draft);
+    const automaticPersona = objectValue(automaticDraft.friend_persona || persona);
+    const automaticOffer = objectValue(automaticDraft.offer_truth || offer);
     setTab((workspace.friend_setup_mode as any) || "custom");
     setPersonaName(persona.display_name || workspace.name || "");
     setPersonaRole(persona.role || "");
@@ -104,6 +118,17 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
     setForbiddenClaims(workspace.forbidden_claims || "");
     setLearningMode(workspace.friend_learning_mode === "positive_outcomes" ? "positive_outcomes" : "review");
     setDraft(objectValue(workspace.auto_profile_draft));
+    setInstagramBio(automaticPersona.instagram_bio || "");
+    setProfilePicUrl(automaticPersona.avatar_url || "");
+    setCourseUrl(automaticOffer.course_url || "");
+    setCourseResults(automaticOffer.results_summary || "");
+    setConversationExamples(automaticPersona.conversation_examples || "");
+    setBehaviorGuidelines(automaticPersona.behavior_guidelines || DEFAULT_FRIEND_BEHAVIOR);
+    setStrategyName(automaticPersona.strategy_name || "");
+    setStrategyWebsite(automaticPersona.strategy_website || "");
+    setStrategyDescription(automaticPersona.strategy_description || "");
+    setExpertName(automaticPersona.expert_name || "");
+    setExpertReference(automaticPersona.expert_reference || "the expert");
   }, [open, workspace]);
 
   const { data: proofAssets = [], error: proofAssetsError } = useQuery({
@@ -135,7 +160,23 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
       const payload = {
         friend_setup_mode: "custom",
         friend_persona_status: "approved",
-        friend_persona: { display_name: personaName.trim(), role: personaRole.trim(), voice_notes: voiceNotes.trim() },
+        friend_persona: {
+          ...objectValue(workspace.friend_persona),
+          display_name: personaName.trim(),
+          role: personaRole.trim(),
+          voice_notes: voiceNotes.trim(),
+          instagram_bio: instagramBio.trim(),
+          avatar_url: profilePicUrl.trim(),
+          conversation_examples: conversationExamples.trim(),
+          behavior_guidelines: behaviorGuidelines.trim() || DEFAULT_FRIEND_BEHAVIOR,
+          strategy_name: strategyName.trim(),
+          strategy_website: strategyWebsite.trim(),
+          strategy_description: strategyDescription.trim(),
+          expert_name: expertName.trim(),
+          expert_reference: expertReference,
+          expert_website: referralUrl.trim(),
+          expert_help: expert.trim(),
+        },
         instagram_url: instagramUrl.trim() || null,
         tiktok_url: tiktokUrl.trim() || null,
         audience_description: audience.trim() || null,
@@ -147,9 +188,12 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
         expert_description: expert.trim() || null,
         referral_triggers: referralTriggers.trim() || null,
         offer_truth: {
+          ...objectValue(workspace.offer_truth),
           name: offerName.trim(),
           description: offerDescription.trim(),
           personal_experience: personalExperience.trim(),
+          course_url: courseUrl.trim(),
+          results_summary: courseResults.trim(),
           price: offerPrice.trim(),
           who_it_is_for: offerFor.trim(),
           who_it_is_not_for: offerNotFor.trim(),
@@ -185,8 +229,12 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
     mutationFn: async () => {
       if (!instagramUrl.trim() && !tiktokUrl.trim()) throw new Error("Add an Instagram or TikTok profile first.");
       const snapshots: string[] = [];
+      let instagramProfile: any = null;
       if (instagramUrl.trim()) {
         const instagram = await fetchInstagramProfile(instagramUrl.trim());
+        instagramProfile = instagram;
+        setInstagramBio(instagram.biography || "");
+        setProfilePicUrl(instagram.profilePicUrl || "");
         snapshots.push(`INSTAGRAM PROFILE\n${instagram.summary || JSON.stringify(instagram).slice(0, 12000)}`);
       }
       if (tiktokUrl.trim()) {
@@ -196,6 +244,23 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
         if (error || data?.error) throw new Error(data?.error || error?.message || "TikTok analysis failed");
         snapshots.push(`TIKTOK PROFILE\n${data.summary || JSON.stringify(data).slice(0, 12000)}`);
       }
+      const setupContext = {
+        courseName: offerName.trim(),
+        courseUrl: courseUrl.trim(),
+        courseDescription: offerDescription.trim(),
+        courseExperience: personalExperience.trim(),
+        courseResults: courseResults.trim(),
+        conversationExamples: conversationExamples.trim(),
+        behaviorGuidelines: behaviorGuidelines.trim() || DEFAULT_FRIEND_BEHAVIOR,
+        strategyName: strategyName.trim(),
+        strategyWebsite: strategyWebsite.trim(),
+        strategyDescription: strategyDescription.trim(),
+        expertName: expertName.trim(),
+        expertReference,
+        expertWebsite: referralUrl.trim(),
+        expertHelp: expert.trim(),
+      };
+      snapshots.push(`OWNER-PROVIDED FRIEND SETUP (treat these as owner claims pending approval)\n${JSON.stringify(setupContext, null, 2).slice(0, 24000)}`);
       const { error: linkError } = await supabase.from("workspaces").update({
         instagram_url: instagramUrl.trim() || null,
         tiktok_url: tiktokUrl.trim() || null,
@@ -205,7 +270,7 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
       if (linkError) throw new Error(friendSetupErrorMessage(linkError));
 
       const { data, error } = await supabase.functions.invoke("analyze-profile", {
-        body: { workspaceId: workspace.id, profileSnapshot: snapshots.join("\n\n"), draftOnly: true },
+        body: { workspaceId: workspace.id, profileSnapshot: snapshots.join("\n\n"), setupContext, draftOnly: true },
       });
       if (error || data?.error) throw new Error(data?.error || error?.message || "Automatic profile analysis failed");
       let nextDraft = normalizeFriendProfileDraft(
@@ -228,9 +293,31 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
         nextDraft = normalizeFriendProfileDraft((savedWorkspace as any)?.auto_profile_draft);
       }
 
+      nextDraft = mergeAutomaticFriendDraft(nextDraft, {
+        instagram: instagramProfile ? {
+          username: instagramProfile.username,
+          fullName: instagramProfile.fullName,
+          biography: instagramProfile.biography,
+          profilePicUrl: instagramProfile.profilePicUrl,
+          summary: instagramProfile.summary,
+        } : {
+          biography: instagramBio,
+          profilePicUrl,
+        },
+        ...setupContext,
+      });
+
       if (Object.keys(nextDraft).length === 0) {
         throw new Error("Profile analysis finished, but no review draft was returned. Please analyze the profile again.");
       }
+      const { error: persistDraftError } = await supabase.from("workspaces").update({
+        auto_profile_draft: nextDraft,
+        friend_setup_mode: "auto",
+        friend_persona_status: "draft",
+        profile_analysis: nextDraft.profile_evidence || null,
+        products_detected: objectValue(nextDraft.offer_truth).name || null,
+      } as any).eq("id", workspace.id).eq("user_id", userId);
+      if (persistDraftError) throw persistDraftError;
       return nextDraft;
     },
     onSuccess: (result) => {
@@ -249,10 +336,16 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
   const approveAutomatic = useMutation({
     mutationFn: async () => {
       if (Object.keys(draft).length === 0) throw new Error("Analyze the profile before approving it.");
+      const approvedPersona = objectValue(draft.friend_persona || draft.persona);
+      const approvedOffer = objectValue(draft.offer_truth);
       const payload = {
         ...friendDraftPayload(draft),
         instagram_url: instagramUrl.trim() || null,
         tiktok_url: tiktokUrl.trim() || null,
+        store_url: approvedPersona.expert_website || approvedOffer.referral_url || workspace.store_url || null,
+        custom_framework: approvedPersona.behavior_guidelines || DEFAULT_FRIEND_BEHAVIOR,
+        parsed_framework: null,
+        style_vector: null,
         friend_learning_mode: learningMode,
         friend_persona_version: Number(workspace.friend_persona_version || 1) + 1,
       };
@@ -353,6 +446,17 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
     setOfferFor(offer.who_it_is_for || "");
     setOfferNotFor(offer.who_it_is_not_for || "");
     setReferralUrl(offer.referral_url || "");
+    setInstagramBio(persona.instagram_bio || "");
+    setProfilePicUrl(persona.avatar_url || "");
+    setCourseUrl(offer.course_url || "");
+    setCourseResults(offer.results_summary || "");
+    setConversationExamples(persona.conversation_examples || "");
+    setBehaviorGuidelines(persona.behavior_guidelines || DEFAULT_FRIEND_BEHAVIOR);
+    setStrategyName(persona.strategy_name || "");
+    setStrategyWebsite(persona.strategy_website || "");
+    setStrategyDescription(persona.strategy_description || "");
+    setExpertName(persona.expert_name || "");
+    setExpertReference(persona.expert_reference || "the expert");
     setForbiddenClaims(payload.forbidden_claims || "");
     setTab("custom");
     toast.info("Draft loaded into Custom setup. Edit every detail, then approve it there.");
@@ -463,11 +567,41 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
           </TabsContent>
 
           <TabsContent value="auto" className="space-y-5 mt-5">
-            <div className="rounded-lg border p-4 space-y-3"><div><h3 className="font-semibold">Analyze the account owner</h3><p className="text-xs text-muted-foreground">The app reads profile details and recent content to propose a personality and audience model. Nothing becomes active until approval.</p></div><div><Label>Instagram profile</Label><Input value={instagramUrl} onChange={(e) => setInstagramUrl(e.target.value)} placeholder="https://instagram.com/username" /></div><div><Label>TikTok profile</Label><Input value={tiktokUrl} onChange={(e) => setTiktokUrl(e.target.value)} placeholder="https://tiktok.com/@username" /></div><Button onClick={() => analyzeAutomatic.mutate()} disabled={analyzeAutomatic.isPending}>{analyzeAutomatic.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ScanSearch className="h-4 w-4 mr-2" />}Analyze bio, posts and style</Button></div>
+            <section className="rounded-lg border p-4 space-y-4">
+              <div><h3 className="font-semibold">1. Analyze the account owner</h3><p className="text-xs text-muted-foreground">Instagram supplies the real name, bio, profile picture, recent-post themes, audience and natural voice. Nothing becomes active until approval.</p></div>
+              <div className="grid sm:grid-cols-2 gap-3"><div><Label>Instagram profile</Label><Input value={instagramUrl} onChange={(e) => setInstagramUrl(e.target.value)} placeholder="https://instagram.com/username" /></div><div><Label>TikTok profile</Label><Input value={tiktokUrl} onChange={(e) => setTiktokUrl(e.target.value)} placeholder="https://tiktok.com/@username" /></div></div>
+              {(profilePicUrl || instagramBio) && <div className="flex items-start gap-3 rounded-md bg-muted/50 p-3">{profilePicUrl ? <img src={profilePicUrl} alt="Instagram profile" className="h-14 w-14 rounded-full object-cover border" /> : <div className="h-14 w-14 rounded-full bg-muted border" />}<div className="min-w-0 flex-1"><p className="text-xs font-medium">Imported Instagram identity</p><p className="text-xs text-muted-foreground line-clamp-4">{instagramBio || "Bio will appear after analysis."}</p></div></div>}
+              <div><Label>Instagram bio used by this Friend</Label><Textarea value={instagramBio} onChange={(e) => setInstagramBio(e.target.value)} rows={3} placeholder="This is filled automatically from Instagram and remains editable before approval." /></div>
+            </section>
 
-            {Object.keys(draft).length > 0 ? <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 space-y-3"><div className="flex items-center justify-between"><div><h3 className="font-semibold">Review automatic draft</h3><p className="text-xs text-muted-foreground">Check every fact before it becomes available in live conversations.</p></div><Badge variant="outline" className="border-amber-500/50">Draft</Badge></div><div className="grid sm:grid-cols-2 gap-3 text-sm"><div><p className="text-xs text-muted-foreground">Persona</p><p>{draftPersona.display_name || draftPersona.workspace_name || "Not inferred"}</p></div><div><p className="text-xs text-muted-foreground">Voice</p><p>{draftPersona.voice_notes || draftPersona.tone || "Not inferred"}</p></div><div><p className="text-xs text-muted-foreground">Audience</p><p>{String(draft.audience_description || draftPersona.audience || "Not inferred")}</p></div><div><p className="text-xs text-muted-foreground">Offer</p><p>{draftOffer.name || "Not safely detected"}</p></div></div><div><p className="text-xs text-muted-foreground">Profile evidence</p><p className="text-sm line-clamp-5">{String(draft.profile_evidence || draft.profile_analysis || "No summary")}</p></div><details className="rounded-md bg-background/70 p-3"><summary className="text-sm font-medium cursor-pointer">Review every inferred field</summary><pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground">{JSON.stringify(draft, null, 2)}</pre></details><div className="rounded-md bg-background/70 p-3 text-xs"><strong>Safety:</strong> inferred income, personal results and purchases are excluded unless you add and approve them as factual evidence.</div><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={loadDraftIntoCustom}>Edit draft before approval</Button><Button onClick={() => approveAutomatic.mutate()} disabled={approveAutomatic.isPending}>{approveAutomatic.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}Approve and activate this Friend</Button></div></div> : <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground"><Sparkles className="h-8 w-8 mx-auto mb-2 opacity-50" /><p className="text-sm">No automatic draft yet.</p></div>}
+            <section className="rounded-lg border p-4 space-y-3">
+              <div><h3 className="font-semibold">2. Course and real experience</h3><p className="text-xs text-muted-foreground">Explain the course this Friend purchased, uses and may discuss from personal experience.</p></div>
+              <div className="grid sm:grid-cols-2 gap-3"><div><Label>Course or product name</Label><Input value={offerName} onChange={(e) => setOfferName(e.target.value)} /></div><div><Label>Course website</Label><Input value={courseUrl} onChange={(e) => setCourseUrl(e.target.value)} placeholder="https://…" /></div></div>
+              <div><Label>What the course teaches and who it helps</Label><Textarea value={offerDescription} onChange={(e) => setOfferDescription(e.target.value)} rows={3} /></div>
+              <div><Label>How you purchased and used it</Label><Textarea value={personalExperience} onChange={(e) => setPersonalExperience(e.target.value)} rows={3} placeholder="Your genuine first-person experience" /></div>
+              <div><Label>Sales, transformation and results from it</Label><Textarea value={courseResults} onChange={(e) => setCourseResults(e.target.value)} rows={3} placeholder="Use the proof section below to support exact result claims." /></div>
+            </section>
+
+            <section className="rounded-lg border p-4 space-y-3">
+              <div><h3 className="font-semibold">3. Real conversation style</h3><p className="text-xs text-muted-foreground">Paste successful conversations in their original order. The AI learns the flow and voice but adapts to each prospect instead of copying a fixed script.</p></div>
+              <div><Label>Conversation examples</Label><Textarea value={conversationExamples} onChange={(e) => setConversationExamples(e.target.value)} rows={10} placeholder="Paste the friend and prospect messages here…" /></div>
+              <div><Label>How this Friend must behave</Label><Textarea value={behaviorGuidelines} onChange={(e) => setBehaviorGuidelines(e.target.value)} rows={10} /></div>
+            </section>
+
+            <section className="rounded-lg border p-4 space-y-3">
+              <div><h3 className="font-semibold">4. Strategy and expert handoff</h3><p className="text-xs text-muted-foreground">Define what produced the result and exactly how the Friend should refer a suitable prospect.</p></div>
+              <div className="grid sm:grid-cols-2 gap-3"><div><Label>Strategy name</Label><Input value={strategyName} onChange={(e) => setStrategyName(e.target.value)} placeholder="e.g. 100M Falcons Marketing" /></div><div><Label>Strategy website</Label><Input value={strategyWebsite} onChange={(e) => setStrategyWebsite(e.target.value)} placeholder="https://…" /></div></div>
+              <div><Label>How the strategy works and helped you</Label><Textarea value={strategyDescription} onChange={(e) => setStrategyDescription(e.target.value)} rows={4} /></div>
+              <div className="grid sm:grid-cols-2 gap-3"><div><Label>Expert or team name</Label><Input value={expertName} onChange={(e) => setExpertName(e.target.value)} /></div><div><Label>How the Friend should address them</Label><Select value={expertReference} onValueChange={setExpertReference}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="the team">The team</SelectItem><SelectItem value="he">He</SelectItem><SelectItem value="she">She</SelectItem><SelectItem value="the expert">The expert</SelectItem><SelectItem value="my mentor">My mentor</SelectItem></SelectContent></Select></div></div>
+              <div><Label>What the expert or team helps with</Label><Textarea value={expert} onChange={(e) => setExpert(e.target.value)} rows={4} /></div>
+              <div><Label>Expert website or referral link</Label><Input value={referralUrl} onChange={(e) => setReferralUrl(e.target.value)} placeholder="https://…" /></div>
+            </section>
 
             {proofEvidenceSection}
+
+            <Button className="w-full" size="lg" onClick={() => analyzeAutomatic.mutate()} disabled={analyzeAutomatic.isPending}>{analyzeAutomatic.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ScanSearch className="h-4 w-4 mr-2" />}Analyze everything and build Friend persona</Button>
+
+            {Object.keys(draft).length > 0 ? <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 space-y-3"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-3">{draftPersona.avatar_url && <img src={draftPersona.avatar_url} alt="Friend persona" className="h-12 w-12 rounded-full object-cover border" />}<div><h3 className="font-semibold">Review automatic draft</h3><p className="text-xs text-muted-foreground">Approval replaces the old Friend identity and starts using this setup in live conversations.</p></div></div><Badge variant="outline" className="border-amber-500/50">Draft</Badge></div><div className="grid sm:grid-cols-2 gap-3 text-sm"><div><p className="text-xs text-muted-foreground">Persona</p><p>{draftPersona.display_name || draftPersona.workspace_name || "Not inferred"}</p></div><div><p className="text-xs text-muted-foreground">Voice</p><p>{draftPersona.voice_notes || draftPersona.tone || "Not inferred"}</p></div><div><p className="text-xs text-muted-foreground">Instagram bio</p><p>{draftPersona.instagram_bio || "Not imported"}</p></div><div><p className="text-xs text-muted-foreground">Audience</p><p>{String(draft.audience_description || draftPersona.audience || "Not inferred")}</p></div><div><p className="text-xs text-muted-foreground">Course</p><p>{draftOffer.name || "Not supplied"}</p></div><div><p className="text-xs text-muted-foreground">Strategy</p><p>{draftPersona.strategy_name || "Not supplied"}</p></div><div><p className="text-xs text-muted-foreground">Expert</p><p>{draftPersona.expert_name || "Not supplied"}</p></div><div><p className="text-xs text-muted-foreground">Conversation training</p><p>{draftPersona.conversation_examples ? "Included" : "Not supplied"}</p></div></div><div><p className="text-xs text-muted-foreground">Profile evidence</p><p className="text-sm line-clamp-5">{String(draft.profile_evidence || draft.profile_analysis || "No summary")}</p></div><details className="rounded-md bg-background/70 p-3"><summary className="text-sm font-medium cursor-pointer">Review every inferred and supplied field</summary><pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground">{JSON.stringify(draft, null, 2)}</pre></details><div className="rounded-md bg-background/70 p-3 text-xs"><strong>Approval rule:</strong> Instagram inferences and owner-supplied facts stay in draft until you approve them. Exact results should have matching approved proof.</div><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={loadDraftIntoCustom}>Edit draft before approval</Button><Button onClick={() => approveAutomatic.mutate()} disabled={approveAutomatic.isPending}>{approveAutomatic.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}Approve, replace old persona and activate</Button></div></div> : <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground"><Sparkles className="h-8 w-8 mx-auto mb-2 opacity-50" /><p className="text-sm">Complete the setup above, then analyze it to create a review draft.</p></div>}
 
             <section className="space-y-2 rounded-lg border p-4"><Label>Learning behavior after approval</Label><Select value={learningMode} onValueChange={(value: any) => setLearningMode(value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="review">Review personality improvements before applying</SelectItem><SelectItem value="positive_outcomes">Auto-learn patterns only from positive outcomes</SelectItem></SelectContent></Select></section>
           </TabsContent>
