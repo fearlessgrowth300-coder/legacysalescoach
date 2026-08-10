@@ -958,6 +958,62 @@ export type Database = {
           },
         ]
       }
+      workspace_proof_assets: {
+        Row: {
+          approved_for_ai: boolean
+          created_at: string
+          description: string | null
+          id: string
+          mime_type: string | null
+          result_date: string | null
+          result_type: string
+          result_value: string | null
+          storage_path: string | null
+          title: string
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          approved_for_ai?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          mime_type?: string | null
+          result_date?: string | null
+          result_type?: string
+          result_value?: string | null
+          storage_path?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          approved_for_ai?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          mime_type?: string | null
+          result_date?: string | null
+          result_type?: string
+          result_value?: string | null
+          storage_path?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_proof_assets_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       workspace_training_data: {
         Row: {
           content: string | null
@@ -1007,19 +1063,29 @@ export type Database = {
       }
       workspaces: {
         Row: {
+          approved_stories: Json
           audience_description: string | null
+          auto_profile_draft: Json
           business_model: string | null
           common_objections: string | null
           created_at: string
           custom_framework: string | null
           default_reply_mode: string
           expert_description: string | null
+          forbidden_claims: string | null
           friend_backstory: string | null
+          friend_learning_mode: string
+          friend_persona: Json
+          friend_persona_approved_at: string | null
+          friend_persona_status: string
+          friend_persona_version: number
+          friend_setup_mode: string
           id: string
           instagram_url: string | null
           is_active: boolean
           name: string
           niche_description: string | null
+          offer_truth: Json
           pain_points: string | null
           parsed_framework: Json | null
           positioning: string | null
@@ -1036,19 +1102,29 @@ export type Database = {
           workspace_type: string
         }
         Insert: {
+          approved_stories?: Json
           audience_description?: string | null
+          auto_profile_draft?: Json
           business_model?: string | null
           common_objections?: string | null
           created_at?: string
           custom_framework?: string | null
           default_reply_mode?: string
           expert_description?: string | null
+          forbidden_claims?: string | null
           friend_backstory?: string | null
+          friend_learning_mode?: string
+          friend_persona?: Json
+          friend_persona_approved_at?: string | null
+          friend_persona_status?: string
+          friend_persona_version?: number
+          friend_setup_mode?: string
           id?: string
           instagram_url?: string | null
           is_active?: boolean
           name: string
           niche_description?: string | null
+          offer_truth?: Json
           pain_points?: string | null
           parsed_framework?: Json | null
           positioning?: string | null
@@ -1065,19 +1141,29 @@ export type Database = {
           workspace_type?: string
         }
         Update: {
+          approved_stories?: Json
           audience_description?: string | null
+          auto_profile_draft?: Json
           business_model?: string | null
           common_objections?: string | null
           created_at?: string
           custom_framework?: string | null
           default_reply_mode?: string
           expert_description?: string | null
+          forbidden_claims?: string | null
           friend_backstory?: string | null
+          friend_learning_mode?: string
+          friend_persona?: Json
+          friend_persona_approved_at?: string | null
+          friend_persona_status?: string
+          friend_persona_version?: number
+          friend_setup_mode?: string
           id?: string
           instagram_url?: string | null
           is_active?: boolean
           name?: string
           niche_description?: string | null
+          offer_truth?: Json
           pain_points?: string | null
           parsed_framework?: Json | null
           positioning?: string | null
