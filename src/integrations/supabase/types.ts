@@ -1061,6 +1061,62 @@ export type Database = {
           },
         ]
       }
+      workspace_proof_assets: {
+        Row: {
+          approved_for_ai: boolean
+          created_at: string
+          description: string | null
+          id: string
+          mime_type: string | null
+          result_date: string | null
+          result_type: string
+          result_value: string | null
+          storage_path: string | null
+          title: string
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          approved_for_ai?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          mime_type?: string | null
+          result_date?: string | null
+          result_type?: string
+          result_value?: string | null
+          storage_path?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          approved_for_ai?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          mime_type?: string | null
+          result_date?: string | null
+          result_type?: string
+          result_value?: string | null
+          storage_path?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_proof_assets_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       workspaces: {
         Row: {
           approved_stories: Json

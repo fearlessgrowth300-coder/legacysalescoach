@@ -165,6 +165,7 @@ serve(async (req) => {
       { data: positiveFeedback },
       { data: winningAnalytics },
       { data: leadEntry },
+      { data: approvedProofAssets },
     ] = await Promise.all([
       supabase.from("workspaces").select("*").eq("id", prospect.workspace_id).single(),
       supabase.from("chat_messages").select("*").eq("prospect_id", prospectId).eq("thread_type", activeThreadType).order("created_at"),
@@ -173,6 +174,13 @@ serve(async (req) => {
       supabase.from("suggestion_feedback").select("suggestion_text, suggestion_type, conversation_stage, framework_used").eq("user_id", user.id).eq("workspace_id", prospect.workspace_id).eq("thread_type", activeThreadType).eq("feedback", "positive").order("created_at", { ascending: false }).limit(15),
       supabase.from("conversation_analytics").select("questioning_patterns_used, key_insights, tone_progression").eq("user_id", user.id).eq("workspace_id", prospect.workspace_id).eq("outcome", "won"),
       supabase.from("lead_registry").select("*").eq("user_id", user.id).eq("prospect_id", prospectId).maybeSingle(),
+      supabase.from("workspace_proof_assets")
+        .select("title, result_type, result_value, result_date, description")
+        .eq("user_id", user.id)
+        .eq("workspace_id", prospect.workspace_id)
+        .eq("approved_for_ai", true)
+        .order("created_at", { ascending: false })
+        .limit(20),
     ]);
 
     const history = allHistory || [];
@@ -406,6 +414,42 @@ serve(async (req) => {
         ).join("\n")
       : "No verified winning conversation patterns yet.";
 
+    const friendPersonaApproved = workspace?.workspace_type !== "friend" || workspace?.friend_persona_status !== "draft";
+    const approvedFriendPersona = friendPersonaApproved && workspace?.friend_persona && typeof workspace.friend_persona === "object"
+      ? workspace.friend_persona as Record<string, any>
+      : {};
+    const approvedOfferTruth = friendPersonaApproved && workspace?.offer_truth && typeof workspace.offer_truth === "object"
+      ? workspace.offer_truth as Record<string, any>
+      : {};
+    const approvedStories = friendPersonaApproved && Array.isArray(workspace?.approved_stories)
+      ? workspace.approved_stories.slice(0, 12)
+      : [];
+    const approvedProofText = friendPersonaApproved && (approvedProofAssets || []).length > 0
+      ? (approvedProofAssets || []).map((proof: any) =>
+          `• ${proof.title}${proof.result_value ? `: ${proof.result_value}` : ""}${proof.result_date ? ` (${proof.result_date})` : ""}${proof.description ? ` — ${proof.description}` : ""}`
+        ).join("\n")
+      : "No approved result evidence. Do not state income, sales numbers or performance claims.";
+    const approvedFriendContext = friendPersonaApproved && workspace?.workspace_type === "friend"
+      ? [
+          approvedFriendPersona.display_name ? `Approved Friend Identity: ${approvedFriendPersona.display_name}` : "",
+          approvedFriendPersona.role ? `Friend Role: ${approvedFriendPersona.role}` : "",
+          approvedFriendPersona.voice_notes ? `Friend Voice: ${approvedFriendPersona.voice_notes}` : "",
+          approvedOfferTruth.name ? `Approved Offer: ${approvedOfferTruth.name}` : "",
+          approvedOfferTruth.description ? `Offer Truth: ${approvedOfferTruth.description}` : "",
+          approvedOfferTruth.personal_experience ? `Genuine Offer Experience: ${approvedOfferTruth.personal_experience}` : "",
+          approvedOfferTruth.price ? `Verified Offer Price: ${approvedOfferTruth.price}` : "",
+          approvedOfferTruth.who_it_is_for ? `Offer Fit: ${approvedOfferTruth.who_it_is_for}` : "",
+          approvedOfferTruth.who_it_is_not_for ? `Offer Not For: ${approvedOfferTruth.who_it_is_not_for}` : "",
+          approvedOfferTruth.referral_url ? `Approved Referral URL: ${approvedOfferTruth.referral_url}` : "",
+          approvedStories.length ? `Approved True Stories:\n${approvedStories.map((story: string) => `• ${story}`).join("\n")}` : "No approved story library. Do not invent a personal story.",
+          `Approved Result Evidence:\n${approvedProofText}`,
+          workspace.forbidden_claims ? `Forbidden Claims:\n${workspace.forbidden_claims}` : "",
+          `Learning Mode: ${workspace.friend_learning_mode || "review"}`,
+        ].filter(Boolean).join("\n")
+      : workspace?.workspace_type === "friend"
+        ? "FRIEND PERSONA IS A DRAFT. Ignore automatic persona, story, result, product and referral inferences until the user approves them."
+        : "";
+
     // ===== STEP 1: RUN CONVERSATION ANALYSIS =====
     const workspaceProfile = workspace ? [
       workspace.name ? `Workspace: ${workspace.name}` : "",
@@ -417,10 +461,11 @@ serve(async (req) => {
       workspace.products_detected ? `Products: ${workspace.products_detected}` : "",
       workspace.custom_framework ? `Custom Framework:\n${workspace.custom_framework.substring(0, 8000)}` : "",
       workspace.parsed_framework ? `Structured Framework:\n${JSON.stringify(workspace.parsed_framework).substring(0, 5000)}` : "",
-      workspace.friend_backstory ? `Friend Backstory: ${workspace.friend_backstory}` : "",
-      workspace.transformation ? `Transformation: ${workspace.transformation}` : "",
-      workspace.expert_description ? `Expert Description: ${workspace.expert_description}` : "",
-      workspace.referral_triggers ? `Referral Triggers: ${workspace.referral_triggers}` : "",
+      friendPersonaApproved && workspace.friend_backstory ? `Friend Backstory: ${workspace.friend_backstory}` : "",
+      friendPersonaApproved && workspace.transformation ? `Transformation: ${workspace.transformation}` : "",
+      friendPersonaApproved && workspace.expert_description ? `Expert Description: ${workspace.expert_description}` : "",
+      friendPersonaApproved && workspace.referral_triggers ? `Referral Triggers: ${workspace.referral_triggers}` : "",
+      approvedFriendContext,
     ].filter(Boolean).join("\n") : "No workspace profile.";
 
     const linkedExpertContext = linkedExpertWorkspace
@@ -433,17 +478,18 @@ serve(async (req) => {
           linkedExpertWorkspace.instagram_url ? `Expert Instagram: ${linkedExpertWorkspace.instagram_url}` : "",
           linkedExpertWorkspace.store_url ? `Expert Destination: ${linkedExpertWorkspace.store_url}` : "",
         ].filter(Boolean).join("\n")
-      : workspace?.expert_description
+      : friendPersonaApproved && workspace?.expert_description
         ? `Configured Expert: ${workspace.expert_description}${workspace.store_url ? `\nWorkspace Destination: ${workspace.store_url}` : ""}`
         : "No linked Expert workspace is configured. Use only an expert explicitly named in the Custom Framework; otherwise ask permission to introduce the trusted team without inventing details.";
 
     const analysisPrompt = `You are a sales conversation intelligence engine with an OBJECTION RADAR and multi-framework analyzer. Analyze and return JSON ONLY.
 
-Return: { "warmth_score": <0-100>, "stage": <"friend"|"warming"|"referral">, "prospect_psychology": <string — what they REALLY mean>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <"empathy_mirror"|"story_drop"|"curiosity_gap"|"referral"|"re_engage"|"spin_situation"|"spin_problem"|"spin_implication"|"spin_need_payoff"|"five_whys"|"pain_dream_gap"|"micro_commitment"|"objection_navigate">, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <"TIME"|"MONEY"|"TRUST"|"CERTAINTY"|"PRIORITY"|"FEAR"|"TIMING"|"NEED_MORE_CLARITY"|null>, "objection_response_type": <"CLARIFY"|"REASSURE"|"REFRAME"|"DEEPEN"|"ISOLATE"|"HAND_OFF"|null>, "spin_stage": <"situation"|"problem"|"implication"|"need_payoff">, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
+Return: { "warmth_score": <0-100>, "stage": <"friend"|"warming"|"referral">, "prospect_psychology": <string — what they REALLY mean>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <"empathy_mirror"|"story_drop"|"curiosity_gap"|"referral"|"re_engage"|"spin_situation"|"spin_problem"|"spin_implication"|"spin_need_payoff"|"five_whys"|"pain_dream_gap"|"micro_commitment"|"objection_navigate">, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <"TIME"|"MONEY"|"TRUST"|"CERTAINTY"|"PRIORITY"|"FEAR"|"TIMING"|"NEED_MORE_CLARITY"|null>, "objection_response_type": <"CLARIFY"|"REASSURE"|"REFRAME"|"DEEPEN"|"ISOLATE"|"HAND_OFF"|null>, "spin_stage": <"situation"|"problem"|"implication"|"need_payoff">, "offer_fit": <"high"|"uncertain"|"low">, "referral_readiness": <"not_ready"|"ask_permission"|"ready_for_handoff">, "next_objective": <single concrete objective for the next message>, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
 
 OBJECTION RADAR: Scan EVERY message for objection language. Classify: TIME, MONEY, TRUST, CERTAINTY, PRIORITY, FEAR, TIMING, NEED_MORE_CLARITY. Recommend response type: CLARIFY, REASSURE, REFRAME, DEEPEN, ISOLATE, HAND_OFF.
 SPIN DETECTION: <4 exchanges="situation", personal but no pain="problem", pain not amplified="implication", pain+wants change="need_payoff".
 STAGE RULES: "friend" 0-35, "warming" 36-64, "referral" 65+ AND (pain_expressed=true OR the prospect explicitly asks for help, price, details, a link, a call, or how the user achieved the result).
+REFERRAL READINESS: not_ready until a relevant problem/desire is clear; ask_permission when fit looks plausible and the prospect wants help; ready_for_handoff only after permission or an explicit request for the expert/link. Never use warmth alone as proof of fit.
 WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.
 VISUAL EVIDENCE: When a screenshot is supplied, use visible speaker alignment, reactions, quoted replies, timestamps, read/seen/delivered status, unanswered-message state, and attachments. If OCR conflicts with the image, trust the image and mention the conflict in signals_detected. Treat salesperson notes as context, never as the prospect's words.`;
 
@@ -500,7 +546,7 @@ ${conversationHistory}`;
       const match = analysisRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
       analysisJson = JSON.parse((match ? match[1] : analysisRaw).trim());
     } catch {
-      analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation" };
+      analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything" };
     }
 
     // Conversation stages are progressive. A short reply later in a warm
@@ -564,9 +610,9 @@ Based on this stage, the primary variant should include a ${analysisJson.spin_st
 
     const modeInstruction = activeThreadType === "expert"
       ? `MODE: EXPERT. Respond as the trusted expert/consultant. Diagnose precisely, give useful clarity, handle the objection directly, and recommend the clearest next step. Do not pretend to be a peer who personally lived every detail.`
-      : `MODE: FRIEND. Respond as a warm peer using the workspace's real backstory and framework. Do not pitch early. When stage=referral, make a concrete, permission-based handoff using LINKED_EXPERT_CONTEXT. Never invent an expert, destination, proof, price, or personal result.`;
+      : `MODE: FRIEND. Respond as a warm peer using only the workspace's approved identity, real story and offer truth. Do not pitch early. When stage=referral, first ask permission, then make a concrete handoff using LINKED_EXPERT_CONTEXT and the approved referral URL. Never invent an expert, destination, proof, price, purchase or personal result.`;
 
-    const replySystemPrompt = `You are a DM reply generator using a MULTI-FRAMEWORK STACK for social media sales conversion. You are NOT a generic AI — you are a WEAPON built from the user's uploaded material. Speak with absolute certainty. Every reply must include word-for-word scripts (never just theory), explain the psychology behind why it works on humans, and warn what the prospect will likely say next. Never say "I think" or "maybe".
+    const replySystemPrompt = `You are an evidence-grounded DM reply generator for social media sales conversations. Use the user's approved identity, offer truth, verified result evidence and uploaded sales knowledge. Choose the smallest effective technique for the current moment. Never pressure a poor-fit prospect and never present an inference as a fact.
 
 You are given the analysis result (including objection radar and SPIN stage), workspace profile, style fingerprint, conversation history, and brain principles.
 
@@ -574,11 +620,11 @@ ${modeInstruction}
 
 Generate exactly 3 reply variants as JSON. Each must sound EXACTLY like the person in WORKSPACE_PROFILE and STYLE_FINGERPRINT. Never sound like AI.
 
-MULTI-FRAMEWORK REQUIREMENTS:
-Every reply MUST layer AT LEAST 2 frameworks:
-1. A DISCOVERY framework question (SPIN, 5 Why's, Jobs-to-be-done, or Pain/Dream/Gap)
-2. A PERSUASION technique (StoryBrand, PAS, Before/After/Bridge, Identity-Based, or Micro-Commitments)
-Plus optionally: a CLOSER pattern (Voss, Hormozi, Belfort, Cardone, or Pink)
+FRAMEWORK SELECTION:
+- Use one primary framework that best fits the buyer stage and objection.
+- Add a second technique only when it materially improves the reply.
+- Never stack frameworks merely to sound sophisticated.
+- One message has one objective and at most one question.
 
 STAGE RULES:
 IF stage = "friend": Pure human connection. Use SPIN Situation/Problem questions. Apply StoryBrand (they are the hero). Reference brain principles as YOUR lived experience. End with a question that deepens rapport.
@@ -591,6 +637,15 @@ IF stage = "warming":
 IF stage = "referral": Mirror pain (Voss tactical empathy) + Before/After/Bridge + soft Need-Payoff question + referral handoff.
 ${objectionInstruction}
 ${spinInstruction}
+
+FRIEND PERSONA + OFFER TRUTH RULES:
+- In Friend mode, use only identity, backstory, transformation, stories, product experience, results, expert details, price and URLs explicitly marked approved in WORKSPACE_PROFILE.
+- Never invent a purchase, personal experience, income, sales number, testimonial, mentor relationship, price, guarantee or result.
+- If no verified result evidence is present, make no numerical performance claim.
+- A configured website is not permission to drop a link early. First detect a referral-ready signal, then ask permission, then make the handoff.
+- If the offer is not a fit, say so honestly and do not force a referral.
+- Automatic profile drafts are never live facts until approved.
+- Conversation learnings may improve audience/objection recognition, but they must never overwrite the approved identity, offer facts, story library or forbidden claims.
 
 TONE: Warm, human, calm, confident, relatable, NOT needy. Like a friend who's been through the same struggle.
 
@@ -623,11 +678,11 @@ VARIANT RULES:
 - Variant 2 (alternative): Same stage, DIFFERENT framework angle, DIFFERENT discovery question
 - Variant 3 (casual): Shortest, most natural, single powerful question + one framework technique
 
-MANDATORY CITATION + DIVERSITY (NON-NEGOTIABLE): Every variant MUST cite the EXACT principle from SALES_BRAIN_PRINCIPLES that it leans on, plus its source. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES — never invent.
-- The 3 variants MUST use 3 DIFFERENT source files and 3 DIFFERENT principle names whenever at least 3 sources are present in SALES_BRAIN_PRINCIPLES.
+MANDATORY CITATION: Every variant MUST cite the EXACT principle from SALES_BRAIN_PRINCIPLES that it leans on, plus its source. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES — never invent.
+- Prefer the most relevant source for each variant. Diversity is secondary to relevance and truth.
 - Do NOT keep defaulting to OBJECTION CRUSHER or Go Pro. Pick the principle whose actual lesson best matches the latest prospect message and buyer psychology.
 - In why_this_works, state the principle's actual lesson and how you applied it. Never only say "from Source A combined with Source B".
-- Final check before returning JSON: if two variants share the same cited_source_name or cited_principle_name, rewrite the weaker one using the next matching source from SALES_BRAIN_PRINCIPLES.
+- Final check before returning JSON: every cited source must genuinely support the message and every personal or offer claim must exist in WORKSPACE_PROFILE.
 
 Return JSON only:
 { "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "...", "principle_applied": "...", "cited_principle_name": "<exact principle_name from SALES_BRAIN_PRINCIPLES>", "cited_source_name": "<exact Source from SALES_BRAIN_PRINCIPLES>", "why_this_works": "References technique from your Brain: [Principle Name] — [Why it applies]. Frameworks used: [list]", "warmth_prediction": <number>, "frameworks_used": ["SPIN-Implication", "PAS", "Voss-Mirroring"] }] }${styleModifierInstruction}`;

@@ -347,40 +347,63 @@ function parsePrinciplesJson(raw: string): any[] {
 import { buildSourcePassages, chunkText, dedupePrinciples, formatTranscriptSegments, prepareBookSections, type DetectedChapter } from "./lib.ts";
 
 async function extractStructuredLearnings(content: string, sourceName: string, ai: AiProvider): Promise<any[]> {
-  // ===== PASS 1: Clean each 10k chunk independently, then concatenate =====
-  const rawChunks = chunkText(content, 10000);
-  console.log(`Pass 1: cleaning ${rawChunks.length} raw chunks of ~10k chars each`);
-
-  const cleanedParts: string[] = [];
-  for (let i = 0; i < rawChunks.length; i++) {
-    const cleaned = await cleanTranscriptChunk(rawChunks[i], ai);
-    console.log(`Pass 1 chunk ${i + 1}/${rawChunks.length}: ${rawChunks[i].length} → ${cleaned.length} chars`);
-    cleanedParts.push(cleaned);
-  }
-  const cleanedFull = cleanedParts.join("\n\n");
-  console.log(`Pass 1 done. Concatenated cleaned text: ${cleanedFull.length} chars`);
-
-  // ===== PASS 2: Re-chunk the cleaned text at 10k and extract from each =====
-  // ~12% overlap so a framework spanning a boundary stays whole in one chunk.
-  const extractionChunks = chunkText(cleanedFull, 10000, 1200);
-  console.log(`Pass 2: extracting from ${extractionChunks.length} cleaned chunks`);
+  // Cleaning every transcript chunk before extraction doubled the number of AI
+  // calls and caused long videos to outlive the edge-function wall clock. Extract
+  // directly from larger overlapping source windows, in bounded parallel batches.
+  // Every source window is still covered; preserved source passages remain the
+  // evidence layer while these rows become the visible, structured learning layer.
+  const extractionChunks = chunkText(content, 28000, 2200);
+  console.log(`Extracting structured learnings from ${extractionChunks.length} source windows`);
 
   const allLearnings: any[] = [];
-  for (let i = 0; i < extractionChunks.length; i++) {
-    const chunkLearnings = await extractStructuredLearningsChunk(
-      extractionChunks[i],
-      sourceName,
-      ai,
-      i,
-      extractionChunks.length,
-    );
-    allLearnings.push(...chunkLearnings);
-    console.log(`Pass 2 chunk ${i + 1}/${extractionChunks.length}: extracted ${chunkLearnings.length} principles`);
+  const concurrency = 6;
+  for (let offset = 0; offset < extractionChunks.length; offset += concurrency) {
+    const batch = extractionChunks.slice(offset, offset + concurrency);
+    const batchResults = await Promise.all(batch.map((chunk, batchIndex) => {
+      const index = offset + batchIndex;
+      return extractStructuredLearningsChunk(
+        chunk,
+        sourceName,
+        ai,
+        index,
+        extractionChunks.length,
+        { timeoutMs: 60000, maxTokens: 5000, maxPrinciples: 6 },
+      );
+    }));
+    for (let i = 0; i < batchResults.length; i++) {
+      allLearnings.push(...batchResults[i]);
+      console.log(`Extraction window ${offset + i + 1}/${extractionChunks.length}: ${batchResults[i].length} principles`);
+    }
   }
 
-  const deduped = dedupePrinciples(allLearnings);
-  console.log(`Pass 2 done. ${allLearnings.length} raw → ${deduped.length} unique principles`);
-  return deduped;
+  let deduped = dedupePrinciples(allLearnings);
+
+  // A provider can occasionally reject all parallel structured-output calls.
+  // Make one smaller representative fallback request rather than returning zero
+  // visible learnings while a complete source index exists.
+  if (deduped.length === 0 && content.length > 0) {
+    const windowSize = 8000;
+    const middle = Math.max(0, Math.floor(content.length / 2) - Math.floor(windowSize / 2));
+    const end = Math.max(0, content.length - windowSize);
+    const representative = [
+      content.substring(0, windowSize),
+      content.substring(middle, middle + windowSize),
+      content.substring(end),
+    ].filter(Boolean).join("\n\n--- NEXT SOURCE SECTION ---\n\n");
+    deduped = dedupePrinciples(await extractStructuredLearningsChunk(
+      representative,
+      sourceName,
+      ai,
+      0,
+      1,
+      { timeoutMs: 60000, maxTokens: 7000, maxPrinciples: 12 },
+    ));
+  }
+
+  // Keep the strongest comprehensive set manageable for retrieval and the UI.
+  const bounded = deduped.slice(0, 80);
+  console.log(`Structured extraction done. ${allLearnings.length} raw → ${bounded.length} unique principles`);
+  return bounded;
 }
 
 // ===== BOOK PIPELINE: Pass 1 (mapping) =====
@@ -665,6 +688,7 @@ Rules:
 }
 
 const SOURCE_INDEX_VERSION = 2;
+const PROCESS_KNOWLEDGE_PIPELINE_VERSION = 3;
 
 function sourcePassageType(type: string, url?: string | null): "pdf" | "video" | "content" {
   if (type === "pdf") return "pdf";
@@ -902,13 +926,17 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  let failureItemId: string | null = null;
+  let failureClient: any = null;
   try {
-    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex, continueBook, userId: bodyUserId } = await req.json();
+    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex, continueBook, refreshPrinciplesOnly, userId: bodyUserId } = await req.json();
+    failureItemId = typeof itemId === "string" ? itemId : null;
 
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
+    failureClient = supabase;
     // Note: PDF OCR uses OPENAI_API_KEY directly (server-side OpenAI vision); all
     // chat/extraction routes through the user's OWN provider key via chatTarget.
 
@@ -959,6 +987,7 @@ serve(async (req) => {
     }
 
     if (!userIdResolved) {
+      if (itemId) await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -973,6 +1002,7 @@ serve(async (req) => {
       ai = await resolveAiProvider(supabase, user.id);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
       return new Response(JSON.stringify({
         error: "missing_api_key",
         message: "AI is not configured for knowledge extraction.",
@@ -981,6 +1011,7 @@ serve(async (req) => {
       }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
     if (ai.isAnthropic) {
+      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
       return new Response(JSON.stringify({
         error: "unsupported_provider",
         message: "Anthropic isn't supported for knowledge extraction yet. Add an OpenAI or Gemini key in Settings.",
@@ -1021,7 +1052,18 @@ serve(async (req) => {
     }
     let content = "";
 
-    if (manualTranscript && manualTranscript.trim().length > 10) {
+    if (refreshPrinciplesOnly) {
+      const { data: storedPassages, error: passageError } = await supabase
+        .from("knowledge_chunks")
+        .select("content, chunk_index")
+        .eq("user_id", user.id)
+        .eq("source_id", itemId)
+        .eq("chunk_kind", "source_passage")
+        .order("chunk_index", { ascending: true })
+        .limit(1000);
+      if (passageError) throw new Error(`Could not load preserved source passages: ${passageError.message}`);
+      content = (storedPassages || []).map((passage: any) => passage.content).filter(Boolean).join("\n\n");
+    } else if (manualTranscript && manualTranscript.trim().length > 10) {
       content = manualTranscript.trim();
     } else if (type === "pdf" && (filePath || itemEarly.file_path)) {
       content = await extractPdfContent(filePath || itemEarly.file_path, supabase, itemId, corsHeaders);
@@ -1052,7 +1094,7 @@ serve(async (req) => {
     // A fresh processing run must never retain a previous success marker.
     // Completion is written back only after markSourceIndexReady verifies that
     // preserved source passages actually exist.
-    if (!continueBook && typeof retryChapterIndex !== "number") {
+    if (!refreshPrinciplesOnly && !continueBook && typeof retryChapterIndex !== "number") {
       const { error: resetIndexError } = await supabase.from("knowledge_base_items").update({
         source_index_version: 0,
         source_chunk_count: 0,
@@ -1064,7 +1106,7 @@ serve(async (req) => {
     }
 
     // ============== BOOK PIPELINE (PDF, long enough to benefit) ==============
-    const isBook = type === "pdf" && contentToProcess.length >= 5000;
+    const isBook = !refreshPrinciplesOnly && type === "pdf" && contentToProcess.length >= 5000;
 
     if (isBook) {
       console.log(`Book pipeline starting on ${contentToProcess.length} chars`);
@@ -1507,40 +1549,62 @@ serve(async (req) => {
 
     // ============== STANDARD PIPELINE (videos / short content) ==============
     console.log(`Three-pass pipeline starting on ${contentToProcess.length} chars`);
-    await deleteSourcePassages(supabase, user.id, itemId);
-    await persistSourcePassages(
-      supabase, user.id, itemId, item.brain_type, sourceName,
-      type, item.url, contentToProcess, ai,
-    );
-    const learnings = await extractStructuredLearnings(contentToProcess, sourceName, ai);
+    let sourcePassageCount = 0;
+    if (refreshPrinciplesOnly) {
+      sourcePassageCount = await markSourceIndexReady(supabase, user.id, itemId);
+    } else {
+      await deleteSourcePassages(supabase, user.id, itemId);
+      sourcePassageCount = await persistSourcePassages(
+        supabase, user.id, itemId, item.brain_type, sourceName,
+        type, item.url, contentToProcess, ai,
+      );
+    }
+    // Full-source preservation is the success condition for an upgrade. Mark it
+    // complete before the optional principle refresh so a later AI failure cannot
+    // turn a successfully indexed video back into a failed item.
+    await markSourceIndexReady(supabase, user.id, itemId);
+    console.log(`Full-source upgrade complete with ${sourcePassageCount} passages for ${itemId}`);
+
+    let learnings: any[] = [];
+    try {
+      learnings = await extractStructuredLearnings(contentToProcess, sourceName, ai);
+    } catch (learningError) {
+      console.warn(`Source indexed, but principle refresh failed for ${itemId}:`, learningError);
+      await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+      return;
+    }
     console.log(`Pass 2 complete: ${learnings.length} principles extracted`);
 
     if (learnings.length === 0) {
-      console.warn(`No principles extracted for standard item ${itemId}; marking error instead of leaving processing`);
-      await markSourceIndexReady(supabase, user.id, itemId);
-      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+      console.warn(`Source indexed for ${itemId}; no additional principles were returned`);
+      await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
       return;
     }
 
     const storedLearnings: any[] = [];
     const seenChunkContent = new Set<string>();
     try {
-      for (const learning of learnings) {
-        const stored = await persistLearning(
-          supabase, user.id, itemId, item.brain_type, sourceName, learning, ai, seenChunkContent,
-        );
-        if (stored) {
-          storedLearnings.push({
-            id: stored.id,
-            principle_name: stored.principle_name,
-            what_i_learned: stored.what_i_learned,
-            how_to_apply: stored.how_to_apply,
-            category: stored.category,
-            source_name: stored.source_name,
-            power_level: stored.power_level,
-            cited_principle_name: stored.principle_name,
-            cited_source_name: stored.source_name,
-          });
+      const persistConcurrency = 6;
+      for (let offset = 0; offset < learnings.length; offset += persistConcurrency) {
+        const storedBatch = await Promise.all(learnings.slice(offset, offset + persistConcurrency).map((learning) =>
+          persistLearning(
+            supabase, user.id, itemId, item.brain_type, sourceName, learning, ai, seenChunkContent,
+          )
+        ));
+        for (const stored of storedBatch) {
+          if (stored) {
+            storedLearnings.push({
+              id: stored.id,
+              principle_name: stored.principle_name,
+              what_i_learned: stored.what_i_learned,
+              how_to_apply: stored.how_to_apply,
+              category: stored.category,
+              source_name: stored.source_name,
+              power_level: stored.power_level,
+              cited_principle_name: stored.principle_name,
+              cited_source_name: stored.source_name,
+            });
+          }
         }
       }
     } catch (persistErr: any) {
@@ -1548,11 +1612,12 @@ serve(async (req) => {
         console.log(`Item ${itemId} deleted mid-pipeline (standard) — aborting.`);
         return;
       }
-      throw persistErr;
+      console.warn(`Source indexed, but principle persistence stopped for ${itemId}:`, persistErr);
+      await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+      return;
     }
 
     console.log(`Stored ${storedLearnings.length} weapon-grade principles (deduped) + matching chunks`);
-    await markSourceIndexReady(supabase, user.id, itemId);
     await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
     };
 
@@ -1563,11 +1628,16 @@ serve(async (req) => {
       try {
         const { data: current } = await supabase
           .from("knowledge_base_items")
-          .select("status, book_brief")
+          .select("status, book_brief, source_index_version, source_chunk_count, indexed_at")
           .eq("id", itemId)
           .maybeSingle();
         const chapters = Array.isArray(current?.book_brief?.chapters) ? current.book_brief.chapters : [];
-        if (current?.status === "extracting" && chapters.length > 0) {
+        const sourceIndexComplete = Number(current?.source_index_version || 0) >= SOURCE_INDEX_VERSION
+          && Number(current?.source_chunk_count || 0) > 0
+          && Boolean(current?.indexed_at);
+        if (sourceIndexComplete) {
+          await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+        } else if (current?.status === "extracting" && chapters.length > 0) {
           const recovered = chapters.map((c: any) =>
             c.status === "extracting"
               ? { ...c, status: "pending", error: "Previous attempt stopped — queued to retry" }
@@ -1594,12 +1664,19 @@ serve(async (req) => {
       status: "processing",
       message: "Processing started in background. Poll item status for completion.",
       itemId,
+      pipelineVersion: PROCESS_KNOWLEDGE_PIPELINE_VERSION,
+      jobType: refreshPrinciplesOnly ? "structured_insights" : "full_source",
     }), {
       status: 202,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
     console.error("process-knowledge error:", error);
+    if (failureClient && failureItemId) {
+      try {
+        await failureClient.from("knowledge_base_items").update({ status: "error" }).eq("id", failureItemId);
+      } catch (_) { /* best effort: never leave a synchronous failure spinning */ }
+    }
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

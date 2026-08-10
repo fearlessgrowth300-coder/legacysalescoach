@@ -16,6 +16,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import WorkspaceTrainingUpload from "@/components/WorkspaceTrainingUpload";
 import FrameworkPreview from "@/components/FrameworkPreview";
+import FriendWorkspaceSetup from "@/components/FriendWorkspaceSetup";
 
 export default function Workspaces() {
   const { user } = useAuth();
@@ -170,6 +171,15 @@ export default function Workspaces() {
           // Non-blocking
         }
       }
+      if (editWorkspace?.workspace_type === "friend" && editWorkspace?.friend_persona_status !== "draft") {
+        try {
+          await supabase.functions.invoke("analyze-profile", {
+            body: { workspaceId: editWorkspace.id, syncApproved: true },
+          });
+        } catch {
+          toast.warning("Workspace saved, but the Friend persona search index could not be refreshed.");
+        }
+      }
       setEditOpen(false);
       setEditWorkspace(null);
       queryClient.invalidateQueries({ queryKey: ["workspaces"] });
@@ -230,8 +240,15 @@ export default function Workspaces() {
             });
             toast.success("Framework parsed into enforceable rules!");
           }
-          await supabase.functions.invoke("analyze-profile", { body: { workspaceId: (inserted as any).id } });
-          toast.success("Profile analyzed & framework saved!");
+          if ((inserted as any).workspace_type === "friend") {
+            await supabase.functions.invoke("analyze-profile", {
+              body: { workspaceId: (inserted as any).id, syncApproved: true },
+            });
+            toast.success("Friend workspace saved. Open Friend Setup to add the offer or use automatic profile analysis.");
+          } else {
+            await supabase.functions.invoke("analyze-profile", { body: { workspaceId: (inserted as any).id } });
+            toast.success("Profile analyzed & framework saved!");
+          }
           queryClient.invalidateQueries({ queryKey: ["workspaces"] });
         } catch {
           toast.info("Workspace saved, but auto-analysis failed. You can analyze manually.");
@@ -398,7 +415,7 @@ export default function Workspaces() {
 
             <div>
               <Label className="text-sm font-semibold">Top Pain Points In This Niche</Label>
-              <p className="text-xs text-muted-foreground mb-2">List every struggle, fear, and frustration. The AI will detect and respond from personal experience.</p>
+              <p className="text-xs text-muted-foreground mb-2">List every struggle, fear, and frustration. The AI will recognize them and respond appropriately.</p>
               <Textarea value={vals.pp} onChange={(e) => setters.pp(e.target.value)} rows={6} placeholder={`List all pain points (one per line):
 - Struggling to make their first sale online
 - Overwhelmed by too many tools and platforms
@@ -423,16 +440,16 @@ export default function Workspaces() {
 
             <div>
               <Label className="text-sm font-semibold">The Friend's Personal Story</Label>
-              <p className="text-xs text-muted-foreground mb-2">The story the AI tells as its own — first person, mirroring the audience's struggle.</p>
+              <p className="text-xs text-muted-foreground mb-2">A real, user-approved first-person story. Never add an invented experience.</p>
               <Textarea value={vals.back} onChange={(e) => setters.back(e.target.value)} rows={6} placeholder={`Write the friend's story in first person:
 I was exactly where you are 18 months ago. I was a mum of 3, working a job I hated, trying to figure out this whole online business thing while everyone around me told me I was wasting my time...`} />
             </div>
 
             <div>
               <Label className="text-sm font-semibold">The Transformation / Result</Label>
-              <p className="text-xs text-muted-foreground mb-2">What changed for the friend. Real and specific — no income claims.</p>
+              <p className="text-xs text-muted-foreground mb-2">What genuinely changed for the friend. Keep every fact specific and support any numerical result with approved evidence.</p>
               <Textarea value={vals.trans} onChange={(e) => setters.trans(e.target.value)} rows={5} placeholder={`What changed and how:
-Then I found a team that actually showed me step by step. Within 3 months I replaced my job income and now I work from home around my kids...`} />
+Then I found a team that showed me the process step by step. I became more consistent, understood what to do next, and finally made progress I can document...`} />
             </div>
 
             <div>
@@ -555,12 +572,21 @@ The team that helped me is run by [name]. They specialise in helping people like
                     <CardDescription className="mt-1 text-xs sm:text-sm line-clamp-2">{workspace.niche_description || "No description"}</CardDescription>
                   </div>
                   <div className="flex gap-2 shrink-0">
+                    {workspace.workspace_type === "friend" && user && (
+                      <FriendWorkspaceSetup
+                        workspace={workspace}
+                        userId={user.id}
+                        onChanged={() => queryClient.invalidateQueries({ queryKey: ["workspaces"] })}
+                      />
+                    )}
                     <Button variant="outline" size="sm" onClick={() => openEditDialog(workspace)}>
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => analyzeProfile(workspace.id)} disabled={analyzingId === workspace.id}>
-                      {analyzingId === workspace.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                    </Button>
+                    {workspace.workspace_type === "expert" && (
+                      <Button variant="outline" size="sm" onClick={() => analyzeProfile(workspace.id)} disabled={analyzingId === workspace.id}>
+                        {analyzingId === workspace.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                      </Button>
+                    )}
                     {!workspace.is_active && (
                       <Button variant="outline" size="sm" onClick={() => setActive.mutate(workspace.id)}>
                         <Check className="h-4 w-4" />
@@ -582,6 +608,26 @@ The team that helped me is run by [name]. They specialise in helping people like
                   {workspace.business_model && <div><p className="text-muted-foreground text-xs">Business Model</p><p className="truncate text-sm">{workspace.business_model}</p></div>}
                   {workspace.positioning && <div><p className="text-muted-foreground text-xs">Positioning</p><p className="truncate text-sm">{workspace.positioning}</p></div>}
                 </div>
+                {workspace.workspace_type === "friend" && (
+                  <div className="mt-3 rounded-lg border bg-muted/30 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-medium">Friend Persona & Referral Engine</p>
+                        <p className="text-xs text-muted-foreground">
+                          {workspace.friend_persona_status === "approved"
+                            ? `${workspace.friend_setup_mode === "auto" ? "Automatic profile" : "Custom identity"} approved for live replies.`
+                            : "Automatic profile draft needs your review before the AI can use it."}
+                        </p>
+                      </div>
+                      <Badge variant={workspace.friend_persona_status === "approved" ? "secondary" : "outline"}>
+                        {workspace.friend_persona_status === "approved" ? "Approved" : "Draft"}
+                      </Badge>
+                    </div>
+                    {(workspace.offer_truth as any)?.name && (
+                      <p className="text-xs mt-2"><span className="text-muted-foreground">Offer:</span> {(workspace.offer_truth as any).name}</p>
+                    )}
+                  </div>
+                )}
                 {workspace.custom_framework && (
                   <div className="mt-3 p-3 bg-muted rounded-lg">
                     <p className="text-xs font-medium mb-1">Custom Framework</p>

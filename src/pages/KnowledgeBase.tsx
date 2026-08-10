@@ -62,7 +62,9 @@ export default function KnowledgeBase() {
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [pdfProgress, setPdfProgress] = useState<{ step: string; percent: number } | null>(null);
   const autoResumeRef = useRef<Record<string, number>>({});
+  const autoRecoveryAttemptsRef = useRef<Record<string, number>>({});
   const markReadyRef = useRef<Record<string, number>>({});
+  const completedIndexRepairRef = useRef<Set<string>>(new Set());
 
   // URL preview state
   const [urlStep, setUrlStep] = useState<"input" | "preview" | "confirm">("input");
@@ -84,6 +86,33 @@ export default function KnowledgeBase() {
     },
     enabled: !!user,
   });
+
+  // Repair legacy rows where the full source is already indexed but a later,
+  // optional principle refresh incorrectly changed the overall status to error.
+  useEffect(() => {
+    const completedButErrored = (items || []).filter((item: any) =>
+      item.status === "error"
+      && hasFullSourceIndex(item)
+      && !completedIndexRepairRef.current.has(item.id)
+    );
+    if (completedButErrored.length === 0) return;
+
+    for (const item of completedButErrored) {
+      completedIndexRepairRef.current.add(item.id);
+      void supabase
+        .from("knowledge_base_items")
+        .update({ status: "ready" })
+        .eq("id", item.id)
+        .then(({ error }) => {
+          if (error) {
+            completedIndexRepairRef.current.delete(item.id);
+            console.warn("Could not reconcile completed source index", error);
+            return;
+          }
+          queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+        });
+    }
+  }, [items, queryClient]);
 
   // Per-item summary counts (lightweight): one tiny query per item.
   // This avoids the default 1000-row cap on a single global SELECT, which used to
@@ -440,6 +469,7 @@ export default function KnowledgeBase() {
               })
               .eq("id", item.id);
             if (!error) {
+              delete autoRecoveryAttemptsRef.current[item.id];
               toast.success(`Recovered ${item.title || "item"} — extraction is ready`);
               continue;
             }
@@ -452,19 +482,52 @@ export default function KnowledgeBase() {
         const lastResume = autoResumeRef.current[item.id] || 0;
         if (!stale || now - lastResume < 90_000) continue;
 
-        if (item.type === "pdf") {
-          const chapters = Array.isArray((item as any).book_brief?.chapters) ? (item as any).book_brief.chapters : [];
-          const hasOpenChapter = chapters.some((c: any) => c.status === "pending" || c.status === "extracting");
+        const attempts = autoRecoveryAttemptsRef.current[item.id] || 0;
+        if (attempts >= 2) {
           autoResumeRef.current[item.id] = now;
-          void supabase.functions.invoke("process-knowledge", {
-            body: {
+          const { error } = await supabase
+            .from("knowledge_base_items")
+            .update({ status: "error" })
+            .eq("id", item.id)
+            .in("status", ["processing", "mapping", "extracting"]);
+          if (!error) {
+            toast.error(`${item.title || "Knowledge source"} stopped after two recovery attempts. Use Retry to start a clean extraction.`);
+            delete autoRecoveryAttemptsRef.current[item.id];
+          }
+          continue;
+        }
+
+        autoResumeRef.current[item.id] = now;
+        autoRecoveryAttemptsRef.current[item.id] = attempts + 1;
+        const chapters = Array.isArray((item as any).book_brief?.chapters) ? (item as any).book_brief.chapters : [];
+        const hasOpenChapter = chapters.some((c: any) => c.status === "pending" || c.status === "extracting");
+        const recoveryBody: any = item.type === "pdf"
+          ? {
               itemId: item.id,
               type: "pdf",
               filePath: item.file_path,
               continueBook: hasOpenChapter,
-            },
-          }).finally(() => queryClient.invalidateQueries({ queryKey: ["kb-items"] }));
-        }
+            }
+          : {
+              itemId: item.id,
+              type: item.type,
+              url: item.url,
+            };
+
+        toast.info(`Recovering stalled extraction for ${item.title || "knowledge source"}…`);
+        void supabase.functions.invoke("process-knowledge", { body: recoveryBody })
+          .then(async ({ data, error }) => {
+            if (error || data?.error) {
+              console.error("Automatic extraction recovery failed", error || data?.error);
+              await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", item.id);
+              toast.error(`${item.title || "Knowledge source"} could not recover. Use Retry to run a clean extraction.`);
+            }
+          })
+          .catch(async (error) => {
+            console.error("Automatic extraction recovery failed", error);
+            await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", item.id);
+          })
+          .finally(() => queryClient.invalidateQueries({ queryKey: ["kb-items"] }));
       }
       // Refresh items so book_brief / chapter status update live
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
@@ -623,7 +686,10 @@ export default function KnowledgeBase() {
             .eq("id", id)
             .maybeSingle(),
         ]);
-        const upgradeComplete = indexState?.status === "ready" && hasFullSourceIndex(indexState);
+        const upgradeComplete = hasFullSourceIndex(indexState || {});
+        if (upgradeComplete && indexState?.status !== "ready") {
+          await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", id);
+        }
         setRetryProgress((p) => {
           const cur = p[id];
           if (!cur) return p;
@@ -651,7 +717,7 @@ export default function KnowledgeBase() {
             });
             retryCompletionRef.current.delete(id);
           }, 5000);
-        } else if (indexState?.status === "error" && !retryCompletionRef.current.has(id)) {
+        } else if (indexState?.status === "error" && !upgradeComplete && !retryCompletionRef.current.has(id)) {
           retryCompletionRef.current.add(id);
           setRetryProgress((p) => {
             const { [id]: _gone, ...rest } = p;
@@ -679,15 +745,12 @@ export default function KnowledgeBase() {
         },
       }));
       retryCompletionRef.current.delete(item.id);
+      delete autoRecoveryAttemptsRef.current[item.id];
+      delete autoResumeRef.current[item.id];
 
-      // Wipe stale derived data so re-extraction produces fresh principles
-      // (otherwise dedup may suppress new inserts for the same source).
-      const [brainDelete, chunkDelete] = await Promise.all([
-        supabase.from("sales_brain").delete().eq("source_id", item.id),
-        supabase.from("knowledge_chunks").delete().eq("source_id", item.id),
-      ]);
-      const cleanupError = brainDelete.error || chunkDelete.error;
-      if (cleanupError) throw cleanupError;
+      // Preserve existing principles while upgrading the complete source. The
+      // backend replaces source-passage rows safely and upserts principles; a
+      // failed refresh must never erase knowledge that was already usable.
 
       // Reset status + clear any cached book_brief so the pipeline starts clean
       const { error: resetError } = await supabase
@@ -750,6 +813,31 @@ export default function KnowledgeBase() {
     },
   });
 
+  const extractInsights = useMutation({
+    mutationFn: async (item: any) => {
+      const { data, error } = await supabase.functions.invoke("process-knowledge", {
+        body: {
+          itemId: item.id,
+          type: item.type,
+          refreshPrinciplesOnly: true,
+        },
+      });
+      if (error || data?.error) throw new Error(data?.error || error?.message || "Insight extraction failed");
+      if (Number(data?.pipelineVersion || 0) < 3 || data?.jobType !== "structured_insights") {
+        throw new Error("Lovable Cloud is still running the old knowledge processor. Deploy the current process-knowledge function before extracting insights.");
+      }
+      return item.id;
+    },
+    onSuccess: () => {
+      toast.success("Structured insight extraction started from the preserved full source.");
+      queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+      queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
+      queryClient.invalidateQueries({ queryKey: ["brain-total"] });
+      startPolling();
+    },
+    onError: (error: any) => toast.error(error.message || "Could not extract structured insights"),
+  });
+
 
   const getStatusIcon = (status: string) => {
     if (status === "ready") return <CheckCircle2 className="h-4 w-4 text-green-500" />;
@@ -806,11 +894,15 @@ export default function KnowledgeBase() {
     }
     if (collected.length > 0) return collected;
 
-    // Fallback: raw chunks if no structured learnings exist
+    // Fallback only to structured principle-summary chunks. Original source
+    // passages are retrieval evidence for the AI and must never be presented to
+    // the user as if they were extracted principles.
     const { data: chunkData } = await supabase
       .from("knowledge_chunks")
-      .select("id, category, content, trigger_phrases")
+      .select("id, category, content, trigger_phrases, chunk_kind")
       .eq("source_id", itemId)
+      .neq("category", "source_evidence")
+      .neq("chunk_kind", "source_passage")
       .order("created_at", { ascending: false })
       .limit(1000);
     return (chunkData || []).map((chunk: any) => ({
@@ -1488,20 +1580,24 @@ export default function KnowledgeBase() {
                               ? "No principles extracted yet."
                               : `${getInsightCountForItem(item.id)} principles extracted. Upgrade to preserve the full source.`}
                           </p>
-                          {!itemIsUpgraded && (
+                          {(!itemIsUpgraded || getInsightCountForItem(item.id) === 0) && (
                             <Button
                               variant={getInsightCountForItem(item.id) === 0 ? "default" : "outline"}
                               size="sm"
-                              onClick={(e) => { e.stopPropagation(); retryItem.mutate(item); }}
-                              disabled={retryItem.isPending}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (itemIsUpgraded) extractInsights.mutate(item);
+                                else retryItem.mutate(item);
+                              }}
+                              disabled={retryItem.isPending || extractInsights.isPending}
                               className="shrink-0"
                             >
-                              {retryItem.isPending ? (
+                              {(retryItem.isPending || extractInsights.isPending) ? (
                                 <Loader2 className="h-3 w-3 mr-1 animate-spin" />
                               ) : (
                                 <RefreshCw className="h-3 w-3 mr-1" />
                               )}
-                              Upgrade source
+                              {itemIsUpgraded ? "Extract insights" : "Upgrade source"}
                             </Button>
                           )}
                         </div>
@@ -1515,7 +1611,7 @@ export default function KnowledgeBase() {
                             showLearnings([], item.title);
                             const itemInsights = await loadInsightsForItem(item.id);
                             if (itemInsights.length === 0) {
-                              toast.info("No insights found for this item yet.");
+                              toast.info("The full source is preserved, but structured insights have not been extracted yet. Use Extract insights.");
                               setLearningsDialogOpen(false);
                               return;
                             }

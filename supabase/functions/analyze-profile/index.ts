@@ -6,7 +6,11 @@ import { generateEmbedding } from "../_shared/embeddings.ts";
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
-  const isAllowed = origin.endsWith(".lovable.app") || origin.startsWith("http://localhost:");
+  const isAllowed = origin.endsWith(".lovable.app") ||
+    origin.endsWith(".lovableproject.com") ||
+    origin.startsWith("http://localhost:") ||
+    origin.startsWith("http://127.0.0.1:") ||
+    origin.startsWith("http://[::1]:");
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : "https://legacysalescoach.lovable.app",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
@@ -41,6 +45,82 @@ async function scrapeUrl(url: string): Promise<string> {
   }
 }
 
+function safeObject(value: any): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+async function syncApprovedFriendPersona(supabase: any, userId: string, workspace: any) {
+  if (workspace.workspace_type !== "friend") throw new Error("Only Friend workspaces use the Friend Persona engine");
+  if (workspace.friend_persona_status !== "approved") throw new Error("Review and approve the Friend persona before syncing it");
+
+  const persona = safeObject(workspace.friend_persona);
+  const offer = safeObject(workspace.offer_truth);
+  const stories = Array.isArray(workspace.approved_stories) ? workspace.approved_stories : [];
+  const { data: proofAssets } = await supabase
+    .from("workspace_proof_assets")
+    .select("title, result_type, result_value, result_date, description")
+    .eq("user_id", userId)
+    .eq("workspace_id", workspace.id)
+    .eq("approved_for_ai", true)
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  const personaSummary = [
+    `Approved Friend Persona: ${persona.display_name || workspace.name}`,
+    persona.role ? `Role: ${persona.role}` : "",
+    persona.voice_notes ? `Voice: ${persona.voice_notes}` : "",
+    workspace.audience_description ? `Audience: ${workspace.audience_description}` : "",
+    workspace.pain_points ? `Audience pains: ${workspace.pain_points}` : "",
+    workspace.common_objections ? `Common objections: ${workspace.common_objections}` : "",
+    workspace.friend_backstory ? `Real backstory: ${workspace.friend_backstory}` : "",
+    workspace.transformation ? `Real transformation: ${workspace.transformation}` : "",
+    stories.length ? `Approved true stories: ${stories.join(" | ")}` : "",
+    offer.name ? `Offer used/recommended: ${offer.name}` : "",
+    offer.description ? `Offer description: ${offer.description}` : "",
+    offer.personal_experience ? `Genuine product experience: ${offer.personal_experience}` : "",
+    offer.price ? `Verified price: ${offer.price}` : "",
+    offer.who_it_is_for ? `Offer fit: ${offer.who_it_is_for}` : "",
+    offer.who_it_is_not_for ? `Not a fit: ${offer.who_it_is_not_for}` : "",
+    offer.referral_url ? `Approved referral destination: ${offer.referral_url}` : "",
+    workspace.expert_description ? `Expert/team: ${workspace.expert_description}` : "",
+    workspace.referral_triggers ? `Referral triggers: ${workspace.referral_triggers}` : "",
+    workspace.forbidden_claims ? `Forbidden claims: ${workspace.forbidden_claims}` : "",
+    ...(proofAssets || []).map((proof: any) =>
+      `Approved factual result: ${proof.title}${proof.result_value ? ` (${proof.result_value})` : ""}${proof.result_date ? ` on ${proof.result_date}` : ""}${proof.description ? ` — ${proof.description}` : ""}`
+    ),
+  ].filter(Boolean).join("\n");
+
+  const embedding = await generateEmbedding(personaSummary, supabase, userId);
+  await supabase.from("sales_brain").delete()
+    .eq("user_id", userId)
+    .eq("workspace_id", workspace.id)
+    .eq("source_type", "workspace_persona");
+
+  const { error } = await supabase.from("sales_brain").insert({
+    user_id: userId,
+    workspace_id: workspace.id,
+    principle_name: `Approved Friend Persona: ${persona.display_name || workspace.name}`,
+    what_i_learned: personaSummary,
+    how_to_apply: "Use only these user-approved identity, story, offer and result facts. Never invent personal experience, income, proof, price or guarantees. Refer only when the configured readiness signals are present.",
+    source_name: workspace.name,
+    source_type: "workspace_persona",
+    brain_type: "friend",
+    category: "general",
+    relevance_score: 100,
+    metadata: {
+      persona,
+      offer,
+      approved_stories: stories,
+      approved_proof_count: (proofAssets || []).length,
+      persona_version: workspace.friend_persona_version || 1,
+      approved_at: workspace.friend_persona_approved_at,
+    },
+    embedding,
+  });
+  if (error) throw error;
+  return { approvedProofCount: (proofAssets || []).length };
+}
+
 // (embedding helper moved to shared util — see imports above)
 
 
@@ -50,7 +130,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { workspaceId } = await req.json();
+    const { workspaceId, profileSnapshot, draftOnly, syncApproved } = await req.json();
     if (!workspaceId) throw new Error("workspaceId required");
 
     const authHeader = req.headers.get("Authorization");
@@ -79,8 +159,18 @@ serve(async (req) => {
       });
     }
 
+    if (syncApproved) {
+      const synced = await syncApprovedFriendPersona(supabase, user.id, workspace);
+      return new Response(JSON.stringify({ success: true, synced: true, ...synced }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // Scrape all available URLs
     const scrapedParts: string[] = [];
+    if (typeof profileSnapshot === "string" && profileSnapshot.trim()) {
+      scrapedParts.push(`--- VERIFIED SCRAPER SNAPSHOT ---\n${profileSnapshot.trim().substring(0, 24000)}`);
+    }
     const urls = [
       { label: "Instagram", url: workspace.instagram_url },
       { label: "TikTok", url: workspace.tiktok_url },
@@ -177,39 +267,70 @@ Return JSON: { "profile_analysis": "...", "products_detected": "..." }`;
       .eq("id", workspaceId);
 
     // ===== STEP 2: Extract & Save Structured Persona (workspace_persona) =====
-    const personaPrompt = `Based on this business profile, create a structured persona object for this workspace.
+    const personaPrompt = workspace.workspace_type === "friend"
+      ? `Create a REVIEW DRAFT for a Friend Persona from the supplied profile evidence.
+
+Workspace: ${workspace.name}
+Niche: ${workspace.niche_description || "Not provided"}
+Profile analysis: ${profileAnalysis}
+Products detected: ${productsDetected}
+Existing audience notes: ${workspace.audience_description || "None"}
+Existing framework: ${workspace.custom_framework || "None"}
+
+Profile evidence:
+${scrapedParts.join("\n\n")}
+
+TRUTH RULES:
+- Infer communication style, audience themes, pains and objections from visible evidence.
+- NEVER invent a personal purchase, income, sales result, transformation, testimonial, price, guarantee, mentor relationship or expert endorsement.
+- Leave any unsupported factual field as an empty string or empty array.
+- Detected products are possibilities, not proof that the user bought or recommends them.
+- Stories may only be copied or faithfully summarized when the profile explicitly states that they happened to this person.
+
+Return JSON with exactly this shape:
+{
+  "friend_persona": {
+    "display_name": "short persona name",
+    "role": "how this person is positioned relative to friends",
+    "voice_notes": "tone, vocabulary, length, emoji and energy observations",
+    "audience": "primary audience"
+  },
+  "audience_description": "specific audience and lifestyle",
+  "pain_points": ["evidence-supported audience pains"],
+  "common_objections": ["likely objections supported by content"],
+  "friend_backstory": "only an explicitly stated real first-person backstory, otherwise empty",
+  "transformation": "only an explicitly stated real result/transformation, otherwise empty",
+  "approved_stories": ["explicit first-person stories found in the evidence; these still require user approval"],
+  "expert_description": "only an expert/team explicitly named or endorsed, otherwise empty",
+  "referral_triggers": ["observable signals that a friend is asking for relevant help"],
+  "offer_truth": {
+    "name": "detected product/course name or empty",
+    "description": "what visible evidence says it does",
+    "personal_experience": "only explicit first-person use, otherwise empty",
+    "price": "only an explicitly visible current price, otherwise empty",
+    "who_it_is_for": "evidence-supported fit",
+    "who_it_is_not_for": "evidence-supported limitation or empty",
+    "referral_url": "explicit product/store URL or empty"
+  },
+  "forbidden_claims": ["claims that are unsupported and must not be made"],
+  "profile_evidence": "concise explanation of what was actually visible",
+  "confidence_notes": "what the user must verify before approval"
+}
+
+Return JSON only.`
+      : `Based on this business profile, create a structured expert persona object.
 
 Workspace name: ${workspace.name}
-Workspace type: ${workspace.workspace_type || "friend"}
 Niche description: ${workspace.niche_description || "Not provided"}
 Profile Analysis: ${profileAnalysis}
 Products: ${productsDetected}
-${workspace.target_audience ? `Target Audience: ${workspace.target_audience}` : ""}
-${workspace.business_model ? `Business Model: ${workspace.business_model}` : ""}
-${workspace.positioning ? `Market Positioning: ${workspace.positioning}` : ""}
+Target Audience: ${workspace.target_audience || "Not provided"}
+Business Model: ${workspace.business_model || "Not provided"}
+Positioning: ${workspace.positioning || "Not provided"}
+Custom Framework: ${workspace.custom_framework || "None"}
+Profile evidence: ${scrapedParts.join("\n\n")}
 
-${workspace.custom_framework ? `CUSTOM CONVERSATION FRAMEWORK (this is the user's primary reply guide — the persona MUST reflect this framework's tone, style, and approach):\n${workspace.custom_framework}\n` : ""}
-
-Scraped content from their profiles:
-${scrapedParts.join("\n\n")}
-
-IMPORTANT: If a custom framework was provided above, the persona's tone, energy, positioning, and close style MUST align with that framework. Extract the tone and approach directly from the framework text.
-
-Return a JSON object with these exact fields:
-{
-  "workspace_name": "short persona name derived from niche + framework style, e.g. 'Digital Mom Friend' or 'Fitness Authority Coach'",
-  "tone": "extracted from the custom framework if provided, otherwise inferred from content. e.g. Warm, relatable / Professional, authoritative",
-  "audience": "extracted from niche description + content. e.g. Beginner moms / Aspiring entrepreneurs",
-  "positioning": "derived from framework + niche. e.g. Peer who succeeded / Authority expert",
-  "energy": "derived from framework tone. e.g. Calm, encouraging / High-energy, motivational",
-  "allowed_close_style": "derived from framework close strategy. e.g. Soft invitation / Direct ask",
-  "niche_detected": "the specific niche detected from description + content",
-  "audience_type": "the type of audience (beginner/intermediate/advanced)",
-  "key_themes": "3-5 main themes from their content + framework, comma-separated",
-  "framework_summary": "1-2 sentence summary of the custom framework's core approach, or 'No custom framework' if none provided"
-}
-
-Return ONLY the JSON object.`;
+Return JSON with: workspace_name, tone, audience, positioning, energy, allowed_close_style, niche_detected, audience_type, key_themes, framework_summary. Return JSON only.`;
 
     const personaResponse = await userChat(chat, {
       model: chat.models.reasoning,
@@ -234,8 +355,19 @@ Return ONLY the JSON object.`;
       }
     }
 
-    // Save persona to sales_brain as workspace_persona
-    if (personaData) {
+    // Automatic Friend analysis always remains a draft. It cannot influence
+    // live conversations until the owner reviews and explicitly approves it.
+    if (personaData && workspace.workspace_type === "friend") {
+      const { error: draftError } = await supabase.from("workspaces").update({
+        auto_profile_draft: personaData,
+        friend_setup_mode: "auto",
+        friend_persona_status: "draft",
+      }).eq("id", workspaceId).eq("user_id", user.id);
+      if (draftError) throw draftError;
+    }
+
+    // Expert workspaces keep the existing generated workspace persona flow.
+    if (personaData && workspace.workspace_type !== "friend") {
       // Delete existing workspace_persona entries for this workspace
       await supabase
         .from("sales_brain")
@@ -275,7 +407,14 @@ Workspace Type: ${workspace.workspace_type || "friend"}`;
       console.log("Saved workspace persona to sales_brain");
     }
 
-    return new Response(JSON.stringify({ success: true, profileAnalysis, productsDetected, persona: personaData }), {
+    return new Response(JSON.stringify({
+      success: true,
+      profileAnalysis,
+      productsDetected,
+      persona: personaData,
+      draft: workspace.workspace_type === "friend" ? personaData : null,
+      requiresApproval: workspace.workspace_type === "friend" || Boolean(draftOnly),
+    }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
