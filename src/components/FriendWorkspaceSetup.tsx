@@ -10,9 +10,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { fetchInstagramProfile } from "@/lib/fetch-instagram";
-import { DEFAULT_FRIEND_BEHAVIOR, friendDraftPayload, mergeAutomaticFriendDraft, normalizeFriendProfileDraft, objectValue, storyLines } from "@/lib/friend-workspace";
+import { DEFAULT_FRIEND_BEHAVIOR, type FriendCourse, friendDraftPayload, mergeAutomaticFriendDraft, normalizeFriendCourses, normalizeFriendProfileDraft, objectValue, storyLines } from "@/lib/friend-workspace";
 import { supabase } from "@/integrations/supabase/client";
-import { CheckCircle2, FileCheck2, Loader2, ScanSearch, ShieldCheck, Sparkles, Trash2, Upload } from "lucide-react";
+import { CheckCircle2, FileCheck2, Loader2, Plus, ScanSearch, ShieldCheck, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 type Props = {
@@ -22,6 +22,7 @@ type Props = {
 };
 
 const cleanPathPart = (value: string) => value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+const blankCourse = (): FriendCourse => ({ name: "", website: "", description: "", personal_experience: "", results_summary: "" });
 
 const friendSetupErrorMessage = (error: any) => {
   const message = error?.message || String(error || "Friend setup failed");
@@ -64,6 +65,7 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
   const [profilePicUrl, setProfilePicUrl] = useState("");
   const [courseUrl, setCourseUrl] = useState("");
   const [courseResults, setCourseResults] = useState("");
+  const [extraCourses, setExtraCourses] = useState<FriendCourse[]>([]);
   const [conversationExamples, setConversationExamples] = useState("");
   const [behaviorGuidelines, setBehaviorGuidelines] = useState(DEFAULT_FRIEND_BEHAVIOR);
   const [strategyName, setStrategyName] = useState("");
@@ -108,9 +110,11 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
     setStories(Array.isArray(workspace.approved_stories) ? workspace.approved_stories.join("\n---\n") : "");
     setExpert(workspace.expert_description || "");
     setReferralTriggers(workspace.referral_triggers || "");
-    setOfferName(offer.name || "");
-    setOfferDescription(offer.description || "");
-    setPersonalExperience(offer.personal_experience || "");
+    const automaticCourses = normalizeFriendCourses(automaticOffer.courses, automaticOffer);
+    const primaryCourse = automaticCourses[0] || {};
+    setOfferName(primaryCourse.name || offer.name || "");
+    setOfferDescription(primaryCourse.description || offer.description || "");
+    setPersonalExperience(primaryCourse.personal_experience || offer.personal_experience || "");
     setOfferPrice(offer.price || "");
     setOfferFor(offer.who_it_is_for || "");
     setOfferNotFor(offer.who_it_is_not_for || "");
@@ -120,8 +124,9 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
     setDraft(objectValue(workspace.auto_profile_draft));
     setInstagramBio(automaticPersona.instagram_bio || "");
     setProfilePicUrl(automaticPersona.avatar_url || "");
-    setCourseUrl(automaticOffer.course_url || "");
-    setCourseResults(automaticOffer.results_summary || "");
+    setCourseUrl(primaryCourse.website || automaticOffer.course_url || "");
+    setCourseResults(primaryCourse.results_summary || automaticOffer.results_summary || "");
+    setExtraCourses(automaticCourses.slice(1));
     setConversationExamples(automaticPersona.conversation_examples || "");
     setBehaviorGuidelines(automaticPersona.behavior_guidelines || DEFAULT_FRIEND_BEHAVIOR);
     setStrategyName(automaticPersona.strategy_name || "");
@@ -153,6 +158,23 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
       body: { workspaceId: workspace.id, syncApproved: true },
     });
     if (error || data?.error) throw new Error(data?.error || error?.message || "Could not sync approved persona");
+  };
+
+  const currentCourses = () => normalizeFriendCourses([
+    {
+      name: offerName,
+      website: courseUrl,
+      description: offerDescription,
+      personal_experience: personalExperience,
+      results_summary: courseResults,
+    },
+    ...extraCourses,
+  ]);
+
+  const updateExtraCourse = (index: number, field: keyof FriendCourse, value: string) => {
+    setExtraCourses((current) => current.map((course, courseIndex) => (
+      courseIndex === index ? { ...course, [field]: value } : course
+    )));
   };
 
   const saveCustom = useMutation({
@@ -198,6 +220,7 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
           who_it_is_for: offerFor.trim(),
           who_it_is_not_for: offerNotFor.trim(),
           referral_url: referralUrl.trim(),
+          courses: currentCourses(),
         },
         store_url: referralUrl.trim() || workspace.store_url || null,
         forbidden_claims: forbiddenClaims.trim() || null,
@@ -250,6 +273,7 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
         courseDescription: offerDescription.trim(),
         courseExperience: personalExperience.trim(),
         courseResults: courseResults.trim(),
+        courses: currentCourses(),
         conversationExamples: conversationExamples.trim(),
         behaviorGuidelines: behaviorGuidelines.trim() || DEFAULT_FRIEND_BEHAVIOR,
         strategyName: strategyName.trim(),
@@ -428,6 +452,8 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
     const payload = friendDraftPayload(draft);
     const persona = objectValue(payload.friend_persona);
     const offer = objectValue(payload.offer_truth);
+    const courses = normalizeFriendCourses(offer.courses, offer);
+    const primaryCourse = courses[0] || {};
     setPersonaName(persona.display_name || "");
     setPersonaRole(persona.role || "");
     setVoiceNotes(persona.voice_notes || "");
@@ -439,17 +465,18 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
     setStories(Array.isArray(payload.approved_stories) ? payload.approved_stories.join("\n---\n") : "");
     setExpert(payload.expert_description || "");
     setReferralTriggers(payload.referral_triggers || "");
-    setOfferName(offer.name || "");
-    setOfferDescription(offer.description || "");
-    setPersonalExperience(offer.personal_experience || "");
+    setOfferName(primaryCourse.name || offer.name || "");
+    setOfferDescription(primaryCourse.description || offer.description || "");
+    setPersonalExperience(primaryCourse.personal_experience || offer.personal_experience || "");
     setOfferPrice(offer.price || "");
     setOfferFor(offer.who_it_is_for || "");
     setOfferNotFor(offer.who_it_is_not_for || "");
     setReferralUrl(offer.referral_url || "");
     setInstagramBio(persona.instagram_bio || "");
     setProfilePicUrl(persona.avatar_url || "");
-    setCourseUrl(offer.course_url || "");
-    setCourseResults(offer.results_summary || "");
+    setCourseUrl(primaryCourse.website || offer.course_url || "");
+    setCourseResults(primaryCourse.results_summary || offer.results_summary || "");
+    setExtraCourses(courses.slice(1));
     setConversationExamples(persona.conversation_examples || "");
     setBehaviorGuidelines(persona.behavior_guidelines || DEFAULT_FRIEND_BEHAVIOR);
     setStrategyName(persona.strategy_name || "");
@@ -545,11 +572,15 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
 
             <section className="space-y-3 rounded-lg border p-4">
               <div><h3 className="font-semibold">Offer truth</h3><p className="text-xs text-muted-foreground">What the Friend genuinely used and may recommend. Empty facts must never be invented.</p></div>
-              <div className="grid sm:grid-cols-2 gap-3"><div><Label>Course/product</Label><Input value={offerName} onChange={(e) => setOfferName(e.target.value)} /></div><div><Label>Exact price, if public</Label><Input value={offerPrice} onChange={(e) => setOfferPrice(e.target.value)} placeholder="Leave blank if unknown" /></div></div>
+              <div className="grid sm:grid-cols-2 gap-3"><div><Label>Primary course/product</Label><Input value={offerName} onChange={(e) => setOfferName(e.target.value)} /></div><div><Label>Course website</Label><Input value={courseUrl} onChange={(e) => setCourseUrl(e.target.value)} placeholder="https://…" /></div></div>
+              <div><Label>Exact price, if public</Label><Input value={offerPrice} onChange={(e) => setOfferPrice(e.target.value)} placeholder="Leave blank if unknown" /></div>
               <div><Label>What the offer does</Label><Textarea value={offerDescription} onChange={(e) => setOfferDescription(e.target.value)} rows={3} /></div>
               <div><Label>Your genuine experience using it</Label><Textarea value={personalExperience} onChange={(e) => setPersonalExperience(e.target.value)} rows={3} /></div>
+              <div><Label>Verified results from it</Label><Textarea value={courseResults} onChange={(e) => setCourseResults(e.target.value)} rows={3} /></div>
               <div className="grid sm:grid-cols-2 gap-3"><div><Label>Who it is for</Label><Textarea value={offerFor} onChange={(e) => setOfferFor(e.target.value)} rows={3} /></div><div><Label>Who it is not for</Label><Textarea value={offerNotFor} onChange={(e) => setOfferNotFor(e.target.value)} rows={3} /></div></div>
               <div><Label>Website/referral link</Label><Input value={referralUrl} onChange={(e) => setReferralUrl(e.target.value)} placeholder="https://…" /></div>
+              {extraCourses.map((course, index) => <div key={index} className="rounded-lg border bg-muted/20 p-3 space-y-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium">Additional course or product {index + 2}</p><Button type="button" variant="ghost" size="icon" aria-label={`Remove course ${index + 2}`} onClick={() => setExtraCourses((current) => current.filter((_, courseIndex) => courseIndex !== index))}><Trash2 className="h-4 w-4" /></Button></div><div className="grid sm:grid-cols-2 gap-3"><div><Label>Name</Label><Input value={course.name || ""} onChange={(e) => updateExtraCourse(index, "name", e.target.value)} /></div><div><Label>Website</Label><Input value={course.website || ""} onChange={(e) => updateExtraCourse(index, "website", e.target.value)} placeholder="https://…" /></div></div><div><Label>What it teaches and who it helps</Label><Textarea value={course.description || ""} onChange={(e) => updateExtraCourse(index, "description", e.target.value)} rows={3} /></div><div><Label>Your genuine experience</Label><Textarea value={course.personal_experience || ""} onChange={(e) => updateExtraCourse(index, "personal_experience", e.target.value)} rows={3} /></div><div><Label>Verified results</Label><Textarea value={course.results_summary || ""} onChange={(e) => updateExtraCourse(index, "results_summary", e.target.value)} rows={3} /></div></div>)}
+              <Button type="button" variant="outline" onClick={() => setExtraCourses((current) => [...current, blankCourse()])}><Plus className="h-4 w-4 mr-2" />Add another course or product</Button>
             </section>
 
             <section className="space-y-3 rounded-lg border p-4">
@@ -575,11 +606,14 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
             </section>
 
             <section className="rounded-lg border p-4 space-y-3">
-              <div><h3 className="font-semibold">2. Course and real experience</h3><p className="text-xs text-muted-foreground">Explain the course this Friend purchased, uses and may discuss from personal experience.</p></div>
+              <div><h3 className="font-semibold">2. Courses, products and real experience</h3><p className="text-xs text-muted-foreground">Add every course or product this Friend genuinely purchased or used. Each one remains separate so the AI can choose the relevant experience.</p></div>
+              <div className="flex items-center justify-between"><p className="text-sm font-medium">Course or product 1</p><Badge variant="secondary">Primary</Badge></div>
               <div className="grid sm:grid-cols-2 gap-3"><div><Label>Course or product name</Label><Input value={offerName} onChange={(e) => setOfferName(e.target.value)} /></div><div><Label>Course website</Label><Input value={courseUrl} onChange={(e) => setCourseUrl(e.target.value)} placeholder="https://…" /></div></div>
               <div><Label>What the course teaches and who it helps</Label><Textarea value={offerDescription} onChange={(e) => setOfferDescription(e.target.value)} rows={3} /></div>
               <div><Label>How you purchased and used it</Label><Textarea value={personalExperience} onChange={(e) => setPersonalExperience(e.target.value)} rows={3} placeholder="Your genuine first-person experience" /></div>
               <div><Label>Sales, transformation and results from it</Label><Textarea value={courseResults} onChange={(e) => setCourseResults(e.target.value)} rows={3} placeholder="Use the proof section below to support exact result claims." /></div>
+              {extraCourses.map((course, index) => <div key={index} className="rounded-lg border bg-muted/20 p-3 space-y-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium">Course or product {index + 2}</p><Button type="button" variant="ghost" size="icon" aria-label={`Remove course ${index + 2}`} onClick={() => setExtraCourses((current) => current.filter((_, courseIndex) => courseIndex !== index))}><Trash2 className="h-4 w-4" /></Button></div><div className="grid sm:grid-cols-2 gap-3"><div><Label>Name</Label><Input value={course.name || ""} onChange={(e) => updateExtraCourse(index, "name", e.target.value)} /></div><div><Label>Website</Label><Input value={course.website || ""} onChange={(e) => updateExtraCourse(index, "website", e.target.value)} placeholder="https://…" /></div></div><div><Label>What it teaches and who it helps</Label><Textarea value={course.description || ""} onChange={(e) => updateExtraCourse(index, "description", e.target.value)} rows={3} /></div><div><Label>How you purchased and used it</Label><Textarea value={course.personal_experience || ""} onChange={(e) => updateExtraCourse(index, "personal_experience", e.target.value)} rows={3} /></div><div><Label>Sales, transformation and results</Label><Textarea value={course.results_summary || ""} onChange={(e) => updateExtraCourse(index, "results_summary", e.target.value)} rows={3} /></div></div>)}
+              <Button type="button" variant="outline" onClick={() => setExtraCourses((current) => [...current, blankCourse()])}><Plus className="h-4 w-4 mr-2" />Add another course or product</Button>
             </section>
 
             <section className="rounded-lg border p-4 space-y-3">

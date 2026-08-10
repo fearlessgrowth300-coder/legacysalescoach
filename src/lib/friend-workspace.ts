@@ -1,5 +1,13 @@
 export type FriendProfileDraft = Record<string, unknown>;
 
+export type FriendCourse = {
+  name?: string;
+  website?: string;
+  description?: string;
+  personal_experience?: string;
+  results_summary?: string;
+};
+
 export const DEFAULT_FRIEND_BEHAVIOR = `Act like a genuine peer, not a formal sales coach.
 Start from something specific in the person's profile, post, or latest message.
 Build common ground around their real interests, course, family, freedom, work, or digital-marketing journey.
@@ -27,6 +35,7 @@ export type AutomaticFriendSetup = {
   courseDescription?: string;
   courseExperience?: string;
   courseResults?: string;
+  courses?: FriendCourse[];
   conversationExamples?: string;
   behaviorGuidelines?: string;
   strategyName?: string;
@@ -53,6 +62,24 @@ export function objectValue(value: unknown): Record<string, any> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, any>
     : {};
+}
+
+export function normalizeFriendCourses(value: unknown, fallbackValue?: unknown): FriendCourse[] {
+  const clean = (entry: unknown): FriendCourse => {
+    const course = objectValue(entry);
+    return {
+      name: String(course.name || "").trim(),
+      website: String(course.website || course.course_url || course.url || "").trim(),
+      description: String(course.description || "").trim(),
+      personal_experience: String(course.personal_experience || course.experience || "").trim(),
+      results_summary: String(course.results_summary || course.results || "").trim(),
+    };
+  };
+  const hasContent = (course: FriendCourse) => Object.values(course).some(Boolean);
+  const courses = Array.isArray(value) ? value.map(clean).filter(hasContent) : [];
+  if (courses.length > 0) return courses;
+  const fallback = clean(fallbackValue);
+  return hasContent(fallback) ? [fallback] : [];
 }
 
 export function normalizeFriendProfileDraft(
@@ -136,6 +163,21 @@ export function mergeAutomaticFriendDraft(
     expertHelp,
     expertWebsite ? `Website: ${expertWebsite}` : "",
   ].filter(Boolean).join("\n") || clean(draft.expert_description);
+  const setupCourses = normalizeFriendCourses(setup.courses);
+  const legacySetupCourse = normalizeFriendCourses([], {
+    name: setup.courseName,
+    course_url: setup.courseUrl,
+    description: setup.courseDescription,
+    personal_experience: setup.courseExperience,
+    results_summary: setup.courseResults,
+  });
+  const existingCourses = normalizeFriendCourses(offer.courses, offer);
+  const mergedCourses = setupCourses.length > 0
+    ? setupCourses
+    : legacySetupCourse.length > 0
+      ? legacySetupCourse
+      : existingCourses;
+  const primaryCourse = mergedCourses[0] || {};
 
   const mergedPersona = {
     ...persona,
@@ -157,11 +199,12 @@ export function mergeAutomaticFriendDraft(
 
   const mergedOffer = {
     ...offer,
-    name: clean(setup.courseName) || clean(offer.name),
-    course_url: clean(setup.courseUrl) || clean(offer.course_url),
-    description: clean(setup.courseDescription) || clean(offer.description),
-    personal_experience: clean(setup.courseExperience) || clean(offer.personal_experience),
-    results_summary: clean(setup.courseResults) || clean(offer.results_summary),
+    name: clean(primaryCourse.name) || clean(setup.courseName) || clean(offer.name),
+    course_url: clean(primaryCourse.website) || clean(setup.courseUrl) || clean(offer.course_url),
+    description: clean(primaryCourse.description) || clean(setup.courseDescription) || clean(offer.description),
+    personal_experience: clean(primaryCourse.personal_experience) || clean(setup.courseExperience) || clean(offer.personal_experience),
+    results_summary: clean(primaryCourse.results_summary) || clean(setup.courseResults) || clean(offer.results_summary),
+    courses: mergedCourses,
   };
 
   return {
@@ -171,7 +214,8 @@ export function mergeAutomaticFriendDraft(
     expert_description: expertDescription,
     profile_evidence: clean(draft.profile_evidence) || clean(instagram.summary) || clean(instagram.biography),
     setup_verified_context: {
-      course_provided_by_owner: Boolean(clean(setup.courseName) || clean(setup.courseDescription)),
+      course_provided_by_owner: mergedCourses.length > 0,
+      course_count: mergedCourses.length,
       conversation_examples_provided: Boolean(clean(setup.conversationExamples)),
       strategy_provided_by_owner: Boolean(clean(setup.strategyName) || clean(setup.strategyDescription)),
       expert_provided_by_owner: Boolean(expertName || expertHelp),

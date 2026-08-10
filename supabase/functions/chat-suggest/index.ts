@@ -340,7 +340,7 @@ TONE RULES:
 
   const approvedOfferLines = Object.entries(approvedOffer)
     .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
-    .map(([key, value]) => `${key}: ${String(value)}`)
+    .map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`)
     .join("\n");
   const approvedStoryLines = approvedStories.length > 0
     ? approvedStories.map((story: unknown, index: number) => `${index + 1}. ${String(story)}`).join("\n")

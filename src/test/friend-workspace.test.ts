@@ -3,6 +3,7 @@ import {
   DEFAULT_FRIEND_BEHAVIOR,
   friendDraftPayload,
   mergeAutomaticFriendDraft,
+  normalizeFriendCourses,
   normalizeFriendProfileDraft,
   stringList,
 } from "@/lib/friend-workspace";
@@ -91,5 +92,23 @@ describe("friend workspace helpers", () => {
       expert_name: "Freedom Builder Team",
     });
     expect(payload.expert_description).toContain("the team: Freedom Builder Team");
+  });
+
+  it("keeps multiple courses separate while retaining the first as the compatible primary offer", () => {
+    const draft = mergeAutomaticFriendDraft({}, {
+      courses: [
+        { name: "Starter Course", website: "https://example.com/starter", description: "For beginners" },
+        { name: "Scale Course", website: "https://example.com/scale", results_summary: "Verified scale result" },
+      ],
+    });
+
+    expect(normalizeFriendCourses(draft.offer_truth.courses)).toHaveLength(2);
+    expect(draft.offer_truth.courses[1]).toMatchObject({ name: "Scale Course", results_summary: "Verified scale result" });
+    expect(draft.offer_truth).toMatchObject({
+      name: "Starter Course",
+      course_url: "https://example.com/starter",
+      description: "For beginners",
+    });
+    expect(draft.setup_verified_context.course_count).toBe(2);
   });
 });
