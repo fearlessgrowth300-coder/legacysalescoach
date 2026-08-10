@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 
 
 const corsHeaders = {
@@ -165,6 +166,7 @@ serve(async (req) => {
       { data: positiveFeedback },
       { data: winningAnalytics },
       { data: leadEntry },
+      { data: friendAudienceSignals },
       { data: approvedProofAssets },
     ] = await Promise.all([
       supabase.from("workspaces").select("*").eq("id", prospect.workspace_id).single(),
@@ -174,6 +176,12 @@ serve(async (req) => {
       supabase.from("suggestion_feedback").select("suggestion_text, suggestion_type, conversation_stage, framework_used").eq("user_id", user.id).eq("workspace_id", prospect.workspace_id).eq("thread_type", activeThreadType).eq("feedback", "positive").order("created_at", { ascending: false }).limit(15),
       supabase.from("conversation_analytics").select("questioning_patterns_used, key_insights, tone_progression").eq("user_id", user.id).eq("workspace_id", prospect.workspace_id).eq("outcome", "won"),
       supabase.from("lead_registry").select("*").eq("user_id", user.id).eq("prospect_id", prospectId).maybeSingle(),
+      supabase.from("friend_audience_signals")
+        .select("signal_type, signal_key, observation_count, positive_feedback_count, win_count, loss_count")
+        .eq("user_id", user.id)
+        .eq("workspace_id", prospect.workspace_id)
+        .order("observation_count", { ascending: false })
+        .limit(80),
       supabase.from("workspace_proof_assets")
         .select("title, result_type, result_value, result_date, description")
         .eq("user_id", user.id)
@@ -482,14 +490,25 @@ serve(async (req) => {
         ? `Configured Expert: ${workspace.expert_description}${workspace.store_url ? `\nWorkspace Destination: ${workspace.store_url}` : ""}`
         : "No linked Expert workspace is configured. Use only an expert explicitly named in the Custom Framework; otherwise ask permission to introduce the trusted team without inventing details.";
 
+    const existingFriendProfile = activeThreadType === "friend" && leadEntry?.prospect_profile && typeof leadEntry.prospect_profile === "object"
+      ? leadEntry.prospect_profile as Record<string, unknown>
+      : {};
+    const friendLearningContext = activeThreadType === "friend"
+      ? buildFriendLearningContext(existingFriendProfile, friendAudienceSignals || [])
+      : "Friend learning is not used in Expert mode.";
+
     const analysisPrompt = `You are a sales conversation intelligence engine with an OBJECTION RADAR and multi-framework analyzer. Analyze and return JSON ONLY.
 
-Return: { "warmth_score": <0-100>, "stage": <"friend"|"warming"|"referral">, "prospect_psychology": <string — what they REALLY mean>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <"empathy_mirror"|"story_drop"|"curiosity_gap"|"referral"|"re_engage"|"spin_situation"|"spin_problem"|"spin_implication"|"spin_need_payoff"|"five_whys"|"pain_dream_gap"|"micro_commitment"|"objection_navigate">, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <"TIME"|"MONEY"|"TRUST"|"CERTAINTY"|"PRIORITY"|"FEAR"|"TIMING"|"NEED_MORE_CLARITY"|null>, "objection_response_type": <"CLARIFY"|"REASSURE"|"REFRAME"|"DEEPEN"|"ISOLATE"|"HAND_OFF"|null>, "spin_stage": <"situation"|"problem"|"implication"|"need_payoff">, "offer_fit": <"high"|"uncertain"|"low">, "referral_readiness": <"not_ready"|"ask_permission"|"ready_for_handoff">, "next_objective": <single concrete objective for the next message>, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
+Return the existing sales fields plus these REQUIRED structured learning fields: "segment" (beginner|first_sale_stuck|mentor_no_results|independent|tried_before|already_successful|not_ready|other), "experience_level", "sales_status", "mentor_status", "current_strategy", "interests" (array), "desires" (array), "pain_points" (array), "objections" (array), "motivation", "readiness" (not_ready|exploring|problem_aware|wants_help|accepted_referral), "contact_status" (active|not_now|do_not_contact|not_a_fit), "next_best_action", "learning_confidence" (0-100), and "evidence" (short array of conversation facts supporting the profile).
+
+Existing sales fields: { "warmth_score": <0-100>, "stage": <"friend"|"warming"|"referral">, "prospect_psychology": <string — what they REALLY mean>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <"empathy_mirror"|"story_drop"|"curiosity_gap"|"referral"|"re_engage"|"spin_situation"|"spin_problem"|"spin_implication"|"spin_need_payoff"|"five_whys"|"pain_dream_gap"|"micro_commitment"|"objection_navigate"|"respect_boundary">, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <"TIME"|"MONEY"|"TRUST"|"CERTAINTY"|"PRIORITY"|"FEAR"|"TIMING"|"NEED_MORE_CLARITY"|null>, "objection_response_type": <"CLARIFY"|"REASSURE"|"REFRAME"|"DEEPEN"|"ISOLATE"|"HAND_OFF"|"RESPECT_NO"|null>, "spin_stage": <"situation"|"problem"|"implication"|"need_payoff">, "offer_fit": <"high"|"uncertain"|"low">, "referral_readiness": <"not_ready"|"ask_permission"|"ready_for_handoff">, "next_objective": <single concrete objective for the next message>, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
 
 OBJECTION RADAR: Scan EVERY message for objection language. Classify: TIME, MONEY, TRUST, CERTAINTY, PRIORITY, FEAR, TIMING, NEED_MORE_CLARITY. Recommend response type: CLARIFY, REASSURE, REFRAME, DEEPEN, ISOLATE, HAND_OFF.
 SPIN DETECTION: <4 exchanges="situation", personal but no pain="problem", pain not amplified="implication", pain+wants change="need_payoff".
 STAGE RULES: "friend" 0-35, "warming" 36-64, "referral" 65+ AND (pain_expressed=true OR the prospect explicitly asks for help, price, details, a link, a call, or how the user achieved the result).
 REFERRAL READINESS: not_ready until a relevant problem/desire is clear; ask_permission when fit looks plausible and the prospect wants help; ready_for_handoff only after permission or an explicit request for the expert/link. Never use warmth alone as proof of fit.
+LEARNING: Build structured fields only from explicit evidence. "Made one sale", "working with a mentor", "tried before", and "doing it alone" are different states. Preserve useful known facts from CURRENT PROSPECT MEMORY unless newer evidence corrects them.
+BOUNDARIES: "Don't contact me", "leave me alone", or an equivalent explicit refusal means contact_status=do_not_contact, recommended_move=respect_boundary, referral_readiness=not_ready, and next_best_action=respectfully stop. "Not now" means contact_status=not_now. Never treat a boundary as an objection to overcome.
 WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.
 VISUAL EVIDENCE: When a screenshot is supplied, use visible speaker alignment, reactions, quoted replies, timestamps, read/seen/delivered status, unanswered-message state, and attachments. If OCR conflicts with the image, trust the image and mention the conflict in signals_detected. Treat salesperson notes as context, never as the prospect's words.`;
 
@@ -510,6 +529,9 @@ ${chunksText.substring(0, 4500)}
 
 WORKSPACE_LEARNINGS:
 ${learnedInsightsText.substring(0, 2000)}
+
+FRIEND_LEARNING_MEMORY:
+${friendLearningContext.substring(0, 5000)}
 
 CONVERSATION_HISTORY:
 ${conversationHistory}`;
@@ -546,7 +568,7 @@ ${conversationHistory}`;
       const match = analysisRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
       analysisJson = JSON.parse((match ? match[1] : analysisRaw).trim());
     } catch {
-      analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything" };
+      analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything", segment: "other", experience_level: "unknown", sales_status: "unknown", mentor_status: "unknown", current_strategy: "unknown", interests: [], desires: [], pain_points: [], objections: [], motivation: "unknown", readiness: "not_ready", contact_status: "active", next_best_action: "continue discovery", learning_confidence: 0, evidence: [] };
     }
 
     // Conversation stages are progressive. A short reply later in a warm
@@ -555,7 +577,15 @@ ${conversationHistory}`;
     const analysisStageRank: Record<string, number> = { friend: 0, warming: 1, referral: 3 };
     const existingStageRank = dbStageRank[prospect.conversation_stage] ?? 0;
     const analyzedStageRank = analysisStageRank[analysisJson.stage] ?? 0;
-    if (existingStageRank >= 3 && analyzedStageRank < 3) analysisJson.stage = "referral";
+    const explicitContactBoundary = analysisJson.contact_status === "do_not_contact";
+    if (explicitContactBoundary) {
+      analysisJson.stage = "friend";
+      analysisJson.referral_readiness = "not_ready";
+      analysisJson.recommended_move = "respect_boundary";
+    } else if (analysisJson.contact_status === "not_a_fit") {
+      analysisJson.stage = "friend";
+      analysisJson.referral_readiness = "not_ready";
+    } else if (existingStageRank >= 3 && analyzedStageRank < 3) analysisJson.stage = "referral";
     else if (existingStageRank >= 1 && analyzedStageRank < 1) analysisJson.stage = "warming";
 
     // ===== STEP 2: GENERATE STAGE-AWARE REPLIES WITH MULTI-FRAMEWORK =====
@@ -588,7 +618,7 @@ ${conversationHistory}`;
       const recentObjections = pastAdvice
         .filter((a: any) => a.framework?.includes("objection") || a.stage === "objection")
         .slice(-3);
-      leadContext = `\n\nLEAD REGISTRY:\nPersona: ${leadEntry.persona_type || "?"}\nPsychological State: ${leadEntry.psychological_state || "?"}\nSubtext: ${leadEntry.subtext_analysis || "none"}\nPast Objections: ${recentObjections.length > 0 ? recentObjections.map((o: any) => o.advice?.substring(0, 80)).join(" | ") : "none"}`;
+      leadContext = `\n\nLEAD REGISTRY:\nPersona: ${leadEntry.persona_type || "?"}\nPsychological State: ${leadEntry.psychological_state || "?"}\nSubtext: ${leadEntry.subtext_analysis || "none"}\nPast Objections: ${recentObjections.length > 0 ? recentObjections.map((o: any) => o.advice?.substring(0, 80)).join(" | ") : "none"}\n${friendLearningContext}`;
     }
 
     const styleModifierInstruction = styleModifier
@@ -646,6 +676,9 @@ FRIEND PERSONA + OFFER TRUTH RULES:
 - If the offer is not a fit, say so honestly and do not force a referral.
 - Automatic profile drafts are never live facts until approved.
 - Conversation learnings may improve audience/objection recognition, but they must never overwrite the approved identity, offer facts, story library or forbidden claims.
+- Current prospect memory belongs only to this person. Never attribute another prospect's personal fact, result, family detail, desire or objection to them.
+- Workspace audience signals are anonymous recurring patterns, not proof about this person. The current conversation always wins.
+- If contact_status=do_not_contact, write one brief respectful acknowledgement with no question, persuasion, follow-up promise, offer, link or referral. If contact_status=not_now, do not push an expert; leave the door open calmly.
 
 TONE: Warm, human, calm, confident, relatable, NOT needy. Like a friend who's been through the same struggle.
 
@@ -717,6 +750,9 @@ ${chunksText.substring(0, 6500)}
 WORKSPACE_LEARNED_INSIGHTS:
 ${learnedInsightsText.substring(0, 2500)}
 
+FRIEND_LEARNING_CONTEXT:
+${friendLearningContext.substring(0, 5000)}
+
 VERIFIED_WINNING_PATTERNS:
 ${winningPatternsText.substring(0, 2000)}`;
 
@@ -751,6 +787,17 @@ ${winningPatternsText.substring(0, 2000)}`;
       } catch {
         replyJson = { variants: [{ variant: "primary", message: replyRaw, move_used: "fallback", principle_applied: "none", why_this_works: "AI response", warmth_prediction: analysisJson.warmth_score }] };
       }
+    }
+
+    const structuredFriendProfile = activeThreadType === "friend"
+      ? buildFriendProspectProfile(analysisJson, existingFriendProfile)
+      : null;
+    if (structuredFriendProfile?.contact_status === "do_not_contact") {
+      replyJson.variants = [
+        { variant: "primary", message: "I understand. I won't message you again.", move_used: "respect_boundary", principle_applied: "consent", why_this_works: "Respects the prospect's explicit boundary.", warmth_prediction: 0 },
+        { variant: "alternative", message: "Understood. I'll leave it there.", move_used: "respect_boundary", principle_applied: "consent", why_this_works: "Ends the outreach without reopening the conversation.", warmth_prediction: 0 },
+        { variant: "casual", message: "Got it. Take care.", move_used: "respect_boundary", principle_applied: "consent", why_this_works: "Acknowledges the request briefly and applies no pressure.", warmth_prediction: 0 },
+      ];
     }
 
     // ===== SIDE EFFECTS: Analytics, Learning, Lead Registry =====
@@ -813,26 +860,49 @@ ${winningPatternsText.substring(0, 2000)}`;
 
     }
 
+    // Every Friend analysis updates a structured memory for this prospect.
+    // Only aggregate taxonomy signals cross conversations; never copy personal
+    // evidence or generated reply text into another person's memory.
     // Lead registry update
     if (message) {
       const adviceEntry = { date: new Date().toISOString(), stage: analysisJson.stage, warmth: analysisJson.warmth_score, move: analysisJson.recommended_move, advice: (replyJson.variants?.[0]?.message || "").substring(0, 300) };
       if (leadEntry) {
         const pastAdvice = Array.isArray(leadEntry.past_advice) ? leadEntry.past_advice : [];
         pastAdvice.push(adviceEntry);
-        supabase.from("lead_registry").update({
+        await supabase.from("lead_registry").update({
           psychological_state: analysisJson.prospect_psychology || leadEntry.psychological_state,
           persona_type: detectedProspectType !== "unknown" ? detectedProspectType : leadEntry.persona_type,
           subtext_analysis: analysisJson.stage_reason || leadEntry.subtext_analysis,
           past_advice: pastAdvice.slice(-20),
-        }).eq("id", leadEntry.id).then(() => {});
+          ...(structuredFriendProfile ? {
+            prospect_profile: structuredFriendProfile,
+            contact_status: structuredFriendProfile.contact_status,
+            last_observed_at: new Date().toISOString(),
+          } : {}),
+        }).eq("id", leadEntry.id);
       } else {
-        supabase.from("lead_registry").insert({
+        await supabase.from("lead_registry").insert({
           user_id: user.id, workspace_id: prospect.workspace_id, prospect_id: prospectId,
           name: prospect.name, persona_type: detectedProspectType,
           psychological_state: analysisJson.prospect_psychology || "unknown",
           subtext_analysis: analysisJson.stage_reason || null,
           past_advice: [adviceEntry], upload_matches: [],
-        }).then(() => {});
+          ...(structuredFriendProfile ? {
+            prospect_profile: structuredFriendProfile,
+            contact_status: structuredFriendProfile.contact_status,
+            last_observed_at: new Date().toISOString(),
+          } : {}),
+        });
+      }
+      if (structuredFriendProfile) {
+        const { error: signalError } = await supabase.rpc("record_friend_learning_signals", {
+          p_user_id: user.id,
+          p_workspace_id: prospect.workspace_id,
+          p_profile: analysisJson,
+          p_metric: "observation",
+          p_prospect_id: prospectId,
+        });
+        if (signalError) console.warn("[generate-reply] could not record Friend audience signals", signalError);
       }
     }
 
@@ -858,6 +928,7 @@ ${winningPatternsText.substring(0, 2000)}`;
       analysis: analysisJson,
       conversationStage: newDbStage,
       prospectType: detectedProspectType,
+      prospectLearning: structuredFriendProfile,
       learningResult,
       brainRetrieval: {
         chunksRetrieved: topChunks.length,

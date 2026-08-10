@@ -5,6 +5,7 @@ import { OBJECTION_HANDLERS, OBJECTION_DETECTION_PROMPT } from "./objection-hand
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 
 
 function getCorsHeaders(req: Request) {
@@ -1033,6 +1034,22 @@ serve(async (req) => {
       .eq("prospect_id", prospectId)
       .maybeSingle();
 
+    const { data: friendAudienceSignals } = activeThreadType === "friend"
+      ? await supabase
+          .from("friend_audience_signals")
+          .select("signal_type, signal_key, observation_count, positive_feedback_count, win_count, loss_count")
+          .eq("user_id", user.id)
+          .eq("workspace_id", prospect.workspace_id)
+          .order("observation_count", { ascending: false })
+          .limit(80)
+      : { data: [] as Array<Record<string, unknown>> };
+    const existingFriendProfile = activeThreadType === "friend" && leadEntry?.prospect_profile && typeof leadEntry.prospect_profile === "object"
+      ? leadEntry.prospect_profile as Record<string, unknown>
+      : {};
+    const friendLearningContext = activeThreadType === "friend"
+      ? buildFriendLearningContext(existingFriendProfile, friendAudienceSignals || [])
+      : "";
+
     if (leadEntry) {
       leadRegistryContext = `\n[LEAD REGISTRY — ${prospect.name}]\nPersona: ${leadEntry.persona_type || "unclassified"}\nPsychological State: ${leadEntry.psychological_state || "unknown"}\nSubtext: ${leadEntry.subtext_analysis || "none"}\nPast Advice: ${JSON.stringify(leadEntry.past_advice || []).substring(0, 800)}\nUpload Matches: ${JSON.stringify(leadEntry.upload_matches || []).substring(0, 500)}\n`;
     }
@@ -1180,6 +1197,9 @@ serve(async (req) => {
     // Add lead registry context
     if (leadRegistryContext) {
       brainChunksFormatted += "\n\n" + leadRegistryContext;
+    }
+    if (friendLearningContext) {
+      brainChunksFormatted += `\n\n${friendLearningContext}`;
     }
 
     // Add Global Knowledge Map
@@ -1341,6 +1361,11 @@ Read the complete conversation, the newest message, profile/screenshot evidence,
 2. Their stated pain, motivation, desired result, objection, trust/readiness, and what is still unknown. Do not infer facts without evidence.
 3. Questions already answered and promises or details already shared, so nothing is repeated.
 4. The single best next objective. The objective may be empathy, a direct answer, clarification, discovery, permission, referral, or respectfully stopping.
+5. A structured prospect profile: experience level, sales status, mentor/support status, current strategy, interests, desires, pain points, objections, motivation, readiness and contact boundary.
+
+Treat "made one sale", "has a mentor but no results", "doing it alone", "tried before", and "already successful" as different states. Use only explicit evidence. Current prospect memory may preserve earlier facts, but newer conversation evidence can correct them. Workspace audience signals are anonymous hints, never facts about this individual.
+
+An explicit "don't contact me", "leave me alone", or equivalent refusal is a boundary, not an objection: set contact_status="do_not_contact", choose RESPECT_NO, and return one brief acknowledgement with no question, persuasion, offer, link, referral, or promised follow-up. For "not now", set contact_status="not_now" and do not push an expert.
 
 Generate three natural variations for that SAME best next objective: primary, alternative, and softer. They may use the same single relevant Knowledge Base principle; do not force different sources or stack frameworks. Each ready-to-send message must be short, specific, slightly informal, and contain at most one question. A question is optional.
 
@@ -1364,7 +1389,21 @@ Return valid JSON with this exact compatible shape:
   "brainChunksUsed": [],
   "prospectFears": [],
   "prospectDreams": [],
-  "conversionTriggers": []
+  "conversionTriggers": [],
+  "prospectLearning": {
+    "segment": "beginner|first_sale_stuck|mentor_no_results|independent|tried_before|already_successful|not_ready|other",
+    "experience_level": "evidence-based level or unknown",
+    "sales_status": "explicit result status or unknown",
+    "mentor_status": "explicit support status or unknown",
+    "current_strategy": "explicit strategy or unknown",
+    "interests": [], "desires": [], "pain_points": [], "objections": [],
+    "motivation": "evidenced motivation or unknown",
+    "readiness": "not_ready|exploring|problem_aware|wants_help|accepted_referral",
+    "contact_status": "active|not_now|do_not_contact|not_a_fit",
+    "next_best_action": "one consent-respecting action",
+    "learning_confidence": 0,
+    "evidence": []
+  }
 }
 
 Final check: each suggestion responds to the prospect's newest message, does not repeat an answered question, contains no unapproved claim, and does not force the conversation toward a sale.`;
@@ -1521,6 +1560,21 @@ ${jsonFormat}
         detectedTone: "neutral",
         questioningPattern: "general",
       };
+    }
+
+    const structuredFriendProfile = activeThreadType === "friend"
+      ? buildFriendProspectProfile(parsed.prospectLearning || parsed, existingFriendProfile)
+      : null;
+    if (structuredFriendProfile?.contact_status === "do_not_contact") {
+      parsed.questioningPattern = "decision";
+      parsed.detectedObjection = null;
+      parsed.objectionResponseType = "RESPECT_NO";
+      parsed.pushyWarning = "Explicit boundary detected. Do not continue persuasion or referral.";
+      parsed.suggestions = [
+        { id: 1, type: "primary", text: "I understand. I won't message you again.", whyThisWorks: "Respects the prospect's explicit boundary.", frameworkUsed: "RESPECT_NO", sourceUsed: "current conversation", principleUsed: "consent" },
+        { id: 2, type: "alternative", text: "Understood. I'll leave it there.", whyThisWorks: "Ends the outreach without reopening the conversation.", frameworkUsed: "RESPECT_NO", sourceUsed: "current conversation", principleUsed: "consent" },
+        { id: 3, type: "softer", text: "Got it. Take care.", whyThisWorks: "Acknowledges the request briefly and applies no pressure.", frameworkUsed: "RESPECT_NO", sourceUsed: "current conversation", principleUsed: "consent" },
+      ];
     }
 
     // ===== SAVE TONALITY & PATTERN DATA =====
@@ -1697,15 +1751,20 @@ ${jsonFormat}
         // Keep last 20 advice entries
         const trimmedAdvice = pastAdvice.slice(-20);
 
-        supabase.from("lead_registry").update({
+        await supabase.from("lead_registry").update({
           psychological_state: parsed.detectedTone || leadEntry.psychological_state,
           persona_type: detectedProspectType !== "unknown" ? detectedProspectType : leadEntry.persona_type,
           subtext_analysis: parsed.frameworkApplied || leadEntry.subtext_analysis,
           past_advice: trimmedAdvice,
-        }).eq("id", leadEntry.id).then(() => {});
+          ...(structuredFriendProfile ? {
+            prospect_profile: structuredFriendProfile,
+            contact_status: structuredFriendProfile.contact_status,
+            last_observed_at: new Date().toISOString(),
+          } : {}),
+        }).eq("id", leadEntry.id);
       } else {
         // Create new lead registry entry
-        supabase.from("lead_registry").insert({
+        await supabase.from("lead_registry").insert({
           user_id: user.id,
           workspace_id: prospect.workspace_id,
           prospect_id: prospectId,
@@ -1715,7 +1774,22 @@ ${jsonFormat}
           subtext_analysis: parsed.frameworkApplied || null,
           past_advice: [adviceEntry],
           upload_matches: parsed.brainChunksUsed ? parsed.brainChunksUsed.map((i: number) => `chunk_${i}`) : [],
-        }).then(() => {});
+          ...(structuredFriendProfile ? {
+            prospect_profile: structuredFriendProfile,
+            contact_status: structuredFriendProfile.contact_status,
+            last_observed_at: new Date().toISOString(),
+          } : {}),
+        });
+      }
+      if (structuredFriendProfile) {
+        const { error: signalError } = await supabase.rpc("record_friend_learning_signals", {
+          p_user_id: user.id,
+          p_workspace_id: prospect.workspace_id,
+          p_profile: parsed.prospectLearning || parsed,
+          p_metric: "observation",
+          p_prospect_id: prospectId,
+        });
+        if (signalError) console.warn("[chat-suggest] could not record Friend audience signals", signalError);
       }
     }
 
@@ -1727,6 +1801,7 @@ ${jsonFormat}
       }).eq("id", prospectId).eq("user_id", user.id);
     }
     parsed.learningResult = learningResult;
+    parsed.prospectLearning = structuredFriendProfile;
     parsed.brainRetrieval = {
       chunksRetrieved: topChunks.length,
       uniqueSources: new Set([...topChunks.map((c: any) => c.source_id)].filter(Boolean)).size,
