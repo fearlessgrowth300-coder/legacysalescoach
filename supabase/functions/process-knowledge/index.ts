@@ -763,21 +763,28 @@ async function persistSourcePassages(
   return insertedCount;
 }
 
-async function markSourceIndexReady(supabase: any, userId: string, itemId: string): Promise<void> {
+async function markSourceIndexReady(supabase: any, userId: string, itemId: string): Promise<number> {
   const { count, error } = await supabase.from("knowledge_chunks")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId)
     .eq("source_id", itemId)
     .eq("chunk_kind", "source_passage");
   if (error) {
-    console.warn("Could not count preserved source passages", error.message);
-    return;
+    throw new Error(`Could not verify preserved source passages: ${error.message}`);
   }
-  await supabase.from("knowledge_base_items").update({
+  const sourcePassageCount = count || 0;
+  if (sourcePassageCount < 1) {
+    throw new Error("Full-source indexing produced no preserved passages; the item was not marked upgraded.");
+  }
+  const { error: updateError } = await supabase.from("knowledge_base_items").update({
     source_index_version: SOURCE_INDEX_VERSION,
-    source_chunk_count: count || 0,
+    source_chunk_count: sourcePassageCount,
     indexed_at: new Date().toISOString(),
   }).eq("id", itemId);
+  if (updateError) {
+    throw new Error(`Could not mark full-source index ready: ${updateError.message}`);
+  }
+  return sourcePassageCount;
 }
 
 // ===== Persist a single learning row + companion chunk (used by both pipelines) =====
@@ -1041,6 +1048,20 @@ serve(async (req) => {
     const MAX_CONTENT_LENGTH = 600000;
     const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
     const sourceName = item.title || "Uploaded Content";
+
+    // A fresh processing run must never retain a previous success marker.
+    // Completion is written back only after markSourceIndexReady verifies that
+    // preserved source passages actually exist.
+    if (!continueBook && typeof retryChapterIndex !== "number") {
+      const { error: resetIndexError } = await supabase.from("knowledge_base_items").update({
+        source_index_version: 0,
+        source_chunk_count: 0,
+        indexed_at: null,
+      }).eq("id", itemId);
+      if (resetIndexError) {
+        throw new Error(`Could not reset full-source index state: ${resetIndexError.message}`);
+      }
+    }
 
     // ============== BOOK PIPELINE (PDF, long enough to benefit) ==============
     const isBook = type === "pdf" && contentToProcess.length >= 5000;

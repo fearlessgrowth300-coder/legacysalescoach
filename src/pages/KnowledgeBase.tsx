@@ -20,6 +20,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { BrainInsightCard } from "@/components/BrainInsightCard";
 import { BookBriefCard } from "@/components/BookBriefCard";
+import { FULL_SOURCE_INDEX_VERSION, hasFullSourceIndex } from "@/lib/knowledge-source-index";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
@@ -393,7 +394,7 @@ export default function KnowledgeBase() {
   });
 
   // Live learnings counter for processing items
-  const [processingCounts, setProcessingCounts] = useState<Record<string, { learnings: number; chunks: number }>>({});
+  const [processingCounts, setProcessingCounts] = useState<Record<string, { learnings: number; chunks: number; sourcePassages: number }>>({});
 
   useEffect(() => {
     const processingItems = items?.filter(i => ["processing", "mapping", "extracting"].includes(i.status)) || [];
@@ -406,13 +407,14 @@ export default function KnowledgeBase() {
       const ids = processingItems.map(i => i.id);
       const [brainRes, chunkRes] = await Promise.all([
         supabase.from("sales_brain").select("source_id").in("source_id", ids),
-        supabase.from("knowledge_chunks").select("source_id").in("source_id", ids),
+        supabase.from("knowledge_chunks").select("source_id, chunk_kind").in("source_id", ids),
       ]);
-      const counts: Record<string, { learnings: number; chunks: number }> = {};
+      const counts: Record<string, { learnings: number; chunks: number; sourcePassages: number }> = {};
       for (const id of ids) {
         counts[id] = {
           learnings: brainRes.data?.filter(r => r.source_id === id).length || 0,
           chunks: chunkRes.data?.filter(r => r.source_id === id).length || 0,
+          sourcePassages: chunkRes.data?.filter(r => r.source_id === id && r.chunk_kind === "source_passage").length || 0,
         };
       }
       setProcessingCounts(counts);
@@ -420,17 +422,22 @@ export default function KnowledgeBase() {
       for (const item of processingItems) {
         const updatedAt = item.updated_at ? new Date(item.updated_at).getTime() : now;
         const stale = now - updatedAt > 120_000;
-        const countForItem = counts[item.id] || { learnings: 0, chunks: 0 };
+        const countForItem = counts[item.id] || { learnings: 0, chunks: 0, sourcePassages: 0 };
 
         // If an edge background task saved principles/chunks but died before
         // flipping the item to ready, do not leave the card spinning forever.
-        if (item.type !== "pdf" && stale && (countForItem.learnings > 0 || countForItem.chunks > 0)) {
+        if (item.type !== "pdf" && stale && countForItem.learnings > 0 && countForItem.sourcePassages > 0) {
           const lastMark = markReadyRef.current[item.id] || 0;
           if (now - lastMark > 90_000) {
             markReadyRef.current[item.id] = now;
             const { error } = await supabase
               .from("knowledge_base_items")
-              .update({ status: "ready" })
+              .update({
+                status: "ready",
+                source_index_version: FULL_SOURCE_INDEX_VERSION,
+                source_chunk_count: countForItem.sourcePassages,
+                indexed_at: new Date().toISOString(),
+              })
               .eq("id", item.id);
             if (!error) {
               toast.success(`Recovered ${item.title || "item"} — extraction is ready`);
@@ -595,25 +602,64 @@ export default function KnowledgeBase() {
   const [retryProgress, setRetryProgress] = useState<
     Record<string, { phase: "fetching" | "extracting" | "saving" | "done"; count: number; startedAt: number; note?: string }>
   >({});
+  const retryCompletionRef = useRef<Set<string>>(new Set());
 
-  // Poll sales_brain count for items that are actively re-extracting so the
-  // UI shows principles arriving in real time.
+  // The edge function returns 202 while indexing continues in the background.
+  // Keep polling until the backend confirms that real source passages exist;
+  // the request being accepted is not the same thing as a completed upgrade.
   useEffect(() => {
     const ids = Object.keys(retryProgress).filter((id) => retryProgress[id].phase !== "done");
     if (ids.length === 0) return;
     const t = setInterval(async () => {
       for (const id of ids) {
-        const { count } = await supabase
-          .from("sales_brain")
-          .select("id", { count: "exact", head: true })
-          .eq("source_id", id);
+        const [{ count }, { data: indexState }] = await Promise.all([
+          supabase
+            .from("sales_brain")
+            .select("id", { count: "exact", head: true })
+            .eq("source_id", id),
+          supabase
+            .from("knowledge_base_items")
+            .select("status, source_index_version, source_chunk_count, indexed_at")
+            .eq("id", id)
+            .maybeSingle(),
+        ]);
+        const upgradeComplete = indexState?.status === "ready" && hasFullSourceIndex(indexState);
         setRetryProgress((p) => {
           const cur = p[id];
           if (!cur) return p;
           const newCount = count || 0;
-          const nextPhase = newCount > 0 ? "extracting" : cur.phase;
-          return { ...p, [id]: { ...cur, count: newCount, phase: nextPhase } };
+          const nextPhase = upgradeComplete ? "done" : newCount > 0 ? "saving" : cur.phase;
+          return {
+            ...p,
+            [id]: {
+              ...cur,
+              count: newCount,
+              phase: nextPhase,
+              note: upgradeComplete
+                ? `${indexState.source_chunk_count} source passages indexed. Upgrade complete.`
+                : cur.note,
+            },
+          };
         });
+        if (upgradeComplete && !retryCompletionRef.current.has(id)) {
+          retryCompletionRef.current.add(id);
+          toast.success("Full source indexed — this PDF or video is upgraded.");
+          setTimeout(() => {
+            setRetryProgress((p) => {
+              const { [id]: _gone, ...rest } = p;
+              return rest;
+            });
+            retryCompletionRef.current.delete(id);
+          }, 5000);
+        } else if (indexState?.status === "error" && !retryCompletionRef.current.has(id)) {
+          retryCompletionRef.current.add(id);
+          setRetryProgress((p) => {
+            const { [id]: _gone, ...rest } = p;
+            return rest;
+          });
+          toast.error("Full-source upgrade failed. The source was not marked upgraded; you can retry it.");
+          retryCompletionRef.current.delete(id);
+        }
       }
       queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
     }, 2000);
@@ -632,19 +678,29 @@ export default function KnowledgeBase() {
           note: item.type === "pdf" ? "Reading PDF…" : "Fetching YouTube transcript…",
         },
       }));
+      retryCompletionRef.current.delete(item.id);
 
       // Wipe stale derived data so re-extraction produces fresh principles
       // (otherwise dedup may suppress new inserts for the same source).
-      await Promise.all([
+      const [brainDelete, chunkDelete] = await Promise.all([
         supabase.from("sales_brain").delete().eq("source_id", item.id),
         supabase.from("knowledge_chunks").delete().eq("source_id", item.id),
       ]);
+      const cleanupError = brainDelete.error || chunkDelete.error;
+      if (cleanupError) throw cleanupError;
 
       // Reset status + clear any cached book_brief so the pipeline starts clean
-      await supabase
+      const { error: resetError } = await supabase
         .from("knowledge_base_items")
-        .update({ status: "processing", book_brief: null })
+        .update({
+          status: "processing",
+          book_brief: null,
+          source_index_version: 0,
+          source_chunk_count: 0,
+          indexed_at: null,
+        })
         .eq("id", item.id);
+      if (resetError) throw resetError;
 
       // Move to extracting phase once we hand off to the edge function.
       setRetryProgress((p) =>
@@ -673,21 +729,13 @@ export default function KnowledgeBase() {
       }
       return { result, itemId: item.id };
     },
-    onSuccess: ({ result, itemId }: any) => {
-      const count = result?.data?.learnings?.length ?? 0;
+    onSuccess: ({ itemId }: any) => {
       setRetryProgress((p) =>
         p[itemId]
-          ? { ...p, [itemId]: { ...p[itemId], phase: "done", count: count || p[itemId].count, note: "Done" } }
+          ? { ...p, [itemId]: { ...p[itemId], phase: "saving", note: "Saving full-source passages and principles…" } }
           : p,
       );
-      // Auto-clear the inline indicator after a beat
-      setTimeout(() => {
-        setRetryProgress((p) => {
-          const { [itemId]: _gone, ...rest } = p;
-          return rest;
-        });
-      }, 3000);
-      toast.success(count > 0 ? `Extracted ${count} principles` : "Re-extraction queued — refreshing…");
+      toast.success("Full-source upgrade started. This card will confirm when indexing is complete.");
       queryClient.invalidateQueries({ queryKey: ["kb-items"] });
       queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
       queryClient.invalidateQueries({ queryKey: ["brain-total"] });
@@ -1278,6 +1326,7 @@ export default function KnowledgeBase() {
           {items?.map((item) => {
             const itemChunks = getChunksForItem(item.id);
             const thumbnail = getItemThumbnail(item);
+            const itemIsUpgraded = hasFullSourceIndex(item);
             return (
               <Card key={item.id}>
                 <CardContent className="p-3 sm:py-4 sm:p-6">
@@ -1298,13 +1347,14 @@ export default function KnowledgeBase() {
                       <div className="flex items-center gap-1.5 sm:gap-2 mt-1 flex-wrap">
                         <Badge variant="outline" className="text-[10px] sm:text-xs">{item.type.toUpperCase()}</Badge>
                         <Badge variant="outline" className="text-[10px] sm:text-xs">{item.brain_type}</Badge>
-                        {(item as any).source_index_version >= 2 ? (
+                        {itemIsUpgraded ? (
                           <Badge variant="secondary" className="text-[10px] sm:text-xs">
-                            <CheckCircle2 className="h-3 w-3 mr-1" />Full source indexed
+                            <CheckCircle2 className="h-3 w-3 mr-1" />
+                            Upgraded · {item.source_chunk_count} source passages
                           </Badge>
                         ) : item.status === "ready" ? (
                           <Badge variant="outline" className="text-[10px] sm:text-xs text-amber-600 border-amber-500/40">
-                            Re-index for full source
+                            Full-source upgrade available
                           </Badge>
                         ) : null}
                         {item.url && <p className="text-[10px] sm:text-xs text-muted-foreground truncate max-w-[120px] sm:max-w-[200px] md:max-w-none">{item.url}</p>}
@@ -1321,7 +1371,9 @@ export default function KnowledgeBase() {
                         <p className="text-xs font-medium text-muted-foreground">
                           {item.status === "mapping" ? "Mapping the book…" :
                            item.status === "extracting" ? "Extracting principles section by section…" :
-                           "Processing content — extracting knowledge..."}
+                           retryProgress[item.id]
+                             ? "Indexing the complete source…"
+                             : "Processing content — extracting knowledge..."}
                         </p>
                       </div>
                       {processingCounts[item.id] && (processingCounts[item.id].learnings > 0 || processingCounts[item.id].chunks > 0) && (
@@ -1346,7 +1398,7 @@ export default function KnowledgeBase() {
                           <p className="text-xs text-muted-foreground">
                             {item.type === "pdf"
                               ? "This book seems stuck. Resume to continue processing."
-                              : ((processingCounts[item.id]?.learnings || 0) > 0 || (processingCounts[item.id]?.chunks || 0) > 0)
+                              : (processingCounts[item.id]?.learnings || 0) > 0 && (processingCounts[item.id]?.sourcePassages || 0) > 0
                                 ? "Extraction finished but the status did not update. Mark it ready."
                                 : "This item seems stuck. Restart extraction."}
                           </p>
@@ -1356,8 +1408,13 @@ export default function KnowledgeBase() {
                             className="h-7 px-2 text-xs"
                             onClick={async () => {
                               try {
-                                if (item.type !== "pdf" && ((processingCounts[item.id]?.learnings || 0) > 0 || (processingCounts[item.id]?.chunks || 0) > 0)) {
-                                  const { error } = await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", item.id);
+                                if (item.type !== "pdf" && (processingCounts[item.id]?.learnings || 0) > 0 && (processingCounts[item.id]?.sourcePassages || 0) > 0) {
+                                  const { error } = await supabase.from("knowledge_base_items").update({
+                                    status: "ready",
+                                    source_index_version: FULL_SOURCE_INDEX_VERSION,
+                                    source_chunk_count: processingCounts[item.id].sourcePassages,
+                                    indexed_at: new Date().toISOString(),
+                                  }).eq("id", item.id);
                                   if (error) throw error;
                                   toast.success("Marked ready");
                                 } else if (item.type === "pdf") {
@@ -1376,7 +1433,7 @@ export default function KnowledgeBase() {
                             }}
                           >
                             <RefreshCw className="h-3 w-3 mr-1" />
-                            {item.type !== "pdf" && ((processingCounts[item.id]?.learnings || 0) > 0 || (processingCounts[item.id]?.chunks || 0) > 0) ? "Mark Ready" : item.type === "pdf" ? "Resume" : "Restart"}
+                            {item.type !== "pdf" && (processingCounts[item.id]?.learnings || 0) > 0 && (processingCounts[item.id]?.sourcePassages || 0) > 0 ? "Mark Ready" : item.type === "pdf" ? "Resume" : "Restart"}
                           </Button>
                         </div>
                       )}
@@ -1398,12 +1455,16 @@ export default function KnowledgeBase() {
                         <div className="mt-3 pt-3 border-t space-y-2">
                           <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-2 min-w-0">
-                              <Loader2 className="h-4 w-4 animate-spin text-amber-500 shrink-0" />
+                              {retryProgress[item.id].phase === "done" ? (
+                                <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                              ) : (
+                                <Loader2 className="h-4 w-4 animate-spin text-amber-500 shrink-0" />
+                              )}
                               <span className="text-xs font-medium truncate">
                                 {retryProgress[item.id].phase === "fetching" && "Fetching transcript…"}
-                                {retryProgress[item.id].phase === "extracting" && "Extracting principles…"}
-                                {retryProgress[item.id].phase === "saving" && "Saving to brain…"}
-                                {retryProgress[item.id].phase === "done" && "Done"}
+                                {retryProgress[item.id].phase === "extracting" && "Extracting and indexing…"}
+                                {retryProgress[item.id].phase === "saving" && "Verifying full-source index…"}
+                                {retryProgress[item.id].phase === "done" && "Full source indexed"}
                               </span>
                             </div>
                             <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">
@@ -1421,26 +1482,28 @@ export default function KnowledgeBase() {
                       ) : (
                         <div className="mt-3 pt-3 border-t flex items-center justify-between gap-2">
                           <p className="text-xs text-muted-foreground">
-                            {getInsightCountForItem(item.id) === 0
+                            {itemIsUpgraded
+                              ? `${getInsightCountForItem(item.id)} principles · ${item.source_chunk_count} full-source passages indexed.`
+                              : getInsightCountForItem(item.id) === 0
                               ? "No principles extracted yet."
-                              : `${getInsightCountForItem(item.id)} principles extracted. Re-extract to refresh.`}
+                              : `${getInsightCountForItem(item.id)} principles extracted. Upgrade to preserve the full source.`}
                           </p>
-                          <Button
-                            variant={getInsightCountForItem(item.id) === 0 ? "default" : "outline"}
-                            size="sm"
-                            onClick={(e) => { e.stopPropagation(); retryItem.mutate(item); }}
-                            disabled={retryItem.isPending}
-                            className="shrink-0"
-                          >
-                            {retryItem.isPending ? (
-                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                            ) : (
-                              <RefreshCw className="h-3 w-3 mr-1" />
-                            )}
-                            {((item as any).source_index_version ?? 0) < 2
-                              ? "Upgrade source"
-                              : getInsightCountForItem(item.id) === 0 ? "Extract" : "Re-extract"}
-                          </Button>
+                          {!itemIsUpgraded && (
+                            <Button
+                              variant={getInsightCountForItem(item.id) === 0 ? "default" : "outline"}
+                              size="sm"
+                              onClick={(e) => { e.stopPropagation(); retryItem.mutate(item); }}
+                              disabled={retryItem.isPending}
+                              className="shrink-0"
+                            >
+                              {retryItem.isPending ? (
+                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-3 w-3 mr-1" />
+                              )}
+                              Upgrade source
+                            </Button>
+                          )}
                         </div>
                       )}
 
