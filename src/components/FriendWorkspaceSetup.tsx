@@ -34,6 +34,7 @@ const friendSetupErrorMessage = (error: any) => {
 export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: Props) {
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
+  const hydratedWorkspaceRef = useRef<string | null>(null);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"custom" | "auto">((workspace.friend_setup_mode as any) || "custom");
   const [personaName, setPersonaName] = useState("");
@@ -68,7 +69,15 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
   const [proofFile, setProofFile] = useState<File | null>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      hydratedWorkspaceRef.current = null;
+      return;
+    }
+    // A workspace query refresh creates a new `workspace` object. Do not let
+    // that background refresh overwrite a draft that was just returned by the
+    // analyzer while this dialog is still open.
+    if (hydratedWorkspaceRef.current === workspace.id) return;
+    hydratedWorkspaceRef.current = workspace.id;
     const persona = objectValue(workspace.friend_persona);
     const offer = objectValue(workspace.offer_truth);
     setTab((workspace.friend_setup_mode as any) || "custom");
@@ -199,10 +208,34 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
         body: { workspaceId: workspace.id, profileSnapshot: snapshots.join("\n\n"), draftOnly: true },
       });
       if (error || data?.error) throw new Error(data?.error || error?.message || "Automatic profile analysis failed");
-      return objectValue(data?.draft || data?.persona);
+      let nextDraft = objectValue(data?.draft || data?.persona);
+
+      // The Edge Function persists the draft before responding. Verify that
+      // persisted value when a proxy/provider returns a success envelope
+      // without the nested draft payload.
+      if (Object.keys(nextDraft).length === 0) {
+        const { data: savedWorkspace, error: savedDraftError } = await supabase
+          .from("workspaces")
+          .select("auto_profile_draft")
+          .eq("id", workspace.id)
+          .eq("user_id", userId)
+          .single();
+        if (savedDraftError) throw savedDraftError;
+        nextDraft = objectValue((savedWorkspace as any)?.auto_profile_draft);
+      }
+
+      if (Object.keys(nextDraft).length === 0) {
+        throw new Error("Profile analysis finished, but no review draft was returned. Please analyze the profile again.");
+      }
+      return nextDraft;
     },
     onSuccess: (result) => {
       setDraft(result);
+      queryClient.setQueryData<any[]>(["workspaces"], (current) => current?.map((item) => (
+        item.id === workspace.id
+          ? { ...item, auto_profile_draft: result, friend_setup_mode: "auto", friend_persona_status: "draft" }
+          : item
+      )));
       toast.success("Automatic profile draft is ready. Review it before approval.");
       queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
