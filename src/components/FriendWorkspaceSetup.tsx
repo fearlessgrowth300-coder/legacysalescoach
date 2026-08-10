@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { fetchInstagramProfile } from "@/lib/fetch-instagram";
 import { DEFAULT_FRIEND_BEHAVIOR, type FriendCourse, friendDraftPayload, mergeAutomaticFriendDraft, normalizeFriendCourses, normalizeFriendProfileDraft, objectValue, storyLines } from "@/lib/friend-workspace";
 import { supabase } from "@/integrations/supabase/client";
-import { CheckCircle2, FileCheck2, Loader2, Plus, ScanSearch, ShieldCheck, Sparkles, Trash2, Upload } from "lucide-react";
+import { CheckCircle2, FileCheck2, Loader2, Plus, ScanSearch, ShieldCheck, Sparkles, Trash2, Upload, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 type Props = {
@@ -63,6 +63,8 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
   const [draft, setDraft] = useState<Record<string, any>>(objectValue(workspace.auto_profile_draft));
   const [instagramBio, setInstagramBio] = useState("");
   const [profilePicUrl, setProfilePicUrl] = useState("");
+  const [profilePicFailed, setProfilePicFailed] = useState(false);
+  const [ownerProfileAnalysis, setOwnerProfileAnalysis] = useState<Record<string, any> | null>(null);
   const [courseUrl, setCourseUrl] = useState("");
   const [courseResults, setCourseResults] = useState("");
   const [extraCourses, setExtraCourses] = useState<FriendCourse[]>([]);
@@ -124,6 +126,19 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
     setDraft(objectValue(workspace.auto_profile_draft));
     setInstagramBio(automaticPersona.instagram_bio || "");
     setProfilePicUrl(automaticPersona.avatar_url || "");
+    setProfilePicFailed(false);
+    setOwnerProfileAnalysis({
+      instagramUrl: workspace.instagram_url || "",
+      tiktokUrl: workspace.tiktok_url || "",
+      instagram: {
+        fullName: automaticPersona.display_name || persona.display_name || workspace.name || "",
+        username: automaticPersona.instagram_username || "",
+        biography: automaticPersona.instagram_bio || "",
+        profilePicUrl: automaticPersona.avatar_url || "",
+        summary: automaticPersona.instagram_summary || "",
+      },
+      snapshots: [],
+    });
     setCourseUrl(primaryCourse.website || automaticOffer.course_url || "");
     setCourseResults(primaryCourse.results_summary || automaticOffer.results_summary || "");
     setExtraCourses(automaticCourses.slice(1));
@@ -176,6 +191,55 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
       courseIndex === index ? { ...course, [field]: value } : course
     )));
   };
+
+  const fetchOwnerProfile = async () => {
+    if (!instagramUrl.trim() && !tiktokUrl.trim()) throw new Error("Add an Instagram or TikTok profile first.");
+    const snapshots: string[] = [];
+    let instagram: any = null;
+    let tiktok: any = null;
+
+    if (instagramUrl.trim()) {
+      instagram = await fetchInstagramProfile(instagramUrl.trim());
+      snapshots.push(`INSTAGRAM PROFILE\n${instagram.summary || JSON.stringify(instagram).slice(0, 12000)}`);
+    }
+    if (tiktokUrl.trim()) {
+      const { data, error } = await supabase.functions.invoke("fetch-tiktok", { body: { url: tiktokUrl.trim() } });
+      if (error || data?.error) throw new Error(data?.error || error?.message || "TikTok analysis failed");
+      tiktok = data;
+      snapshots.push(`TIKTOK PROFILE\n${data.summary || JSON.stringify(data).slice(0, 12000)}`);
+    }
+
+    return {
+      instagramUrl: instagramUrl.trim(),
+      tiktokUrl: tiktokUrl.trim(),
+      instagram,
+      tiktok,
+      snapshots,
+    };
+  };
+
+  const analyzeAccountOwner = useMutation({
+    mutationFn: async () => {
+      const profile = await fetchOwnerProfile();
+      const { error } = await supabase.from("workspaces").update({
+        instagram_url: profile.instagramUrl || null,
+        tiktok_url: profile.tiktokUrl || null,
+      } as any).eq("id", workspace.id).eq("user_id", userId);
+      if (error) throw new Error(friendSetupErrorMessage(error));
+      return profile;
+    },
+    onSuccess: (profile) => {
+      setOwnerProfileAnalysis(profile);
+      if (profile.instagram) {
+        setPersonaName(profile.instagram.fullName || profile.instagram.username || personaName);
+        setInstagramBio(profile.instagram.biography || "");
+        setProfilePicUrl(profile.instagram.profilePicUrl || "");
+        setProfilePicFailed(false);
+      }
+      toast.success("Account owner analyzed. Review the profile, complete the remaining setup, then run the final analysis.");
+    },
+    onError: (error: any) => toast.error(friendSetupErrorMessage(error)),
+  });
 
   const saveCustom = useMutation({
     mutationFn: async () => {
@@ -251,21 +315,20 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
   const analyzeAutomatic = useMutation({
     mutationFn: async () => {
       if (!instagramUrl.trim() && !tiktokUrl.trim()) throw new Error("Add an Instagram or TikTok profile first.");
-      const snapshots: string[] = [];
-      let instagramProfile: any = null;
-      if (instagramUrl.trim()) {
-        const instagram = await fetchInstagramProfile(instagramUrl.trim());
-        instagramProfile = instagram;
-        setInstagramBio(instagram.biography || "");
-        setProfilePicUrl(instagram.profilePicUrl || "");
-        snapshots.push(`INSTAGRAM PROFILE\n${instagram.summary || JSON.stringify(instagram).slice(0, 12000)}`);
-      }
-      if (tiktokUrl.trim()) {
-        const { data, error } = await supabase.functions.invoke("fetch-tiktok", {
-          body: { url: tiktokUrl.trim() },
-        });
-        if (error || data?.error) throw new Error(data?.error || error?.message || "TikTok analysis failed");
-        snapshots.push(`TIKTOK PROFILE\n${data.summary || JSON.stringify(data).slice(0, 12000)}`);
+      const cachedProfileMatches = ownerProfileAnalysis
+        && ownerProfileAnalysis.instagramUrl === instagramUrl.trim()
+        && ownerProfileAnalysis.tiktokUrl === tiktokUrl.trim()
+        && Array.isArray(ownerProfileAnalysis.snapshots)
+        && ownerProfileAnalysis.snapshots.length > 0;
+      const ownerProfile = cachedProfileMatches ? ownerProfileAnalysis : await fetchOwnerProfile();
+      const snapshots: string[] = [...(ownerProfile.snapshots || [])];
+      const instagramProfile = ownerProfile.instagram || null;
+      setOwnerProfileAnalysis(ownerProfile);
+      if (instagramProfile) {
+        setPersonaName(instagramProfile.fullName || instagramProfile.username || personaName);
+        setInstagramBio(instagramProfile.biography || "");
+        setProfilePicUrl(instagramProfile.profilePicUrl || "");
+        setProfilePicFailed(false);
       }
       const setupContext = {
         courseName: offerName.trim(),
@@ -448,6 +511,10 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
 
   const draftPersona = objectValue(draft.friend_persona || draft.persona);
   const draftOffer = objectValue(draft.offer_truth);
+  const ownerProfileIsCurrent = Boolean(ownerProfileAnalysis
+    && ownerProfileAnalysis.instagramUrl === instagramUrl.trim()
+    && ownerProfileAnalysis.tiktokUrl === tiktokUrl.trim());
+  const analyzedOwnerInstagram = ownerProfileIsCurrent ? objectValue(ownerProfileAnalysis?.instagram) : {};
   const loadDraftIntoCustom = () => {
     const payload = friendDraftPayload(draft);
     const persona = objectValue(payload.friend_persona);
@@ -601,7 +668,8 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
             <section className="rounded-lg border p-4 space-y-4">
               <div><h3 className="font-semibold">1. Analyze the account owner</h3><p className="text-xs text-muted-foreground">Instagram supplies the real name, bio, profile picture, recent-post themes, audience and natural voice. Nothing becomes active until approval.</p></div>
               <div className="grid sm:grid-cols-2 gap-3"><div><Label>Instagram profile</Label><Input value={instagramUrl} onChange={(e) => setInstagramUrl(e.target.value)} placeholder="https://instagram.com/username" /></div><div><Label>TikTok profile</Label><Input value={tiktokUrl} onChange={(e) => setTiktokUrl(e.target.value)} placeholder="https://tiktok.com/@username" /></div></div>
-              {(profilePicUrl || instagramBio) && <div className="flex items-start gap-3 rounded-md bg-muted/50 p-3">{profilePicUrl ? <img src={profilePicUrl} alt="Instagram profile" className="h-14 w-14 rounded-full object-cover border" /> : <div className="h-14 w-14 rounded-full bg-muted border" />}<div className="min-w-0 flex-1"><p className="text-xs font-medium">Imported Instagram identity</p><p className="text-xs text-muted-foreground line-clamp-4">{instagramBio || "Bio will appear after analysis."}</p></div></div>}
+              <Button type="button" variant="outline" onClick={() => analyzeAccountOwner.mutate()} disabled={analyzeAccountOwner.isPending}>{analyzeAccountOwner.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ScanSearch className="h-4 w-4 mr-2" />}Analyze account owner</Button>
+              <div className="flex items-start gap-3 rounded-md border bg-muted/30 p-3"><div className="h-16 w-16 shrink-0 overflow-hidden rounded-full border bg-background flex items-center justify-center">{ownerProfileIsCurrent && profilePicUrl && !profilePicFailed ? <img src={profilePicUrl} alt="Instagram account owner" className="h-full w-full object-cover" onError={() => setProfilePicFailed(true)} /> : <UserRound className="h-7 w-7 text-muted-foreground" />}</div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="font-medium">{ownerProfileIsCurrent ? (analyzedOwnerInstagram.fullName || personaName || "Account owner") : "Account owner profile"}</p>{ownerProfileIsCurrent && <Badge variant="secondary">Analyzed</Badge>}</div>{ownerProfileIsCurrent && analyzedOwnerInstagram.username && <p className="text-xs text-muted-foreground">@{String(analyzedOwnerInstagram.username).replace(/^@/, "")}</p>}<p className="mt-1 text-xs text-muted-foreground line-clamp-4">{ownerProfileIsCurrent ? (instagramBio || analyzedOwnerInstagram.summary || "Instagram profile analyzed.") : "The Instagram profile picture, name, bio and recent-content identity will appear here after analysis."}</p>{ownerProfileIsCurrent && (analyzedOwnerInstagram.followersCount || analyzedOwnerInstagram.postsCount) && <p className="mt-1 text-[11px] text-muted-foreground">{analyzedOwnerInstagram.followersCount ? `${Number(analyzedOwnerInstagram.followersCount).toLocaleString()} followers` : ""}{analyzedOwnerInstagram.followersCount && analyzedOwnerInstagram.postsCount ? " · " : ""}{analyzedOwnerInstagram.postsCount ? `${Number(analyzedOwnerInstagram.postsCount).toLocaleString()} posts` : ""}</p>}</div></div>
               <div><Label>Instagram bio used by this Friend</Label><Textarea value={instagramBio} onChange={(e) => setInstagramBio(e.target.value)} rows={3} placeholder="This is filled automatically from Instagram and remains editable before approval." /></div>
             </section>
 
