@@ -199,6 +199,7 @@ export type SimpleChatOpts = {
   tools?: any[];
   tool_choice?: any;
   stream?: boolean;
+  timeout_ms?: number;
 };
 
 export async function userChat(
@@ -216,7 +217,12 @@ export async function userChat(
     if (opts.tools) body.tools = opts.tools;
     if (opts.tool_choice) body.tool_choice = opts.tool_choice;
     if (opts.stream) body.stream = true;
-    return fetch(target.url, { method: "POST", headers: target.headers, body: JSON.stringify(body) });
+    return fetch(target.url, {
+      method: "POST",
+      headers: target.headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(opts.timeout_ms || 60000),
+    });
   }
 
   // Anthropic translation — non-streaming only.
@@ -257,6 +263,7 @@ export async function userChat(
     method: "POST",
     headers: target.headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(opts.timeout_ms || 60000),
   });
 
   // Translate Anthropic response → OpenAI-shape so callers can keep using

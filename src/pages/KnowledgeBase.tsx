@@ -823,8 +823,8 @@ export default function KnowledgeBase() {
         },
       });
       if (error || data?.error) throw new Error(data?.error || error?.message || "Insight extraction failed");
-      if (Number(data?.pipelineVersion || 0) < 3 || data?.jobType !== "structured_insights") {
-        throw new Error("Lovable Cloud is still running the old knowledge processor. Deploy the current process-knowledge function before extracting insights.");
+      if (Number(data?.pipelineVersion || 0) < 4 || data?.jobType !== "structured_insights") {
+        throw new Error("Lovable Cloud returned the legacy process-knowledge payload. Deploy Edge Function pipeline v4 (publishing the website alone does not update it).");
       }
       return item.id;
     },

@@ -688,7 +688,10 @@ Rules:
 }
 
 const SOURCE_INDEX_VERSION = 2;
-const PROCESS_KNOWLEDGE_PIPELINE_VERSION = 3;
+// Bump whenever the structured-insight contract changes. This also gives
+// Lovable Cloud an explicit function diff so publishing cannot treat the Edge
+// deployment as unchanged while only updating the frontend bundle.
+const PROCESS_KNOWLEDGE_PIPELINE_VERSION = 4;
 
 function sourcePassageType(type: string, url?: string | null): "pdf" | "video" | "content" {
   if (type === "pdf") return "pdf";

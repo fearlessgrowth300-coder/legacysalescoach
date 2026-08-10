@@ -166,12 +166,15 @@ serve(async (req) => {
       });
     }
 
-    // Scrape all available URLs
+    // A verified scraper snapshot already contains the social profile and
+    // recent posts. Re-fetching those pages here is redundant, frequently
+    // blocked by the platforms, and can exhaust the Edge Function wall time.
     const scrapedParts: string[] = [];
-    if (typeof profileSnapshot === "string" && profileSnapshot.trim()) {
+    const hasVerifiedSnapshot = typeof profileSnapshot === "string" && Boolean(profileSnapshot.trim());
+    if (hasVerifiedSnapshot) {
       scrapedParts.push(`--- VERIFIED SCRAPER SNAPSHOT ---\n${profileSnapshot.trim().substring(0, 24000)}`);
     }
-    const urls = [
+    const urls = hasVerifiedSnapshot ? [] : [
       { label: "Instagram", url: workspace.instagram_url },
       { label: "TikTok", url: workspace.tiktok_url },
       { label: "Store/Website", url: workspace.store_url },
@@ -201,8 +204,15 @@ serve(async (req) => {
     }
 
 
-    // ===== STEP 1: Profile Analysis (existing) =====
-    const prompt = `Analyze this business/creator profile and provide:
+    const isAutomaticFriendDraft = workspace.workspace_type === "friend" && Boolean(draftOnly);
+    let profileAnalysis = workspace.profile_analysis || "Analysis completed";
+    let productsDetected = workspace.products_detected || "None detected";
+
+    // Expert/manual analysis retains the separate business-summary pass.
+    // Automatic Friend setup uses the structured persona pass below as its
+    // single AI request so the browser is not left waiting on two generations.
+    if (!isAutomaticFriendDraft) {
+      const prompt = `Analyze this business/creator profile and provide:
 1. A concise profile analysis (2-3 sentences about what they do, their niche, and target audience)
 2. Products/services detected (comma-separated list)
 
@@ -218,53 +228,52 @@ ${scrapedParts.join("\n\n")}
 
 Return JSON: { "profile_analysis": "...", "products_detected": "..." }`;
 
-    const aiResponse = await userChat(chat, {
-      model: chat.models.reasoning,
-      messages: [
-        { role: "system", content: "You are a business profile analyzer. Return valid JSON only." },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-    });
+      const aiResponse = await userChat(chat, {
+        model: chat.models.reasoning,
+        messages: [
+          { role: "system", content: "You are a business profile analyzer. Return valid JSON only." },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+        timeout_ms: 45000,
+      });
 
+      if (!aiResponse.ok) {
+        const status = aiResponse.status;
+        if (status === 429) {
+          return new Response(JSON.stringify({ error: "Rate limit exceeded, try again later" }), {
+            status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        if (status === 402) {
+          return new Response(JSON.stringify({ error: "AI credits exhausted, please add funds" }), {
+            status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        throw new Error("AI analysis failed");
+      }
 
-    if (!aiResponse.ok) {
-      const status = aiResponse.status;
-      if (status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded, try again later" }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+      const aiData = await aiResponse.json();
+      const aiContent = aiData.choices?.[0]?.message?.content || "";
+      try {
+        const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          profileAnalysis = parsed.profile_analysis || profileAnalysis;
+          productsDetected = parsed.products_detected || productsDetected;
+        }
+      } catch {
+        profileAnalysis = aiContent.substring(0, 500);
       }
-      if (status === 402) {
-        return new Response(JSON.stringify({ error: "AI credits exhausted, please add funds" }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      throw new Error("AI analysis failed");
+
+      const { error: summaryError } = await supabase
+        .from("workspaces")
+        .update({ profile_analysis: profileAnalysis, products_detected: productsDetected })
+        .eq("id", workspaceId)
+        .eq("user_id", user.id);
+      if (summaryError) throw summaryError;
     }
-
-    const aiData = await aiResponse.json();
-    const aiContent = aiData.choices?.[0]?.message?.content || "";
-
-    let profileAnalysis = "Analysis completed";
-    let productsDetected = "None detected";
-
-    try {
-      const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        profileAnalysis = parsed.profile_analysis || profileAnalysis;
-        productsDetected = parsed.products_detected || productsDetected;
-      }
-    } catch {
-      profileAnalysis = aiContent.substring(0, 500);
-    }
-
-    await supabase
-      .from("workspaces")
-      .update({ profile_analysis: profileAnalysis, products_detected: productsDetected })
-      .eq("id", workspaceId);
 
     // ===== STEP 2: Extract & Save Structured Persona (workspace_persona) =====
     const personaPrompt = workspace.workspace_type === "friend"
@@ -340,6 +349,7 @@ Return JSON with: workspace_name, tone, audience, positioning, energy, allowed_c
       ],
       temperature: 0.3,
       response_format: { type: "json_object" },
+      timeout_ms: 45000,
     });
 
 
@@ -358,10 +368,15 @@ Return JSON with: workspace_name, tone, audience, positioning, energy, allowed_c
     // Automatic Friend analysis always remains a draft. It cannot influence
     // live conversations until the owner reviews and explicitly approves it.
     if (personaData && workspace.workspace_type === "friend") {
+      const inferredOffer = safeObject(personaData.offer_truth);
+      profileAnalysis = personaData.profile_evidence || profileAnalysis;
+      productsDetected = inferredOffer.name || productsDetected;
       const { error: draftError } = await supabase.from("workspaces").update({
         auto_profile_draft: personaData,
         friend_setup_mode: "auto",
         friend_persona_status: "draft",
+        profile_analysis: profileAnalysis,
+        products_detected: productsDetected,
       }).eq("id", workspaceId).eq("user_id", user.id);
       if (draftError) throw draftError;
     }
