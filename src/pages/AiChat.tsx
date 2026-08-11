@@ -205,6 +205,7 @@ export default function AiChat() {
   const [wasTruncated, setWasTruncated] = useState(false);
   // collapsible feature removed per user request
   const userMsgRef = useRef<HTMLDivElement>(null);
+  const sendInFlightRef = useRef(false);
 
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -619,8 +620,9 @@ export default function AiChat() {
   const send = async (overrideText?: string) => {
     const text = (overrideText || input).trim();
     if (!text && attachedImages.length === 0) return;
-    if (isLoading) return;
+    if (isLoading || sendInFlightRef.current) return;
     if (!user) return;
+    sendInFlightRef.current = true;
 
     if (isRecording) { recognitionRef.current?.stop(); setIsRecording(false); }
     setFollowUps([]);
@@ -631,7 +633,7 @@ export default function AiChat() {
         .from("ai_conversations")
         .insert({ user_id: user.id, title: text.substring(0, 50) || "New Chat" })
         .select().single();
-      if (!data) { toast.error("Failed to create conversation"); return; }
+      if (!data) { toast.error("Failed to create conversation"); sendInFlightRef.current = false; return; }
       convId = data.id;
       setActiveConvId(convId);
       setConversations(prev => [data as Conversation, ...prev]);
@@ -646,6 +648,7 @@ export default function AiChat() {
     if (attachedImages.length > 0 && uploadedUrls.length === 0) {
       toast.error("All image uploads failed. Please try again.");
       setIsLoading(false);
+      sendInFlightRef.current = false;
       return;
     }
 
@@ -808,6 +811,8 @@ export default function AiChat() {
       toast.error(e instanceof Error ? e.message : "Failed to get response");
       setIsLoading(false);
       setIsTyping(false);
+    } finally {
+      sendInFlightRef.current = false;
     }
   };
 

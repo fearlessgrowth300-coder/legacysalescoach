@@ -5,7 +5,12 @@ import {
 } from "../_shared/brain-pipeline.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { BRAIN_PERSONA } from "../_shared/persona.ts";
-import { buildBrainRetrievalMeta, isAllowedBrainChatOrigin } from "./lib.ts";
+import {
+  buildBrainRetrievalMeta,
+  isAllowedBrainChatOrigin,
+  isSimpleBrainChatSmallTalk,
+  simpleBrainChatResponse,
+} from "./lib.ts";
 import {
   buildFocusedRetrievalQueries,
   buildMemoryTranscript,
@@ -536,6 +541,29 @@ serve(async (req) => {
     const lastUserImages: string[] = Array.isArray(lastUserMsg?.content)
       ? lastUserMsg.content.filter((p: any) => p.type === "image_url" && p.image_url?.url).map((p: any) => p.image_url.url)
       : [];
+
+    // A greeting is a human greeting, not a buyer-analysis assignment. Avoid
+    // embeddings, vault citations and the full coaching report until the user
+    // supplies an actual question, conversation, link or screenshot.
+    if (isSimpleBrainChatSmallTalk(lastUserText || "", lastUserImages.length > 0)) {
+      const fixed = simpleBrainChatResponse(lastUserText || "");
+      const smallTalkEncoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(smallTalkEncoder.encode(`data: ${JSON.stringify({ brain_meta: {
+            selected_principles: [],
+            framework_name: "",
+            contradictions: [],
+            empty_vault: false,
+            debug: { small_talk: true, embedding_used: false },
+          } })}\n\n`));
+          controller.enqueue(smallTalkEncoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: fixed } }] })}\n\n`));
+          controller.enqueue(smallTalkEncoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
+    }
 
     let chat;
     try {

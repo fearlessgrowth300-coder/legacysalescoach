@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { toAnthropicContent } from "../../supabase/functions/_shared/anthropic-content";
-import { buildBrainRetrievalMeta, isAllowedBrainChatOrigin } from "../../supabase/functions/brain-chat/lib";
+import {
+  buildBrainRetrievalMeta,
+  isAllowedBrainChatOrigin,
+  isSimpleBrainChatSmallTalk,
+  simpleBrainChatResponse,
+} from "../../supabase/functions/brain-chat/lib";
 import { PROVIDER_MODEL } from "@/hooks/useActiveAiModel";
 
 describe("AI Chat connection helpers", () => {
@@ -51,5 +56,13 @@ describe("AI Chat connection helpers", () => {
     expect(PROVIDER_MODEL.lovable.model).toBe("google/gemini-2.5-flash");
     expect(PROVIDER_MODEL.openai.model).toBe("gpt-4o");
     expect(PROVIDER_MODEL.anthropic.model).toBe("claude-opus-4-8");
+  });
+
+  it("keeps simple greetings out of the full sales-analysis pipeline", () => {
+    expect(isSimpleBrainChatSmallTalk("hi")).toBe(true);
+    expect(isSimpleBrainChatSmallTalk("Good morning! ")).toBe(true);
+    expect(isSimpleBrainChatSmallTalk("hi", true)).toBe(false);
+    expect(isSimpleBrainChatSmallTalk("Hi, she said the price is too high. What should I reply?")).toBe(false);
+    expect(simpleBrainChatResponse("hi")).toContain("What would you like help with");
   });
 });
