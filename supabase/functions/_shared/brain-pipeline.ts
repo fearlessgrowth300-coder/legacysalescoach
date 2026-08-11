@@ -889,8 +889,14 @@ export async function runPipelineFast(opts: {
    * every search land on the same vectors → same principles every time.
    * `question` is still used for lexical/keyword scoring (its boilerplate words
    * are already filtered out via STOP_WORDS).
-   */
+  */
   embedQuery?: string;
+  /**
+   * Additional focused searches for compound questions. Each query gets its
+   * own embedding and vault search, then all matches are merged by strongest
+   * semantic similarity before local reranking.
+   */
+  embedQueries?: string[];
   /**
    * When provided, the fast path runs the AI reasoning selection (selectPrinciples)
    * so the model actually reads the message and picks the best-fitting principles —
@@ -906,25 +912,64 @@ export async function runPipelineFast(opts: {
     ? opts.embedQuery
     : question;
 
-  // Single embedding over the clean message (not the templated wrapper)
-  const emb = await generateEmbedding(embedText.substring(0, 1500), supabaseAdmin, userId);
-  const embeddingUsed = !!emb;
+  const semanticQueries = [...new Set([
+    embedText,
+    ...(opts.embedQueries || []),
+  ].map((query) => query.trim().substring(0, 1500)).filter(Boolean))].slice(0, 4);
+
+  // Compound questions need more than one semantic angle. Generate up to four
+  // embeddings in parallel, search both stores for each, and retain the best
+  // similarity for every principle/passage encountered.
+  const embeddings = await Promise.all(
+    semanticQueries.map((query) => generateEmbedding(query, supabaseAdmin, userId)),
+  );
+  const embeddingUsed = embeddings.some(Boolean);
 
   let semP: Principle[] = [];
   let semC: Chunk[] = [];
-  if (emb) {
-    const embStr = JSON.stringify(emb);
+  if (embeddingUsed) {
     // Search the user's uploaded vault first. The previous null-user search let
     // broad/global sources dominate, which made replies keep citing the same books.
-    const [userPRes, userCRes] = await Promise.all([
-      supabaseAdmin.rpc("match_sales_brain", { query_embedding: embStr, match_count: 320, match_threshold: 0.08, p_user_id: userId }),
-      supabaseAdmin.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 120, match_threshold: 0.08, p_user_id: userId }),
-    ]);
-    semP = (userPRes.data || [])
-      .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
-      .map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-    semC = (userCRes.data || [])
-      .map((c: any) => ({ ...c, _semantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+    const resultSets = await Promise.all(embeddings.map(async (embedding, index) => {
+      if (!embedding) return { principles: [], chunks: [] };
+      const embStr = JSON.stringify(embedding);
+      const [userPRes, userCRes] = await Promise.all([
+        supabaseAdmin.rpc("match_sales_brain", {
+          query_embedding: embStr,
+          match_count: index === 0 ? 260 : 120,
+          match_threshold: 0.08,
+          p_user_id: userId,
+        }),
+        supabaseAdmin.rpc("match_knowledge_chunks", {
+          query_embedding: embStr,
+          match_count: index === 0 ? 100 : 60,
+          match_threshold: 0.08,
+          p_user_id: userId,
+        }),
+      ]);
+      return {
+        principles: (userPRes.data || [])
+          .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
+          .map((p: any) => ({ ...p, _semantic: true, _matched_query: index, relevance_score: Math.round((p.similarity || 0) * 100) })),
+        chunks: (userCRes.data || [])
+          .map((c: any) => ({ ...c, _semantic: true, _matched_query: index, relevance_score: Math.round((c.similarity || 0) * 100) })),
+      };
+    }));
+
+    const bestPrinciple = new Map<string, Principle>();
+    const bestChunk = new Map<string, Chunk>();
+    for (const result of resultSets) {
+      for (const principle of result.principles as Principle[]) {
+        const current = bestPrinciple.get(principle.id);
+        if (!current || (principle.similarity || 0) > (current.similarity || 0)) bestPrinciple.set(principle.id, principle);
+      }
+      for (const chunk of result.chunks as Chunk[]) {
+        const current = bestChunk.get(chunk.id);
+        if (!current || (chunk.similarity || 0) > (current.similarity || 0)) bestChunk.set(chunk.id, chunk);
+      }
+    }
+    semP = [...bestPrinciple.values()];
+    semC = [...bestChunk.values()];
   }
 
   // If a screenshot/chat matches a PDF or video chunk, bring that source's
@@ -1050,7 +1095,7 @@ export async function runPipelineFast(opts: {
     supporting_chunks: semC.slice(0, 12),
     evidence_principles: evidence,
     debug: {
-      subqueries: [question.substring(0, 80)],
+      subqueries: semanticQueries.map((query) => query.substring(0, 160)),
       candidate_count: top.length,
       reranked_count: top.length,
       top_score: topScore,

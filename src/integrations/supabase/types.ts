@@ -63,22 +63,31 @@ export type Database = {
       }
       ai_conversations: {
         Row: {
+          conversation_memory: Json
           created_at: string
           id: string
+          memory_message_count: number
+          memory_updated_at: string | null
           title: string
           updated_at: string
           user_id: string
         }
         Insert: {
+          conversation_memory?: Json
           created_at?: string
           id?: string
+          memory_message_count?: number
+          memory_updated_at?: string | null
           title?: string
           updated_at?: string
           user_id: string
         }
         Update: {
+          conversation_memory?: Json
           created_at?: string
           id?: string
+          memory_message_count?: number
+          memory_updated_at?: string | null
           title?: string
           updated_at?: string
           user_id?: string

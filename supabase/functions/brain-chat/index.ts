@@ -6,6 +6,14 @@ import {
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { BRAIN_PERSONA } from "../_shared/persona.ts";
 import { buildBrainRetrievalMeta, isAllowedBrainChatOrigin } from "./lib.ts";
+import {
+  buildFocusedRetrievalQueries,
+  buildMemoryTranscript,
+  hasConversationMemory,
+  normalizeConversationMemory,
+  renderConversationMemory,
+  type ConversationMemory,
+} from "./memory.ts";
 
 
 
@@ -76,6 +84,75 @@ async function processMessage(m: any) {
   return m;
 }
 
+async function refreshDurableConversationMemory(
+  chat: any,
+  conversationTitle: string,
+  existingMemory: ConversationMemory,
+  messages: any[],
+): Promise<ConversationMemory> {
+  const transcript = buildMemoryTranscript(messages);
+  if (!transcript) return existingMemory;
+
+  const existing = renderConversationMemory(existingMemory, 6500);
+  const prompt = `You maintain durable memory for one long-running buyer/client coaching conversation.
+
+CONVERSATION TITLE: ${conversationTitle || "Untitled conversation"}
+
+EXISTING DURABLE MEMORY:
+${existing}
+
+HISTORY-WIDE EVIDENCE SAMPLE (chronological; includes the opening, evenly sampled middle, and latest turns):
+${transcript}
+
+Return one JSON object with exactly these fields:
+{
+  "buyer_name": "name or empty",
+  "relationship": "how the user knows/works with this person and the engagement history",
+  "business_and_offers": [],
+  "goals": [],
+  "pains_and_constraints": [],
+  "objections_and_fears": [],
+  "commitments_and_payments": [],
+  "personal_context": [],
+  "communication_preferences": [],
+  "important_timeline": [],
+  "strategies_already_tried": [],
+  "unresolved_items": [],
+  "latest_state": "current status at the newest turn",
+  "facts_to_never_forget": []
+}
+
+RULES:
+- Preserve still-valid facts from EXISTING DURABLE MEMORY unless newer evidence explicitly changes them.
+- Use only evidence in the supplied conversation. Never infer purchases, payments, guarantees, results, relationships, motives, diagnoses, or promises.
+- User-provided facts and clearly transcribed screenshot facts may be remembered.
+- Assistant speculation is NOT a buyer fact. Store an assistant suggestion only under strategies_already_tried when later messages show the user actually sent or used it.
+- Keep important names, offers, amounts, commitments, deadlines, health/personal events, earlier objections, and unresolved promises when explicitly stated.
+- Distinguish historical facts from the latest state. Do not erase history merely because the current topic changed.
+- Be concise but complete. Output JSON only.`;
+
+  try {
+    const response = await userChat(chat, {
+      model: chat.models.reasoning,
+      max_tokens: 2400,
+      temperature: 0.1,
+      messages: [{ role: "user", content: prompt }],
+    });
+    if (!response.ok) {
+      console.warn("[brain-chat] durable memory refresh failed", response.status);
+      return existingMemory;
+    }
+    const data = await response.json();
+    const raw = String(data.choices?.[0]?.message?.content || "").trim();
+    const match = raw.match(/\{[\s\S]*\}/);
+    const parsed = normalizeConversationMemory(JSON.parse(match ? match[0] : raw));
+    return hasConversationMemory(parsed) ? parsed : existingMemory;
+  } catch (error) {
+    console.warn("[brain-chat] durable memory refresh could not be completed", error);
+    return existingMemory;
+  }
+}
+
 const EMPTY_VAULT_RESPONSE = (topic: string) =>
   `I couldn't find a strong principle match for **${topic}** inside your vault yet. Upload more material on **${topic}** or rephrase the message with more context so I can pull the right principles.\n\nThe Brain only speaks from what you've taught it — no general-knowledge fallback.`;
 
@@ -88,12 +165,13 @@ function buildSystemPrompt(opts: {
   workspaceProfile: string;
   recentExchanges: string;
   priorSummary: string;
+  durableMemory: string;
   frameworkName: string;
   sourceTitles: string[];
   whySkeleton: string;
   openerHint: string;
 }) {
-  const { selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, workspaceProfile, recentExchanges, priorSummary, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
+  const { selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, workspaceProfile, recentExchanges, priorSummary, durableMemory, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
   const sourceList = sourceTitles.length ? sourceTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n") : "  (none)";
   return `You are an elite sales Brain. You have been given multiple principles from DIFFERENT books and videos in the user's vault.
 
@@ -226,6 +304,16 @@ ${recentExchanges || "(this is the first turn)"}
 === EARLIER CONVERSATION HISTORY (summary of older messages — remember and reference these when relevant) ===
 ${priorSummary || "(no earlier messages — this is the start of the conversation)"}
 
+=== DURABLE BUYER / CLIENT MEMORY — HIGHEST-PRIORITY CONTINUITY ===
+${durableMemory || "(no durable buyer memory yet)"}
+
+MEMORY RULES:
+- Treat these as facts carried across the entire saved conversation, not as a new lead.
+- Use the buyer's/client's name, history, commitments, previous objections, personal context, and unresolved promises when relevant.
+- Do not repeat a strategy listed as already tried unless the current situation clearly calls for it and you explain the new angle.
+- The newest message overrides an older state, but it does not erase stable facts.
+- Never invent a fact that is absent from this memory or the visible conversation.
+
 === WORKSPACE PROFILE ===
 ${workspaceProfile || "(none provided)"}
 
@@ -342,22 +430,52 @@ serve(async (req) => {
     // database and use it as the real long-term client memory. Preserve the
     // current browser turn when it contains base64 image data.
     let conversationMessages: any[] = validated;
+    let conversationRecord: any = null;
+    let storedMessageCount = validated.length;
     if (conversation_id) {
-      const { data: historyRows, error: historyError } = await supabaseAdmin
-        .from("ai_chat_messages")
-        .select("role, content, created_at")
-        .eq("conversation_id", conversation_id)
-        .eq("user_id", user.id)
-        .in("role", ["user", "assistant"])
-        .order("created_at", { ascending: false })
-        .limit(MAX_MESSAGES);
+      const [conversationResult, historyResult, historyHeadResult] = await Promise.all([
+        supabaseAdmin
+          .from("ai_conversations")
+          .select("id, title, conversation_memory, memory_message_count, memory_updated_at")
+          .eq("id", conversation_id)
+          .eq("user_id", user.id)
+          .maybeSingle(),
+        supabaseAdmin
+          .from("ai_chat_messages")
+          .select("role, content, created_at", { count: "exact" })
+          .eq("conversation_id", conversation_id)
+          .eq("user_id", user.id)
+          .in("role", ["user", "assistant"])
+          .order("created_at", { ascending: false })
+          .limit(MAX_MESSAGES),
+        supabaseAdmin
+          .from("ai_chat_messages")
+          .select("role, content, created_at")
+          .eq("conversation_id", conversation_id)
+          .eq("user_id", user.id)
+          .in("role", ["user", "assistant"])
+          .order("created_at", { ascending: true })
+          .limit(160),
+      ]);
+      conversationRecord = conversationResult.data || null;
+      const historyRows = historyResult.data;
+      const historyError = historyResult.error;
+      storedMessageCount = historyResult.count || historyRows?.length || validated.length;
 
       if (historyError) {
         console.warn("[brain-chat] conversation history load failed:", historyError);
       } else if (historyRows?.length) {
-        const dbMessages = [...historyRows].reverse().map((m: any) => ({
+        const allHistoryRows = [...(historyHeadResult.data || []), ...historyRows]
+          .sort((a: any, b: any) => String(a.created_at).localeCompare(String(b.created_at)))
+          .filter((row: any, index: number, rows: any[]) => index === 0 || !(
+            row.created_at === rows[index - 1].created_at &&
+            row.role === rows[index - 1].role &&
+            row.content === rows[index - 1].content
+          ));
+        const dbMessages = allHistoryRows.map((m: any) => ({
           role: m.role === "assistant" ? "assistant" : "user",
           content: String(m.content || ""),
+          created_at: m.created_at,
         }));
 
         const clientLast = validated[validated.length - 1];
@@ -376,7 +494,7 @@ serve(async (req) => {
           }
         }
 
-        conversationMessages = dbMessages.slice(-MAX_MESSAGES);
+        conversationMessages = dbMessages;
         console.log("[brain-chat] loaded conversation memory messages:", conversationMessages.length);
       }
     }
@@ -429,6 +547,34 @@ serve(async (req) => {
       throw e;
     }
 
+    let durableMemory = normalizeConversationMemory(conversationRecord?.conversation_memory);
+    let rememberedMessageCount = Number(conversationRecord?.memory_message_count || 0);
+    const needsInitialMemory = !hasConversationMemory(durableMemory) && storedMessageCount >= 6;
+    const needsMemoryRefresh = hasConversationMemory(durableMemory) &&
+      storedMessageCount - rememberedMessageCount >= 12;
+    if (conversation_id && conversationRecord && (needsInitialMemory || needsMemoryRefresh)) {
+      const refreshed = await refreshDurableConversationMemory(
+        chat,
+        conversationRecord.title || "Untitled conversation",
+        durableMemory,
+        conversationMessages,
+      );
+      if (hasConversationMemory(refreshed)) {
+        durableMemory = refreshed;
+        const { error: memorySaveError } = await supabaseAdmin
+          .from("ai_conversations")
+          .update({
+            conversation_memory: refreshed,
+            memory_message_count: storedMessageCount,
+            memory_updated_at: new Date().toISOString(),
+          })
+          .eq("id", conversation_id)
+          .eq("user_id", user.id);
+        if (memorySaveError) console.warn("[brain-chat] durable memory save failed", memorySaveError);
+        else rememberedMessageCount = storedMessageCount;
+      }
+    }
+    const durableMemoryText = renderConversationMemory(durableMemory, 7000);
 
     // Build session context (last 3 exchanges + previous-turn principles)
     const session = await buildSessionContext(supabaseAdmin, conversation_id || null, modelMessages);
@@ -532,7 +678,7 @@ serve(async (req) => {
     } else {
       // Text/chat path: avoid a separate pre-LLM retrieval-brief call. The shared
       // pipeline expands and scores against the full vault, so this keeps feedback fast.
-      retrievalQuery = `Latest user message / pasted chat:\n${clampText(lastUserText || "(no text)", USER_INPUT_CHAR_LIMIT)}\n\nRecent context:\n${clampText(recentForBrief || "(none)", RECENT_EXCHANGES_CHAR_LIMIT)}\n\nSearch focus: prospect psychology, hidden objection, conversation stage, sales framework, exact reply script, strategic breakdown, source-diverse principles.`;
+      retrievalQuery = `Latest user message / pasted chat:\n${clampText(lastUserText || "(no text)", USER_INPUT_CHAR_LIMIT)}\n\nDurable buyer/client memory:\n${clampText(durableMemoryText, 1800)}\n\nRecent context:\n${clampText(recentForBrief || "(none)", RECENT_EXCHANGES_CHAR_LIMIT)}\n\nSearch focus: prospect psychology, hidden objection, conversation stage, sales framework, exact reply script, strategic breakdown, source-diverse principles.`;
     }
 
     // Clean text for the semantic embedding — the user's ACTUAL message (or, for
@@ -545,6 +691,12 @@ serve(async (req) => {
       : (cleanMsg.length >= 12
           ? cleanMsg
           : clampText(`${cleanMsg}\n\n${recentForBrief}`.trim(), 800));
+    const focusedRetrievalQueries = buildFocusedRetrievalQueries(
+      hasImageAttachment ? `${conversationText}\n${userInstruction}` : (lastUserText || ""),
+      recentForBrief,
+      hasConversationMemory(durableMemory) ? durableMemoryText : "",
+      4,
+    );
 
     // ─── Layers 1+2 (FAST path — keeps us under the 2s CPU budget) ───
     const pipeline = await runPipelineFast({
@@ -552,6 +704,7 @@ serve(async (req) => {
       userId: user.id,
       question: retrievalQuery,
       embedQuery,
+      embedQueries: focusedRetrievalQueries,
       chat,
       session,
     });
@@ -634,6 +787,7 @@ serve(async (req) => {
       workspaceProfile,
       recentExchanges: clampText(recentExchanges, RECENT_EXCHANGES_CHAR_LIMIT),
       priorSummary,
+      durableMemory: durableMemoryText,
       frameworkName: pipeline.framework_name,
       sourceTitles,
       whySkeleton,
@@ -659,7 +813,12 @@ serve(async (req) => {
       contradictions: pipeline.contradictions,
       empty_vault: false,
       brainRetrieval: buildBrainRetrievalMeta(pipeline),
-      debug: pipeline.debug,
+      debug: {
+        ...pipeline.debug,
+        durable_memory_used: hasConversationMemory(durableMemory),
+        durable_memory_message_count: rememberedMessageCount,
+        stored_conversation_message_count: storedMessageCount,
+      },
     };
     const metaEvent = `data: ${JSON.stringify({ brain_meta: brainMeta })}\n\n`;
     const loadingEvent = `data: ${JSON.stringify({ brain_meta: { loading: true } })}\n\n`;
