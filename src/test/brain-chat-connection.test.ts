@@ -7,6 +7,10 @@ import {
   simpleBrainChatResponse,
 } from "../../supabase/functions/brain-chat/lib";
 import { PROVIDER_MODEL } from "@/hooks/useActiveAiModel";
+import {
+  isSimpleBrainChatGreeting,
+  simpleBrainChatGreetingResponse,
+} from "@/lib/brain-chat-small-talk";
 
 describe("AI Chat connection helpers", () => {
   it("allows local development and configured production origins without opening CORS broadly", () => {
@@ -64,5 +68,8 @@ describe("AI Chat connection helpers", () => {
     expect(isSimpleBrainChatSmallTalk("hi", true)).toBe(false);
     expect(isSimpleBrainChatSmallTalk("Hi, she said the price is too high. What should I reply?")).toBe(false);
     expect(simpleBrainChatResponse("hi")).toContain("What would you like help with");
+    expect(isSimpleBrainChatGreeting("Hi")).toBe(true);
+    expect(isSimpleBrainChatGreeting("Hi, what should I send this buyer?")).toBe(false);
+    expect(simpleBrainChatGreetingResponse("Hi")).toBe(simpleBrainChatResponse("Hi"));
   });
 });

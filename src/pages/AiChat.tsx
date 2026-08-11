@@ -25,6 +25,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "@/integrations/supabase/client";
+import { isSimpleBrainChatGreeting, simpleBrainChatGreetingResponse } from "@/lib/brain-chat-small-talk";
 
 type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url?: string | null; image_urls?: string[]; is_edited?: boolean; is_pinned?: boolean; status?: "sending" | "sent" | "delivered" | "read"; selected_principles?: SelectedPrinciple[]; framework_name?: string };
 type Conversation = { id: string; title: string; created_at: string; updated_at: string };
@@ -691,6 +692,30 @@ export default function AiChat() {
     }
 
     setMessages(prev => prev.map(m => m.id === savedMsg?.id ? { ...m, status: "delivered" as const } : m));
+
+    // Handle greetings in the client before calling the Edge Function. This is
+    // deliberately duplicated server-side so a delayed Cloud function deploy
+    // can never turn "Hi" into a full buyer-psychology report.
+    if (isSimpleBrainChatGreeting(text, displayPreviews.length > 0)) {
+      const greeting = simpleBrainChatGreetingResponse(text);
+      const { data: savedGreeting } = await supabase.from("ai_chat_messages").insert({
+        conversation_id: convId,
+        user_id: user.id,
+        role: "assistant",
+        content: greeting,
+        metadata: { selected_principles: [], framework_name: "", debug: { small_talk: true, client_short_circuit: true } },
+      } as any).select("id").single();
+      setMessages(prev => [
+        ...prev.map(m => m.id === savedMsg?.id ? { ...m, status: "read" as const } : m),
+        { id: savedGreeting?.id, role: "assistant", content: greeting },
+      ]);
+      setIsLoading(false);
+      setIsTyping(false);
+      setFollowUps([]);
+      sendInFlightRef.current = false;
+      return;
+    }
+
     setIsTyping(true);
 
     // Helper: download image from private storage via authenticated supabase client
