@@ -440,120 +440,13 @@ export type Database = {
           },
         ]
       }
-      friend_audience_signals: {
-        Row: {
-          created_at: string
-          first_seen_at: string
-          id: string
-          last_seen_at: string
-          loss_count: number
-          observation_count: number
-          positive_feedback_count: number
-          signal_key: string
-          signal_type: string
-          updated_at: string
-          user_id: string
-          win_count: number
-          workspace_id: string
-        }
-        Insert: {
-          created_at?: string
-          first_seen_at?: string
-          id?: string
-          last_seen_at?: string
-          loss_count?: number
-          observation_count?: number
-          positive_feedback_count?: number
-          signal_key: string
-          signal_type: string
-          updated_at?: string
-          user_id: string
-          win_count?: number
-          workspace_id: string
-        }
-        Update: {
-          created_at?: string
-          first_seen_at?: string
-          id?: string
-          last_seen_at?: string
-          loss_count?: number
-          observation_count?: number
-          positive_feedback_count?: number
-          signal_key?: string
-          signal_type?: string
-          updated_at?: string
-          user_id?: string
-          win_count?: number
-          workspace_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "friend_audience_signals_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "workspaces"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      friend_prospect_signals: {
-        Row: {
-          first_seen_at: string
-          id: string
-          last_seen_at: string
-          prospect_id: string
-          signal_key: string
-          signal_type: string
-          user_id: string
-          workspace_id: string
-        }
-        Insert: {
-          first_seen_at?: string
-          id?: string
-          last_seen_at?: string
-          prospect_id: string
-          signal_key: string
-          signal_type: string
-          user_id: string
-          workspace_id: string
-        }
-        Update: {
-          first_seen_at?: string
-          id?: string
-          last_seen_at?: string
-          prospect_id?: string
-          signal_key?: string
-          signal_type?: string
-          user_id?: string
-          workspace_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "friend_prospect_signals_prospect_id_fkey"
-            columns: ["prospect_id"]
-            isOneToOne: false
-            referencedRelation: "prospects"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "friend_prospect_signals_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "workspaces"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       lead_registry: {
         Row: {
-          contact_status: string
           created_at: string
           id: string
-          last_observed_at: string | null
           name: string
           past_advice: Json | null
           persona_type: string | null
-          prospect_profile: Json
           prospect_id: string | null
           psychological_state: string | null
           subtext_analysis: string | null
@@ -563,14 +456,11 @@ export type Database = {
           workspace_id: string | null
         }
         Insert: {
-          contact_status?: string
           created_at?: string
           id?: string
-          last_observed_at?: string | null
           name: string
           past_advice?: Json | null
           persona_type?: string | null
-          prospect_profile?: Json
           prospect_id?: string | null
           psychological_state?: string | null
           subtext_analysis?: string | null
@@ -580,14 +470,11 @@ export type Database = {
           workspace_id?: string | null
         }
         Update: {
-          contact_status?: string
           created_at?: string
           id?: string
-          last_observed_at?: string | null
           name?: string
           past_advice?: Json | null
           persona_type?: string | null
-          prospect_profile?: Json
           prospect_id?: string | null
           psychological_state?: string | null
           subtext_analysis?: string | null
@@ -1174,62 +1061,6 @@ export type Database = {
           },
         ]
       }
-      workspace_proof_assets: {
-        Row: {
-          approved_for_ai: boolean
-          created_at: string
-          description: string | null
-          id: string
-          mime_type: string | null
-          result_date: string | null
-          result_type: string
-          result_value: string | null
-          storage_path: string | null
-          title: string
-          updated_at: string
-          user_id: string
-          workspace_id: string
-        }
-        Insert: {
-          approved_for_ai?: boolean
-          created_at?: string
-          description?: string | null
-          id?: string
-          mime_type?: string | null
-          result_date?: string | null
-          result_type?: string
-          result_value?: string | null
-          storage_path?: string | null
-          title: string
-          updated_at?: string
-          user_id: string
-          workspace_id: string
-        }
-        Update: {
-          approved_for_ai?: boolean
-          created_at?: string
-          description?: string | null
-          id?: string
-          mime_type?: string | null
-          result_date?: string | null
-          result_type?: string
-          result_value?: string | null
-          storage_path?: string | null
-          title?: string
-          updated_at?: string
-          user_id?: string
-          workspace_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "workspace_proof_assets_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "workspaces"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       workspaces: {
         Row: {
           approved_stories: Json
@@ -1355,17 +1186,6 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      bump_friend_audience_signal: {
-        Args: {
-          p_metric?: string
-          p_prospect_id?: string
-          p_signal_key: string
-          p_signal_type: string
-          p_user_id: string
-          p_workspace_id: string
-        }
-        Returns: undefined
-      }
       match_knowledge_chunks: {
         Args: {
           match_count?: number
@@ -1415,16 +1235,6 @@ export type Database = {
           when_not_to_use: string
           when_to_use: string
         }[]
-      }
-      record_friend_learning_signals: {
-        Args: {
-          p_metric?: string
-          p_profile: Json
-          p_prospect_id?: string
-          p_user_id: string
-          p_workspace_id: string
-        }
-        Returns: undefined
       }
     }
     Enums: {
