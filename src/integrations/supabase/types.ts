@@ -317,6 +317,110 @@ export type Database = {
           },
         ]
       }
+      friend_audience_signals: {
+        Row: {
+          created_at: string
+          first_seen_at: string
+          id: string
+          last_seen_at: string
+          loss_count: number
+          observation_count: number
+          positive_feedback_count: number
+          signal_key: string
+          signal_type: string
+          updated_at: string
+          user_id: string
+          win_count: number
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          loss_count?: number
+          observation_count?: number
+          positive_feedback_count?: number
+          signal_key: string
+          signal_type: string
+          updated_at?: string
+          user_id: string
+          win_count?: number
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          loss_count?: number
+          observation_count?: number
+          positive_feedback_count?: number
+          signal_key?: string
+          signal_type?: string
+          updated_at?: string
+          user_id?: string
+          win_count?: number
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "friend_audience_signals_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      friend_prospect_signals: {
+        Row: {
+          first_seen_at: string
+          id: string
+          last_seen_at: string
+          prospect_id: string
+          signal_key: string
+          signal_type: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          prospect_id: string
+          signal_key: string
+          signal_type: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          prospect_id?: string
+          signal_key?: string
+          signal_type?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "friend_prospect_signals_prospect_id_fkey"
+            columns: ["prospect_id"]
+            isOneToOne: false
+            referencedRelation: "prospects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "friend_prospect_signals_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       knowledge_base_items: {
         Row: {
           book_brief: Json | null
@@ -440,110 +544,6 @@ export type Database = {
           },
         ]
       }
-      friend_audience_signals: {
-        Row: {
-          created_at: string
-          first_seen_at: string
-          id: string
-          last_seen_at: string
-          loss_count: number
-          observation_count: number
-          positive_feedback_count: number
-          signal_key: string
-          signal_type: string
-          updated_at: string
-          user_id: string
-          win_count: number
-          workspace_id: string
-        }
-        Insert: {
-          created_at?: string
-          first_seen_at?: string
-          id?: string
-          last_seen_at?: string
-          loss_count?: number
-          observation_count?: number
-          positive_feedback_count?: number
-          signal_key: string
-          signal_type: string
-          updated_at?: string
-          user_id: string
-          win_count?: number
-          workspace_id: string
-        }
-        Update: {
-          created_at?: string
-          first_seen_at?: string
-          id?: string
-          last_seen_at?: string
-          loss_count?: number
-          observation_count?: number
-          positive_feedback_count?: number
-          signal_key?: string
-          signal_type?: string
-          updated_at?: string
-          user_id?: string
-          win_count?: number
-          workspace_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "friend_audience_signals_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "workspaces"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      friend_prospect_signals: {
-        Row: {
-          first_seen_at: string
-          id: string
-          last_seen_at: string
-          prospect_id: string
-          signal_key: string
-          signal_type: string
-          user_id: string
-          workspace_id: string
-        }
-        Insert: {
-          first_seen_at?: string
-          id?: string
-          last_seen_at?: string
-          prospect_id: string
-          signal_key: string
-          signal_type: string
-          user_id: string
-          workspace_id: string
-        }
-        Update: {
-          first_seen_at?: string
-          id?: string
-          last_seen_at?: string
-          prospect_id?: string
-          signal_key?: string
-          signal_type?: string
-          user_id?: string
-          workspace_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "friend_prospect_signals_prospect_id_fkey"
-            columns: ["prospect_id"]
-            isOneToOne: false
-            referencedRelation: "prospects"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "friend_prospect_signals_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "workspaces"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       lead_registry: {
         Row: {
           contact_status: string
@@ -553,8 +553,8 @@ export type Database = {
           name: string
           past_advice: Json | null
           persona_type: string | null
-          prospect_profile: Json
           prospect_id: string | null
+          prospect_profile: Json
           psychological_state: string | null
           subtext_analysis: string | null
           updated_at: string
@@ -570,8 +570,8 @@ export type Database = {
           name: string
           past_advice?: Json | null
           persona_type?: string | null
-          prospect_profile?: Json
           prospect_id?: string | null
+          prospect_profile?: Json
           psychological_state?: string | null
           subtext_analysis?: string | null
           updated_at?: string
@@ -587,8 +587,8 @@ export type Database = {
           name?: string
           past_advice?: Json | null
           persona_type?: string | null
-          prospect_profile?: Json
           prospect_id?: string | null
+          prospect_profile?: Json
           psychological_state?: string | null
           subtext_analysis?: string | null
           updated_at?: string
@@ -1167,62 +1167,6 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "workspace_training_data_workspace_id_fkey"
-            columns: ["workspace_id"]
-            isOneToOne: false
-            referencedRelation: "workspaces"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      workspace_proof_assets: {
-        Row: {
-          approved_for_ai: boolean
-          created_at: string
-          description: string | null
-          id: string
-          mime_type: string | null
-          result_date: string | null
-          result_type: string
-          result_value: string | null
-          storage_path: string | null
-          title: string
-          updated_at: string
-          user_id: string
-          workspace_id: string
-        }
-        Insert: {
-          approved_for_ai?: boolean
-          created_at?: string
-          description?: string | null
-          id?: string
-          mime_type?: string | null
-          result_date?: string | null
-          result_type?: string
-          result_value?: string | null
-          storage_path?: string | null
-          title: string
-          updated_at?: string
-          user_id: string
-          workspace_id: string
-        }
-        Update: {
-          approved_for_ai?: boolean
-          created_at?: string
-          description?: string | null
-          id?: string
-          mime_type?: string | null
-          result_date?: string | null
-          result_type?: string
-          result_value?: string | null
-          storage_path?: string | null
-          title?: string
-          updated_at?: string
-          user_id?: string
-          workspace_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "workspace_proof_assets_workspace_id_fkey"
             columns: ["workspace_id"]
             isOneToOne: false
             referencedRelation: "workspaces"
