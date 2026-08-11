@@ -172,7 +172,21 @@ export default function FriendWorkspaceSetup({ workspace, userId, onChanged }: P
     const { data, error } = await supabase.functions.invoke("analyze-profile", {
       body: { workspaceId: workspace.id, syncApproved: true },
     });
-    if (error || data?.error) throw new Error(data?.error || error?.message || "Could not sync approved persona");
+    if (error || data?.error) {
+      let detail = data?.error || "";
+      const response = error && typeof error === "object" && "context" in error
+        ? (error as { context?: Response }).context
+        : undefined;
+      if (!detail && response && typeof response.clone === "function") {
+        try {
+          const payload = await response.clone().json();
+          detail = payload?.error || payload?.message || "";
+        } catch {
+          // Keep the Supabase client message when the response is not JSON.
+        }
+      }
+      throw new Error(detail || error?.message || "Could not sync approved persona");
+    }
   };
 
   const currentCourses = () => normalizeFriendCourses([

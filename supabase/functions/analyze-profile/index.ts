@@ -103,12 +103,13 @@ async function syncApprovedFriendPersona(supabase: any, userId: string, workspac
   ].filter(Boolean).join("\n");
 
   const embedding = await generateEmbedding(personaSummary, supabase, userId);
-  await supabase.from("sales_brain").delete()
-    .eq("user_id", userId)
-    .eq("workspace_id", workspace.id)
-    .eq("source_type", "workspace_persona");
+  if (!embedding) {
+    throw new Error("Could not create the 768-dimension Friend persona search embedding");
+  }
 
-  const { error } = await supabase.from("sales_brain").insert({
+  // Insert the replacement first. A provider or schema failure must not erase
+  // the last working persona index before the replacement is safely stored.
+  const { data: inserted, error } = await supabase.from("sales_brain").insert({
     user_id: userId,
     workspace_id: workspace.id,
     principle_name: `Approved Friend Persona: ${persona.display_name || workspace.name}`,
@@ -128,8 +129,17 @@ async function syncApprovedFriendPersona(supabase: any, userId: string, workspac
       approved_at: workspace.friend_persona_approved_at,
     },
     embedding,
-  });
-  if (error) throw error;
+  }).select("id").single();
+  if (error) throw new Error(`Could not store Friend persona search index: ${error.message}`);
+
+  const { error: cleanupError } = await supabase.from("sales_brain").delete()
+    .eq("user_id", userId)
+    .eq("workspace_id", workspace.id)
+    .eq("source_type", "workspace_persona")
+    .neq("id", inserted.id);
+  if (cleanupError) {
+    console.warn("Friend persona index was refreshed, but older versions could not be removed:", cleanupError);
+  }
   return { approvedProofCount: (proofAssets || []).length };
 }
 
@@ -464,8 +474,13 @@ Workspace Type: ${workspace.workspace_type || "friend"}`;
     });
   } catch (error) {
     console.error("analyze-profile error:", error);
+    const message = error instanceof Error
+      ? error.message
+      : error && typeof error === "object" && "message" in error
+        ? String((error as { message?: unknown }).message || "Unknown error")
+        : String(error || "Unknown error");
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({ error: message }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

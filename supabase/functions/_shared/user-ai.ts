@@ -11,6 +11,7 @@
 // feature" error (e.g. vision-only flows).
 
 import { decryptStoredApiKey } from "./api-key-utils.ts";
+import { coerceEmbeddingDimensions } from "./embedding-vector.ts";
 import { toAnthropicContent } from "./anthropic-content.ts";
 
 export type UserAiProvider = "openai" | "gemini" | "anthropic" | "lovable";
@@ -306,7 +307,10 @@ export async function userEmbed(target: UserEmbedTarget, text: string): Promise<
   if (truncated.length < 1) return null;
   try {
     const body: any = { model: target.model, input: truncated };
-    if (target.provider === "openai") body.dimensions = target.dimensions;
+    // The Lovable gateway's Gemini embedding model defaults to 3,072 values,
+    // while this app's pgvector columns are vector(768). Both the gateway and
+    // Gemini's OpenAI-compatible API accept the dimensions parameter.
+    body.dimensions = target.dimensions;
     const res = await fetch(target.url, {
       method: "POST",
       headers: target.headers,
@@ -318,7 +322,7 @@ export async function userEmbed(target: UserEmbedTarget, text: string): Promise<
       return null;
     }
     const data = await res.json();
-    return data.data?.[0]?.embedding || null;
+    return coerceEmbeddingDimensions(data.data?.[0]?.embedding, target.dimensions);
   } catch (e) {
     console.error("[user-ai] embed threw:", e);
     return null;

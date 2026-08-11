@@ -14,6 +14,7 @@
 //   reasoning → hardest selection/strategy steps
 
 import { getLatestUserApiKey } from "./api-key-utils.ts";
+import { coerceEmbeddingDimensions, SEARCH_EMBEDDING_DIMENSIONS } from "./embedding-vector.ts";
 
 export type ModelTier = "fast" | "balanced" | "reasoning";
 
@@ -251,7 +252,7 @@ export async function aiEmbed(provider: AiProvider, text: string): Promise<numbe
       return null;
     }
     const data = await res.json();
-    return data.data?.[0]?.embedding || null;
+    return coerceEmbeddingDimensions(data.data?.[0]?.embedding, SEARCH_EMBEDDING_DIMENSIONS);
   } catch (e) {
     console.error("[ai-provider] embed threw:", e);
     return null;
