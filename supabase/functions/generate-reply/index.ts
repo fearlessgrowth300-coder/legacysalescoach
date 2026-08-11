@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
-import { buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
+import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 
 
 const corsHeaders = {
@@ -387,7 +387,10 @@ serve(async (req) => {
     const chunksCap = Math.min(Math.max(35, kbCount * 8), 150);
 
     // Workspace-first retrieval
-    const wsFirst = (wsConvoChunks || []).slice(0, 25);
+    const wsFirstCandidates = activeThreadType === "friend"
+      ? (wsConvoChunks || []).filter((chunk: any) => chunk.source_type === "training_conversation")
+      : (wsConvoChunks || []);
+    const wsFirst = wsFirstCandidates.slice(0, 25);
     const remaining = Math.max(chunksCap - wsFirst.length, 15);
     const topChunks = [...wsFirst, ...sourceBalancedTake(scoredChunks, 3, remaining)].slice(0, chunksCap);
     const topPrinciples = sourceBalancedTake(scoredPrinciples, 2, principlesCap);
@@ -499,7 +502,7 @@ serve(async (req) => {
 
     const analysisPrompt = `You are a sales conversation intelligence engine with an OBJECTION RADAR and multi-framework analyzer. Analyze and return JSON ONLY.
 
-Return the existing sales fields plus these REQUIRED structured learning fields: "segment" (beginner|first_sale_stuck|mentor_no_results|independent|tried_before|already_successful|not_ready|other), "experience_level", "sales_status", "mentor_status", "current_strategy", "interests" (array), "desires" (array), "pain_points" (array), "objections" (array), "motivation", "readiness" (not_ready|exploring|problem_aware|wants_help|accepted_referral), "contact_status" (active|not_now|do_not_contact|not_a_fit), "next_best_action", "learning_confidence" (0-100), and "evidence" (short array of conversation facts supporting the profile).
+Return the existing sales fields plus these REQUIRED structured learning fields: "segment" (beginner|first_sale_stuck|mentor_no_results|independent|tried_before|already_successful|not_ready|other), "experience_level", "sales_status", "mentor_status", "current_strategy", "interests" (array), "desires" (array), "pain_points" (array), "objections" (array), "motivation", "intent" (what they are trying to protect, prove, avoid or achieve), "tangible_goal" (the concrete result they want), "problem_gap" (distance between current and desired state), "doubt_cause" (why they hesitate), "certainty_gap" (what must become logically clear), "reply_act" (relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop), "question_needed" (boolean), "knowledge_need" (the exact principle or evidence needed, or "none"), "readiness" (not_ready|exploring|problem_aware|wants_help|accepted_referral), "contact_status" (active|not_now|do_not_contact|not_a_fit), "next_best_action", "learning_confidence" (0-100), and "evidence" (short array of conversation facts supporting the profile).
 
 Existing sales fields: { "warmth_score": <0-100>, "stage": <"friend"|"warming"|"referral">, "prospect_psychology": <string — what they REALLY mean>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <"empathy_mirror"|"story_drop"|"curiosity_gap"|"referral"|"re_engage"|"spin_situation"|"spin_problem"|"spin_implication"|"spin_need_payoff"|"five_whys"|"pain_dream_gap"|"micro_commitment"|"objection_navigate"|"respect_boundary">, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <"TIME"|"MONEY"|"TRUST"|"CERTAINTY"|"PRIORITY"|"FEAR"|"TIMING"|"NEED_MORE_CLARITY"|null>, "objection_response_type": <"CLARIFY"|"REASSURE"|"REFRAME"|"DEEPEN"|"ISOLATE"|"HAND_OFF"|"RESPECT_NO"|null>, "spin_stage": <"situation"|"problem"|"implication"|"need_payoff">, "offer_fit": <"high"|"uncertain"|"low">, "referral_readiness": <"not_ready"|"ask_permission"|"ready_for_handoff">, "next_objective": <single concrete objective for the next message>, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
 
@@ -508,6 +511,7 @@ SPIN DETECTION: <4 exchanges="situation", personal but no pain="problem", pain n
 STAGE RULES: "friend" 0-35, "warming" 36-64, "referral" 65+ AND (pain_expressed=true OR the prospect explicitly asks for help, price, details, a link, a call, or how the user achieved the result).
 REFERRAL READINESS: not_ready until a relevant problem/desire is clear; ask_permission when fit looks plausible and the prospect wants help; ready_for_handoff only after permission or an explicit request for the expert/link. Never use warmth alone as proof of fit.
 LEARNING: Build structured fields only from explicit evidence. "Made one sale", "working with a mentor", "tried before", and "doing it alone" are different states. Preserve useful known facts from CURRENT PROSPECT MEMORY unless newer evidence corrects them.
+REPLY ACT: Choose what a real peer should do next. A question is optional. Prefer relating, sharing an approved experience, answering, observing or validating when discovery is not needed. Set question_needed=true only when one answer is necessary to understand the person or advance the conversation naturally.
 BOUNDARIES: "Don't contact me", "leave me alone", or an equivalent explicit refusal means contact_status=do_not_contact, recommended_move=respect_boundary, referral_readiness=not_ready, and next_best_action=respectfully stop. "Not now" means contact_status=not_now. Never treat a boundary as an objection to overcome.
 WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.
 VISUAL EVIDENCE: When a screenshot is supplied, use visible speaker alignment, reactions, quoted replies, timestamps, read/seen/delivered status, unanswered-message state, and attachments. If OCR conflicts with the image, trust the image and mention the conflict in signals_detected. Treat salesperson notes as context, never as the prospect's words.`;
@@ -568,7 +572,7 @@ ${conversationHistory}`;
       const match = analysisRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
       analysisJson = JSON.parse((match ? match[1] : analysisRaw).trim());
     } catch {
-      analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything", segment: "other", experience_level: "unknown", sales_status: "unknown", mentor_status: "unknown", current_strategy: "unknown", interests: [], desires: [], pain_points: [], objections: [], motivation: "unknown", readiness: "not_ready", contact_status: "active", next_best_action: "continue discovery", learning_confidence: 0, evidence: [] };
+      analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything", segment: "other", experience_level: "unknown", sales_status: "unknown", mentor_status: "unknown", current_strategy: "unknown", interests: [], desires: [], pain_points: [], objections: [], motivation: "unknown", intent: "unknown", tangible_goal: "unknown", problem_gap: "unknown", doubt_cause: "unknown", certainty_gap: "unknown", reply_act: "respond naturally", question_needed: false, knowledge_need: "none", readiness: "not_ready", contact_status: "active", next_best_action: "continue discovery", learning_confidence: 0, evidence: [] };
     }
 
     // Conversation stages are progressive. A short reply later in a warm
@@ -587,6 +591,77 @@ ${conversationHistory}`;
       analysisJson.referral_readiness = "not_ready";
     } else if (existingStageRank >= 3 && analyzedStageRank < 3) analysisJson.stage = "referral";
     else if (existingStageRank >= 1 && analyzedStageRank < 1) analysisJson.stage = "warming";
+
+    // ===== FRIEND PASS 2: DECISION-AWARE KNOWLEDGE RETRIEVAL =====
+    // The first retrieval gives the analyzer broad context. After the analyzer
+    // identifies intent, experience, desired result, gap, doubt, certainty and
+    // the appropriate peer act, search again using that decision state.
+    let replyTopPrinciples = topPrinciples;
+    let replyTopChunks = topChunks;
+    let replyPrinciplesText = principlesText;
+    let replyChunksText = chunksText;
+    let appliedRetrievalQuery = brainQuery;
+    if (activeThreadType === "friend") {
+      const decisionQuery = buildFriendDecisionSearchQuery(analysisJson, message, existingFriendProfile);
+      appliedRetrievalQuery = decisionQuery;
+      const decisionEmbedding = await generateEmbedding(decisionQuery, supabase, user.id);
+      if (decisionEmbedding) {
+        const embStr = JSON.stringify(decisionEmbedding);
+        const [decisionP, decisionC] = await Promise.all([
+          supabase.rpc("match_sales_brain", { query_embedding: embStr, match_count: 120, match_threshold: 0.14, p_user_id: user.id }),
+          supabase.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 100, match_threshold: 0.14, p_user_id: user.id }),
+        ]);
+        const decisionSemanticPrinciples = (decisionP.data || [])
+          .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type) && (
+            (!p.source_id && (!p.brain_type || p.brain_type === "both" || p.brain_type === activeThreadType)) ||
+            (p.source_id && (!kbModeMap[p.source_id] || kbModeMap[p.source_id] === "both" || kbModeMap[p.source_id] === activeThreadType))
+          ))
+          .map((p: any) => ({ ...p, _decisionSemantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+        const decisionSemanticChunks = (decisionC.data || [])
+          .filter((c: any) => ALLOWED_SOURCE_TYPES.includes(c.source_type) && (!c.brain_type || c.brain_type === "both" || c.brain_type === activeThreadType))
+          .map((c: any) => ({ ...c, _decisionSemantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+        const decisionTerms = extractMeaningfulTerms(decisionQuery, 64);
+        const scoreForDecision = (text: string, semantic: number) => {
+          const lower = (text || "").toLowerCase();
+          let score = semantic * 10;
+          for (const term of decisionTerms) if (lower.includes(term)) score += 6;
+          return score;
+        };
+        const decisionPrinciples = deduplicatePrinciples(
+          mergeByIdPriority(decisionSemanticPrinciples, mergedPrinciples),
+          "relevance_score",
+        ).map((p: any) => ({
+          ...p,
+          matchScore: scoreForDecision(
+            `${p.principle_name || ""} ${p.what_i_learned || ""} ${p.how_to_apply || ""} ${p.when_to_use || ""} ${p.the_deep_why || ""}`,
+            p._decisionSemantic ? (p.relevance_score || 0) / 100 : 0,
+          ),
+        })).sort((a: any, b: any) => b.matchScore - a.matchScore);
+        const decisionChunks = deduplicateChunks(
+          mergeByIdPriority(decisionSemanticChunks, mergedChunks),
+          "relevance_score",
+        ).map((c: any) => ({
+          ...c,
+          matchScore: scoreForDecision(`${c.content || ""} ${c.trigger_phrases || ""}`, c._decisionSemantic ? (c.relevance_score || 0) / 100 : 0),
+        })).sort((a: any, b: any) => b.matchScore - a.matchScore);
+
+        replyTopPrinciples = sourceBalancedTake(decisionPrinciples, 2, 32);
+        replyTopChunks = sourceBalancedTake(decisionChunks, 3, 28);
+        replyPrinciplesText = replyTopPrinciples.length
+          ? replyTopPrinciples.map((p: any) => {
+              const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : p.source_name;
+              return `â€¢ [${p.principle_name}] (Source: ${src}): ${p.what_i_learned}\n  Apply: ${p.how_to_apply}`;
+            }).join("\n")
+          : "No principle is required. Respond naturally from the current conversation and approved Friend identity.";
+        replyChunksText = replyTopChunks.length
+          ? replyTopChunks.map((c: any) => {
+              const sourceTitle = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : c.source_type;
+              const src = `${sourceTitle}${c.locator ? `, ${c.locator}` : ""}${c.chunk_kind === "source_passage" ? ", original source passage" : ""}`;
+              return `â€¢ (Source: ${src}) [${c.category || "general"}]: ${(c.content || "").substring(0, 700)}`;
+            }).join("\n")
+          : "No knowledge passage is necessary for this reply.";
+      }
+    }
 
     // ===== STEP 2: GENERATE STAGE-AWARE REPLIES WITH MULTI-FRAMEWORK =====
     const styleFingerprint = buildStyleFingerprint(workspace?.style_vector);
@@ -608,7 +683,8 @@ ${conversationHistory}`;
     let feedbackContext = "";
     if (positiveFeedback && positiveFeedback.length > 0) {
       feedbackContext = "\n\nUSER-APPROVED PATTERNS (matched thumbs up — mimic these):\n" +
-        positiveFeedback.slice(0, 5).map((f: any) => `- "${(f.suggestion_text || "").substring(0, 200)}"`).join("\n");
+        positiveFeedback.slice(0, 5).map((f: any) => `- "${(f.suggestion_text || "").substring(0, 200)}"`).join("\n")
+        + "\nLearn only the tone and conversational structure. Never copy a name, result, family detail, objection or personal fact into this prospect's reply.";
     }
 
     // Lead registry context
@@ -630,13 +706,14 @@ ${conversationHistory}`;
       ? `\n\nOBJECTION DETECTED: "${analysisJson.objection_detected}"
 BUCKET: ${analysisJson.objection_bucket}
 RESPONSE TYPE: ${analysisJson.objection_response_type}
-PRIMARY variant MUST use ${analysisJson.objection_response_type} technique for this objection.
-ALTERNATIVE variant should use a DIFFERENT response type.
+${activeThreadType === "friend"
+  ? "Acknowledge it naturally. Do not force three techniques or treat a boundary as resistance."
+  : `PRIMARY variant MUST use ${analysisJson.objection_response_type} technique. ALTERNATIVE may use a different relevant response type.`}
 NEVER argue with the objection. ALWAYS acknowledge first.`
       : "";
 
     const spinInstruction = `\nSPIN STAGE: ${analysisJson.spin_stage || "situation"}
-Based on this stage, the primary variant should include a ${analysisJson.spin_stage === "situation" ? "SITUATION" : analysisJson.spin_stage === "problem" ? "PROBLEM" : analysisJson.spin_stage === "implication" ? "IMPLICATION" : "NEED-PAYOFF"} question.`;
+Use SPIN only as a silent diagnostic. question_needed=${Boolean(analysisJson.question_needed)}. Do not ask a SPIN question unless one answer is genuinely needed for the chosen reply_act.`;
 
     const modeInstruction = activeThreadType === "expert"
       ? `MODE: EXPERT. Respond as the trusted expert/consultant. Diagnose precisely, give useful clarity, handle the objection directly, and recommend the clearest next step. Do not pretend to be a peer who personally lived every detail.`
@@ -651,20 +728,24 @@ ${modeInstruction}
 Generate exactly 3 reply variants as JSON. Each must sound EXACTLY like the person in WORKSPACE_PROFILE and STYLE_FINGERPRINT. Never sound like AI.
 
 FRAMEWORK SELECTION:
-- Use one primary framework that best fits the buyer stage and objection.
+- Use one primary framework only when it helps the chosen reply_act.
 - Add a second technique only when it materially improves the reply.
 - Never stack frameworks merely to sound sophisticated.
-- One message has one objective and at most one question.
+- A natural peer response may use no formal framework. One message has one objective and at most one optional question.
 
-STAGE RULES:
-IF stage = "friend": Pure human connection. Use SPIN Situation/Problem questions. Apply StoryBrand (they are the hero). Reference brain principles as YOUR lived experience. End with a question that deepens rapport.
-IF stage = "warming":
-  MOVE = empathy_mirror: Reflect pain + SPIN Implication question. Apply PAS framework.
-  MOVE = story_drop: Before/After/Bridge from YOUR journey. End with 5 Why's question.
-  MOVE = curiosity_gap: Identity-Based selling + one teaser. Micro-commitment question.
-  MOVE = spin_implication: Amplify pain using Implication questions + PAS agitation.
-  MOVE = objection_navigate: Use the 5-step objection process (Acknowledge→Clarify→Isolate→Answer→Confirm)
-IF stage = "referral": Mirror pain (Voss tactical empathy) + Before/After/Bridge + soft Need-Payoff question + referral handoff.
+REPLY-ACT RULES:
+- relate: recognize the specific experience and create common ground.
+- share_story: share one short approved lived detail because it genuinely helps, not to manufacture authority.
+- validate: let the prospect feel understood without immediately probing.
+- answer: answer what they asked directly before adding anything.
+- observe: name a useful pattern or gap in plain peer language.
+- probe: ask one natural question only because the missing answer matters.
+- reframe: offer one gentle perspective that protects their autonomy and dignity.
+- transition: connect the discussion to what helped, without pitching.
+- ask_permission: ask whether they want to hear what helped.
+- refer: make the approved expert handoff only after permission or an explicit request.
+- stop: acknowledge and end without a question.
+Do not turn relate, share_story, validate, answer, observe or reframe into a question merely to keep the conversation moving.
 ${objectionInstruction}
 ${spinInstruction}
 
@@ -707,18 +788,20 @@ If a draft sounds like ChatGPT wrote it, rewrite it before returning.
 
 
 VARIANT RULES:
-- Variant 1 (primary): Uses recommended_move + strongest framework combination
-- Variant 2 (alternative): Same stage, DIFFERENT framework angle, DIFFERENT discovery question
-- Variant 3 (casual): Shortest, most natural, single powerful question + one framework technique
+- All variants perform the SAME reply_act and next objective selected by the analysis.
+- Variant 1 (primary): Best natural peer wording, using one retrieved principle only if useful.
+- Variant 2 (alternative): Different human wording or relatable angle, not a forced discovery question.
+- Variant 3 (casual): Shortest natural version. It may contain no question and no framework.
 
-MANDATORY CITATION: Every variant MUST cite the EXACT principle from SALES_BRAIN_PRINCIPLES that it leans on, plus its source. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES — never invent.
+KNOWLEDGE GROUNDING: When a variant uses a retrieved principle, cite its exact principle and source in metadata. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES; never invent.
+- When knowledge_need="none" or a simple human response is best, set cited_principle_name and cited_source_name to null. Do not force a framework into the visible message.
 - Prefer the most relevant source for each variant. Diversity is secondary to relevance and truth.
 - Do NOT keep defaulting to OBJECTION CRUSHER or Go Pro. Pick the principle whose actual lesson best matches the latest prospect message and buyer psychology.
 - In why_this_works, state the principle's actual lesson and how you applied it. Never only say "from Source A combined with Source B".
 - Final check before returning JSON: every cited source must genuinely support the message and every personal or offer claim must exist in WORKSPACE_PROFILE.
 
 Return JSON only:
-{ "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "...", "principle_applied": "...", "cited_principle_name": "<exact principle_name from SALES_BRAIN_PRINCIPLES>", "cited_source_name": "<exact Source from SALES_BRAIN_PRINCIPLES>", "why_this_works": "References technique from your Brain: [Principle Name] — [Why it applies]. Frameworks used: [list]", "warmth_prediction": <number>, "frameworks_used": ["SPIN-Implication", "PAS", "Voss-Mirroring"] }] }${styleModifierInstruction}`;
+{ "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "<reply_act>", "principle_applied": "<principle or natural peer response>", "cited_principle_name": "<exact retrieved principle or null>", "cited_source_name": "<exact retrieved source or null>", "why_this_works": "Why this peer act fits the exact message; mention the retrieved principle only if one was used", "warmth_prediction": <number>, "frameworks_used": [] }] }${styleModifierInstruction}`;
 
     const replyUserPrompt = `WORKSPACE_PROFILE:
 ${workspaceProfile}
@@ -742,10 +825,13 @@ LATEST PROSPECT MESSAGE:
 ${message}
 
 SALES_BRAIN_PRINCIPLES:
-${principlesText.substring(0, 6500)}
+${replyPrinciplesText.substring(0, 6500)}
 
 RELEVANT_KNOWLEDGE_CHUNKS:
-${chunksText.substring(0, 6500)}
+${replyChunksText.substring(0, 6500)}
+
+DECISION_AWARE_RETRIEVAL_QUERY:
+${appliedRetrievalQuery.substring(0, 3600)}
 
 WORKSPACE_LEARNED_INSIGHTS:
 ${learnedInsightsText.substring(0, 2500)}
@@ -920,8 +1006,8 @@ ${winningPatternsText.substring(0, 2000)}`;
     }));
 
     const sourceTypes = new Set<string>();
-    topChunks.forEach((c: any) => sourceTypes.add(c.source_type || "unknown"));
-    topPrinciples.forEach((p: any) => sourceTypes.add(p.source_type || "unknown"));
+    replyTopChunks.forEach((c: any) => sourceTypes.add(c.source_type || "unknown"));
+    replyTopPrinciples.forEach((p: any) => sourceTypes.add(p.source_type || "unknown"));
 
     return new Response(JSON.stringify({
       suggestions,
@@ -931,10 +1017,11 @@ ${winningPatternsText.substring(0, 2000)}`;
       prospectLearning: structuredFriendProfile,
       learningResult,
       brainRetrieval: {
-        chunksRetrieved: topChunks.length,
-        uniqueSources: new Set([...topChunks.map((c: any) => c.source_id)].filter(Boolean)).size,
+        chunksRetrieved: replyTopChunks.length,
+        uniqueSources: new Set([...replyTopChunks.map((c: any) => c.source_id)].filter(Boolean)).size,
         sources: Array.from(sourceTypes),
         insightsRetrieved: brainInsights?.length || 0,
+        retrievalPhase: activeThreadType === "friend" ? "analysis_then_decision_search" : "message_search",
       },
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 

@@ -11,6 +11,14 @@ export type FriendProspectProfile = {
   pain_points: string[];
   objections: string[];
   motivation: string;
+  intent: string;
+  tangible_goal: string;
+  problem_gap: string;
+  doubt_cause: string;
+  certainty_gap: string;
+  reply_act: string;
+  question_needed: boolean;
+  knowledge_need: string;
   readiness: string;
   contact_status: FriendContactStatus;
   next_best_action: string;
@@ -30,6 +38,11 @@ function cleanText(value: unknown, fallback = "unknown", maxLength = 500): strin
   if (typeof value !== "string") return fallback;
   const cleaned = value.replace(/\s+/g, " ").trim();
   return cleaned ? cleaned.slice(0, maxLength) : fallback;
+}
+
+function informativeText(value: unknown, maxLength = 500): string {
+  const cleaned = cleanText(value, "", maxLength);
+  return /^(unknown|none|not inferred|not provided|n\/a)$/i.test(cleaned) ? "" : cleaned;
 }
 
 function cleanList(value: unknown, maxItems = 12): string[] {
@@ -66,8 +79,8 @@ export function buildFriendProspectProfile(
   const next = analysis || {};
   const prior = previous || {};
   const choose = (key: string, fallback = "unknown", maxLength = 500) => {
-    const current = cleanText(next[key], "", maxLength);
-    return current || cleanText(prior[key], fallback, maxLength);
+    const current = informativeText(next[key], maxLength);
+    return current || informativeText(prior[key], maxLength) || fallback;
   };
   const confidenceValue = Number(next.learning_confidence ?? next.confidence ?? prior.confidence ?? 0);
 
@@ -82,6 +95,14 @@ export function buildFriendProspectProfile(
     pain_points: mergeLists(prior.pain_points, next.pain_points),
     objections: mergeLists(prior.objections, next.objections ?? (next.objection_detected ? [next.objection_detected] : [])),
     motivation: choose("motivation", "unknown", 300),
+    intent: choose("intent", "unknown", 300),
+    tangible_goal: choose("tangible_goal", "unknown", 300),
+    problem_gap: choose("problem_gap", "unknown", 400),
+    doubt_cause: choose("doubt_cause", "unknown", 300),
+    certainty_gap: choose("certainty_gap", "unknown", 300),
+    reply_act: choose("reply_act", "respond naturally", 100),
+    question_needed: typeof next.question_needed === "boolean" ? next.question_needed : Boolean(prior.question_needed),
+    knowledge_need: choose("knowledge_need", "none", 300),
     readiness: choose("readiness", cleanText(next.referral_readiness ?? prior.readiness, "not_ready", 100), 100),
     contact_status: contactStatus(next.contact_status, prior.contact_status),
     next_best_action: choose("next_best_action", cleanText(next.next_objective ?? prior.next_best_action, "continue discovery", 300), 300),
@@ -107,6 +128,14 @@ export function buildFriendLearningContext(
     `Pain points: ${cleanList(p.pain_points).join(", ") || "unknown"}`,
     `Objections: ${cleanList(p.objections).join(", ") || "none observed"}`,
     `Motivation: ${cleanText(p.motivation)}`,
+    `Intent: ${cleanText(p.intent)}`,
+    `Tangible goal: ${cleanText(p.tangible_goal)}`,
+    `Problem/gap: ${cleanText(p.problem_gap)}`,
+    `Doubt cause: ${cleanText(p.doubt_cause)}`,
+    `Certainty gap: ${cleanText(p.certainty_gap)}`,
+    `Recommended reply act: ${cleanText(p.reply_act, "respond naturally")}`,
+    `Question needed: ${Boolean(p.question_needed)}`,
+    `Knowledge need: ${cleanText(p.knowledge_need, "none")}`,
     `Readiness: ${cleanText(p.readiness, "not_ready")}`,
     `Contact boundary: ${contactStatus(p.contact_status, "active")}`,
     `Next best action: ${cleanText(p.next_best_action, "continue discovery")}`,
@@ -136,4 +165,36 @@ export function buildFriendLearningContext(
 
 export function isFriendConversation(threadType: unknown): boolean {
   return threadType !== "expert";
+}
+
+export function buildFriendDecisionSearchQuery(
+  analysis: Record<string, unknown> | null | undefined,
+  latestMessage: string,
+  previousProfile: Record<string, unknown> | null | undefined = {},
+  maxLength = 3600,
+): string {
+  const current = analysis || {};
+  const previous = previousProfile || {};
+  const list = (key: string) => mergeLists(previous[key], current[key], 8).join(", ") || "unknown";
+  const value = (key: string, fallback = "unknown") =>
+    informativeText(current[key], 420) || informativeText(previous[key], 420) || fallback;
+  const query = [
+    `Latest prospect message: ${cleanText(latestMessage, "none", 900)}`,
+    `Intent: ${value("intent")}`,
+    `Tangible desired result: ${value("tangible_goal", value("motivation"))}`,
+    `Experience level: ${value("experience_level")}`,
+    `Sales status: ${value("sales_status")}`,
+    `Mentor or support status: ${value("mentor_status")}`,
+    `Current strategy: ${value("current_strategy")}`,
+    `Problem and gap: ${value("problem_gap", list("pain_points"))}`,
+    `Doubt cause: ${value("doubt_cause")}`,
+    `Missing logical certainty: ${value("certainty_gap")}`,
+    `Objections: ${list("objections")}`,
+    `Readiness: ${value("readiness", value("referral_readiness", "not_ready"))}`,
+    `Conversation stage: ${value("stage", value("questioningPattern", "unknown"))}`,
+    `Best conversational act: ${value("reply_act", value("recommended_move", "respond naturally"))}`,
+    `Knowledge needed: ${value("knowledge_need", "none or one relevant principle")}`,
+    `Contact boundary: ${value("contact_status", "active")}`,
+  ].join("\n");
+  return query.length <= maxLength ? query : query.slice(0, maxLength);
 }

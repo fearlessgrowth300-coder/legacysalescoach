@@ -5,7 +5,7 @@ import { OBJECTION_HANDLERS, OBJECTION_DETECTION_PROMPT } from "./objection-hand
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
-import { buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
+import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 
 
 function getCorsHeaders(req: Request) {
@@ -74,7 +74,7 @@ function buildFrameworkConstraints(parsedFramework: any): string {
   if (!parsedFramework) return "";
 
   const sections: string[] = [];
-  sections.push("\n===== FRAMEWORK CONSTRAINT ENGINE (ENFORCED ON EVERY REPLY) =====");
+  sections.push("\n===== FRAMEWORK STRATEGY ENGINE (ADAPT TO THE CURRENT REPLY ACT) =====");
 
   if (parsedFramework.voice_style) {
     sections.push(`VOICE STYLE: ${parsedFramework.voice_style}`);
@@ -87,8 +87,8 @@ function buildFrameworkConstraints(parsedFramework: any): string {
     parsedFramework.never_rules.forEach((r: string) => sections.push(`  ✗ NEVER: ${r}`));
   }
   if (parsedFramework.always_rules?.length) {
-    sections.push(`\n✅ ALWAYS RULES (MUST BE PRESENT IN EVERY REPLY):`);
-    parsedFramework.always_rules.forEach((r: string) => sections.push(`  ✓ ALWAYS: ${r}`));
+    sections.push(`\n✅ ALWAYS RULES (apply when relevant; never force a question or story):`);
+    parsedFramework.always_rules.forEach((r: string) => sections.push(`  ✓ GUIDE: ${r}`));
   }
   if (parsedFramework.forbidden_behaviors?.length) {
     sections.push(`\n🚫 FORBIDDEN BEHAVIORS:`);
@@ -99,7 +99,7 @@ function buildFrameworkConstraints(parsedFramework: any): string {
     parsedFramework.mandatory_behaviors.forEach((b: string) => sections.push(`  ✓ ${b}`));
   }
   if (parsedFramework.step_flow?.length) {
-    sections.push(`\nEMOTIONAL FLOW SEQUENCE (follow in order):`);
+    sections.push(`\nEMOTIONAL FLOW MAP (locate the current moment; do not march through steps):`);
     parsedFramework.step_flow.forEach((s: any) => {
       sections.push(`  Step ${s.step}: ${s.name} — ${s.description}${s.triggers ? ` (Trigger: ${s.triggers})` : ""}`);
     });
@@ -139,7 +139,7 @@ function buildFrameworkConstraints(parsedFramework: any): string {
   }
 
   sections.push("\n===== END FRAMEWORK CONSTRAINTS =====");
-  sections.push("\nCRITICAL: Before outputting any reply, verify it passes ALL constraints above. If a reply violates a NEVER rule or misses an ALWAYS rule, regenerate it.");
+  sections.push("\nCRITICAL: Enforce NEVER rules and approved truth. Apply other guidance only when it fits the analyzed reply_act; never add a question, story, CTA or framework just to satisfy a template.");
 
   return sections.join("\n");
 }
@@ -257,14 +257,14 @@ Represent only the real, approved identity and experiences in this workspace. Si
 
   const brainGroundingInstructions = brainChunks ? `
 
-===== BRAIN-GROUNDED KNOWLEDGE (MANDATORY in every reply) =====
+===== BRAIN-GROUNDED KNOWLEDGE (SILENT DECISION SUPPORT) =====
 RETRIEVAL PRIORITY ORDER FOR FRIEND MODE:
 1) 🎯 TRAINING CONVERSATION EXAMPLES — Your voice, your style, your exact patterns (HIGHEST PRIORITY)
 2) Workspace custom framework + style fingerprint
 3) Workspace-specific conversation chunks
 4) Core sales principles/chunks from uploaded videos & PDFs
 
-You have retrieved the following knowledge. You MUST use it:
+You have retrieved the following knowledge. Use only what helps the analyzed reply_act:
 
 ${brainChunks}
 
@@ -274,6 +274,7 @@ HOW TO USE BRAIN KNOWLEDGE IN FRIEND MODE:
 - Otherwise ask a grounded question or share it as a general observation without pretending it happened to you.
 - Add another principle only when it materially improves the next move.
 - The reply should feel natural, not like a textbook or a stack of sales techniques.
+- It is valid to use no principle when a simple peer reaction, answer or approved shared experience is the best response.
 
 ABSOLUTE RULES:
 - Use only knowledge relevant to this exact buyer moment.
@@ -285,8 +286,7 @@ ABSOLUTE RULES:
 ` : `
 
 ===== NO BRAIN KNOWLEDGE AVAILABLE =====
-CRITICAL: If no relevant brain knowledge exists for the reply needed, your reply text MUST be exactly: "0"
-"0" means the brain hasn't learned anything relevant yet. Do NOT make up answers.
+Respond naturally from the current conversation and approved Friend identity. Do not invent knowledge, proof or experience merely because no relevant principle was retrieved.
 `;
 
   // ===== CUSTOM FRAMEWORK (PRIMARY RULE) — use parsed structured version if available =====
@@ -294,21 +294,21 @@ CRITICAL: If no relevant brain knowledge exists for the reply needed, your reply
   if (parsedFramework && Object.keys(parsedFramework).length > 0) {
     frameworkSection = `
 ===== PRIMARY RULE: STRUCTURED CONVERSATION FRAMEWORK (MUST FOLLOW) =====
-This framework has been parsed into enforceable rules. Every reply MUST comply.
+This framework is a strategic guide. Its truth, voice and safety limits must be followed, but its questions and stages are not a fixed script.
 ${buildFrameworkConstraints(parsedFramework)}
 `;
     if (customFramework.trim()) {
       frameworkSection += `\nORIGINAL FRAMEWORK TEXT (for additional context):\n${customFramework.substring(0, 3000)}\n`;
     }
-    frameworkSection += `CRITICAL: This structured framework overrides ALL default conversation patterns. Follow every rule. Only supplement with core brain principles where the framework doesn't explicitly cover a scenario.\n===== END CUSTOM FRAMEWORK =====\n`;
+    frameworkSection += `CRITICAL: Preserve its approved facts and boundaries. Let the current conversation and reply_act decide whether to relate, share, answer, observe, probe or transition.\n===== END CUSTOM FRAMEWORK =====\n`;
   } else if (customFramework.trim()) {
     frameworkSection = `
 ===== PRIMARY RULE: CUSTOM CONVERSATION FRAMEWORK (MUST FOLLOW) =====
-The user has provided their own conversation framework for this workspace. This is YOUR PRIMARY GUIDE. Follow it EXACTLY before applying any other principles.
+The user has provided their own conversation framework for this workspace. Use it as the primary strategic guide, not as a fixed interrogation script.
 
 ${customFramework}
 
-CRITICAL: This custom framework overrides ALL default conversation patterns. Follow it step by step. Only supplement with core brain principles where the framework doesn't explicitly cover a scenario.
+CRITICAL: Preserve its approved truth and boundaries, but adapt the conversational act to each new message. Only supplement with a relevant Brain principle when needed.
 ===== END CUSTOM FRAMEWORK =====
 `;
   } else {
@@ -317,9 +317,9 @@ CRITICAL: This custom framework overrides ALL default conversation patterns. Fol
 Since no custom framework was provided for this workspace, use these default guidelines:
 
 CONVERSATION FLOW:
-1. FAMILIARITY — Acknowledge their situation using THEIR words. Ask a genuine, low-pressure question.
+1. FAMILIARITY — Acknowledge their specific situation and create natural common ground. A question is optional.
 2. RELATE — Use an approved story only when it directly matches. Otherwise validate without claiming shared experience.
-3. INVESTIGATE — Ask a relevant question to understand the real constraint. One question at a time.
+3. INVESTIGATE — Ask one relevant question only when a missing answer matters.
 4. ELEVATE — Reframe how they see themselves. Validate effort, not results.
 5. CHECK FIT — Compare what they need with the approved offer's audience, limits, and truth.
 6. REFER — Ask permission first, then share the approved expert, offer, or link only when there is fit and interest.
@@ -331,7 +331,7 @@ TONE RULES:
 - Sound like you're texting your actual friend
 - Mirror their language, pace, and energy level
 
-    Usually ask one natural question when a question is the best next move. Do not force a question after a direct answer, boundary, or completed handoff.
+    A question is optional. Do not force one after relating, sharing, validating, answering, observing, a boundary, or a completed handoff.
 ===== END DEFAULT GUIDELINES =====
 `;
   }
@@ -417,14 +417,14 @@ ${personaApproved ? (workspace?.forbidden_claims || "Never invent purchases, inc
 ===== FRIEND CONVERSATION RULES =====
 1. Diagnose from the prospect's actual words; do not assume a hidden pain is true.
 2. Validate without pretending the same event happened to you. Use first-person experience only when an approved story directly supports it.
-3. Answer objections with: acknowledge -> clarify the concern -> give a truthful, relevant fact or approved evidence -> ask one useful question.
+3. Answer objections with the smallest useful move: acknowledge, then clarify only if necessary, or give a truthful relevant fact or approved evidence. A question is optional.
 4. Never manufacture urgency, shame, fear, scarcity, social proof, or a personal success story.
 5. Check offer fit before referral. State limitations honestly and do not refer people the approved offer is not for.
 6. Ask permission before sharing an approved expert, offer, or link. Warmth alone is not permission.
 7. If no offer or expert is approved, continue helping without inventing one.
 8. Respect a no. Do not keep pushing or disguise a pitch as friendship.
 9. Use the Brain as strategy, never as fabricated biography.
-10. Prefer one natural next objective and one question per reply.
+10. Prefer one natural next objective and zero or one question per reply.
 
 OBJECTION PATTERN:
 - Money: clarify whether the issue is affordability, timing, value, or trust; use only the approved price and evidence.
@@ -457,14 +457,10 @@ ${brainGroundingInstructions}
 
 Choose the smallest useful framework for this moment. Add a second framework only when it materially improves the next move.
 
-**DISCOVERY FRAMEWORK (choose based on SPIN stage):**
-When spin_stage = "situation" → Ask SITUATION questions: "How long have you been doing [their thing]?" / "What does your current setup look like?"
-When spin_stage = "problem" → Ask PROBLEM questions: "What's been the biggest headache with [current approach]?" / "Where do things keep breaking down?"
-When spin_stage = "implication" → Ask IMPLICATION questions: "If nothing changes in 6 months, what does that look like?" / "How is that affecting [family/income/stress]?"
-When spin_stage = "need_payoff" → Ask NEED-PAYOFF questions: "If [dream outcome] was handled tomorrow, how would that feel?" / "What would it mean for [their family]?"
+**DISCOVERY FRAMEWORK (use only when reply_act=probe and question_needed=true):**
+SPIN identifies what information may be missing. It never requires a question. If the analysis selects relate, share_story, validate, answer, observe, reframe or transition, do that instead.
 
-**5 WHY'S** — When they give a surface answer, drill deeper:
-"Why is that important to you?" → "What would change if that was solved?" → "What's really holding you back?"
+**5 WHY'S** — Use at most one gentle depth question when the prospect is open and the answer truly matters. Never drill through a sequence like an interviewer.
 
 **JOBS-TO-BE-DONE** — Focus on the outcome:
 "When you imagine this working, what does your day actually look like?"
@@ -526,8 +522,8 @@ Use Knowledge Base principles as silent judgment tools, not lines to recite. Cho
 
 1. DETECT EMOTIONAL TONE first (confused, skeptical, broke, excited, scared)
 2. CHECK OBJECTION RADAR — is there an objection hiding in their message?
-3. SELECT appropriate SPIN question type based on conversation depth
-4. Apply a PERSUASION framework to shape your message
+3. SELECT the analyzed reply_act: relate, share, validate, answer, observe, probe, reframe, transition, permission, referral or stop
+4. Apply zero or one relevant framework silently; never add one merely to make the reply look strategic
 5. WAIT for their reply before escalating
 6. If they resist → go BACK to bonding, NOT forward to selling
 7. When the prospect reveals pain → understand and reflect it; never intensify distress
@@ -549,7 +545,7 @@ The friend's job is NOT to pitch. The friend's job is to:
 - NOT a robot. NOT a salesperson. A genuine peer who is truthful about why they are helping.
 
 Every reply should create clarity, trust, or a truthful next step. It does not always need to advance toward a sale.
-Use at most ONE natural question, and use zero questions when a direct answer, acknowledgment, boundary, or clean handoff is better.`;
+Use at most ONE natural question, and use zero questions when relating, sharing an approved experience, validating, answering, observing, respecting a boundary, or completing a handoff is better.`;
 }
 
 
@@ -804,7 +800,7 @@ serve(async (req) => {
       const examples = positiveFeedback.slice(0, 5).map((f: any) => 
         `- "${f.suggestion_text.substring(0, 200)}" (${f.suggestion_type}, stage: ${f.conversation_stage || "unknown"}, framework: ${f.framework_used || "none"})`
       ).join("\n");
-      feedbackSection = `\nUSER-APPROVED REPLY PATTERNS (these got thumbs up — generate similar styles):\n${examples}\nMimic the tone, structure, and approach of these proven replies.`;
+      feedbackSection = `\nUSER-APPROVED REPLY PATTERNS (these got thumbs up — generate similar styles):\n${examples}\nMimic only tone, structure and approach. Never copy a name, result, family detail, objection or personal fact into this prospect's reply.`;
     }
 
     // ===== TONALITY LEARNING =====
@@ -1050,6 +1046,83 @@ serve(async (req) => {
       ? buildFriendLearningContext(existingFriendProfile, friendAudienceSignals || [])
       : "";
 
+    let chat;
+    try {
+      chat = await resolveUserChatTarget(supabase, user.id);
+    } catch (e) {
+      if (e instanceof NoUserAiKeyError) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      throw e;
+    }
+
+    let friendDecisionAnalysis: Record<string, any> | null = activeThreadType === "friend"
+      ? { ...existingFriendProfile, reply_act: mode === "first_message" ? "relate" : "respond naturally", question_needed: false, knowledge_need: "none" }
+      : null;
+    if (activeThreadType === "friend" && mode !== "first_message") {
+      const decisionHistory = recentMessages.map((m: any) =>
+        `${m.direction === "outbound" ? "FRIEND" : m.direction === "context" ? "NOTE" : "PROSPECT"}: ${m.content}`
+      ).join("\n");
+      const decisionResponse = await userChat(chat, {
+        model: chat.models.balanced,
+        messages: [
+          {
+            role: "system",
+            content: `Analyze a peer-to-peer Friend conversation before Knowledge Base retrieval. Return JSON only. Do not write the reply.
+
+Return: {"intent":"what they are trying to protect, prove, avoid or achieve","tangible_goal":"concrete desired result or unknown","experience_level":"evidence-based level","sales_status":"explicit result status or unknown","mentor_status":"explicit support status or unknown","current_strategy":"explicit approach or unknown","problem_gap":"distance between current and desired state","pain_points":[],"objections":[],"doubt_cause":"why they hesitate","certainty_gap":"what must become logically clear","motivation":"why it matters","readiness":"not_ready|exploring|problem_aware|wants_help|accepted_referral","stage":"opener|common_ground|motivation|current_strategy|problem|desired_result|objection|permission|expert_introduction|decision","reply_act":"relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop","question_needed":false,"knowledge_need":"the exact principle/evidence needed, or none","contact_status":"active|not_now|do_not_contact|not_a_fit","next_best_action":"one natural peer action","learning_confidence":0,"evidence":[]}
+
+Choose a question only when one missing answer is genuinely necessary. A real friend often relates, shares, answers, validates or observes without asking anything. An explicit request to stop means reply_act=stop and contact_status=do_not_contact. Never treat a boundary as an objection. Use only conversation evidence and preserved CURRENT PROSPECT MEMORY.`
+          },
+          {
+            role: "user",
+            content: `CURRENT PROSPECT MEMORY:\n${friendLearningContext.substring(0, 3000)}\n\nCONVERSATION:\n${keepHeadAndLatest(decisionHistory, 7000, 1200)}\n\nLATEST INPUT:\n${message}\n\nSCREENSHOT CONTEXT:\n${screenshotContext || "none"}`,
+          },
+        ],
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+      });
+      if (decisionResponse.ok) {
+        try {
+          const decisionData = await decisionResponse.json();
+          const rawDecision = decisionData.choices?.[0]?.message?.content || "{}";
+          const match = rawDecision.match(/```(?:json)?\s*([\s\S]*?)```/);
+          friendDecisionAnalysis = JSON.parse((match ? match[1] : rawDecision).trim());
+        } catch (error) {
+          console.warn("[chat-suggest] could not parse Friend decision analysis", error);
+        }
+      } else {
+        console.warn("[chat-suggest] Friend decision analysis failed", decisionResponse.status);
+      }
+    }
+
+    const decisionSearchQuery = activeThreadType === "friend"
+      ? buildFriendDecisionSearchQuery(friendDecisionAnalysis, message, existingFriendProfile)
+      : brainQuery;
+    let decisionCoreChunks = dedupedCoreChunks;
+    let decisionPrinciples = dedupedPrinciples;
+    if (activeThreadType === "friend") {
+      const decisionEmbedding = await generateEmbedding(decisionSearchQuery, supabase, user.id);
+      if (decisionEmbedding) {
+        const embeddingStr = JSON.stringify(decisionEmbedding);
+        const [decisionP, decisionC] = await Promise.all([
+          supabase.rpc("match_sales_brain", { query_embedding: embeddingStr, match_count: 120, match_threshold: 0.14, p_user_id: user.id }),
+          supabase.rpc("match_knowledge_chunks", { query_embedding: embeddingStr, match_count: 100, match_threshold: 0.14, p_user_id: user.id }),
+        ]);
+        const secondPassPrinciples = (decisionP.data || [])
+          .filter((p: any) => ["core_knowledge", "sales_principle", "content", "video", "pdf"].includes(p.source_type) && (
+            (!p.source_id && (!p.brain_type || p.brain_type === "both" || p.brain_type === activeThreadType)) ||
+            (p.source_id && (!kbModeMap[p.source_id] || kbModeMap[p.source_id] === "both" || kbModeMap[p.source_id] === activeThreadType))
+          ))
+          .map((p: any) => ({ ...p, _decisionSemantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+        const secondPassChunks = (decisionC.data || [])
+          .filter((c: any) => ["core_knowledge", "content", "video", "pdf", "sales_principle"].includes(c.source_type) && (!c.brain_type || c.brain_type === "both" || c.brain_type === activeThreadType))
+          .map((c: any) => ({ ...c, _decisionSemantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
+        decisionPrinciples = deduplicatePrinciples(mergeByIdPriority(secondPassPrinciples, dedupedPrinciples), "relevance_score");
+        decisionCoreChunks = deduplicateChunks(mergeByIdPriority(secondPassChunks, dedupedCoreChunks), "relevance_score");
+      }
+    }
+
     if (leadEntry) {
       leadRegistryContext = `\n[LEAD REGISTRY — ${prospect.name}]\nPersona: ${leadEntry.persona_type || "unclassified"}\nPsychological State: ${leadEntry.psychological_state || "unknown"}\nSubtext: ${leadEntry.subtext_analysis || "none"}\nPast Advice: ${JSON.stringify(leadEntry.past_advice || []).substring(0, 800)}\nUpload Matches: ${JSON.stringify(leadEntry.upload_matches || []).substring(0, 500)}\n`;
     }
@@ -1101,7 +1174,7 @@ serve(async (req) => {
     // message wins. We combine: (a) semantic similarity from pgvector,
     // (b) keyword overlap with the prospect's last message, (c) overlap with
     // recent thread context as a tiebreaker.
-    const messageTerms = extractMeaningfulTerms(`${message} ${screenshotContext}`);
+    const messageTerms = extractMeaningfulTerms(activeThreadType === "friend" ? decisionSearchQuery : `${message} ${screenshotContext}`);
     const contextTerms = extractMeaningfulTerms(last3Messages);
 
     function scoreAgainstMessage(text: string, semanticScore: number): number {
@@ -1113,8 +1186,11 @@ serve(async (req) => {
     }
 
     // Diverse core chunks (max 4 per source) then re-score against the message
-    const diverseCoreChunks = diversityRerank(dedupedCoreChunks, "source_id", 4);
-    const scoredWorkspaceChunks = (wsConvoChunks || []).map((chunk: any, idx: number) => {
+    const diverseCoreChunks = diversityRerank(decisionCoreChunks, "source_id", 4);
+    const workspaceChunkCandidates = activeThreadType === "friend"
+      ? (wsConvoChunks || []).filter((chunk: any) => chunk.source_type === "training_conversation")
+      : (wsConvoChunks || []);
+    const scoredWorkspaceChunks = workspaceChunkCandidates.map((chunk: any, idx: number) => {
       const text = `${chunk.content || ""} ${chunk.trigger_phrases || ""}`;
       const recency = Math.max(0, 6 - idx);
       const matchScore = scoreAgainstMessage(text, 0) + recency;
@@ -1123,7 +1199,7 @@ serve(async (req) => {
 
     const scoredCoreChunks = diverseCoreChunks.map((chunk: any) => {
       const text = `${chunk.content || ""} ${chunk.trigger_phrases || ""}`;
-      const sem = chunk._semantic ? (chunk.relevance_score || 0) / 100 : 0;
+      const sem = chunk._decisionSemantic || chunk._semantic ? (chunk.relevance_score || 0) / 100 : 0;
       return { ...chunk, matchScore: scoreAgainstMessage(text, sem) };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
@@ -1138,9 +1214,9 @@ serve(async (req) => {
     const topChunks = [...workspaceFirst, ...scoredCoreChunks.slice(0, remainingSlots)].slice(0, chunksCap);
 
     // Score EVERY principle against the incoming message. No rotation, no shuffle.
-    const scoredPrinciples = dedupedPrinciples.map((sp: any) => {
+    const scoredPrinciples = decisionPrinciples.map((sp: any) => {
       const text = `${sp.principle_name || ""} ${sp.what_i_learned || ""} ${sp.how_to_apply || ""} ${sp.when_to_use || ""} ${sp.exact_words_to_use || ""}`;
-      const sem = sp._semantic ? (sp.relevance_score || 0) / 100 : 0;
+      const sem = sp._decisionSemantic || sp._semantic ? (sp.relevance_score || 0) / 100 : 0;
       return { ...sp, matchScore: scoreAgainstMessage(text, sem) };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
@@ -1201,6 +1277,9 @@ serve(async (req) => {
     if (friendLearningContext) {
       brainChunksFormatted += `\n\n${friendLearningContext}`;
     }
+    if (friendDecisionAnalysis) {
+      brainChunksFormatted += `\n\n[FRIEND DECISION ANALYSIS — locked for this generation]\nUse its reply_act and question_needed for all three variants. Do not replace the act merely to ask a question or display a framework.\n${JSON.stringify(friendDecisionAnalysis).substring(0, 4000)}\n[DECISION-AWARE RETRIEVAL QUERY]\n${decisionSearchQuery.substring(0, 3200)}`;
+    }
 
     // Add Global Knowledge Map
     if (globalKnowledgeMap) {
@@ -1222,7 +1301,7 @@ serve(async (req) => {
         trainingSection += "\n";
       }
       trainingSection += "===== END TRAINING EXAMPLES =====\n";
-      trainingSection += "ABSOLUTE RULE: Your reply MUST match this person's EXACT conversational style — same message length, same emoji density, same vulnerability level, same question style. If the training shows short punchy messages, do NOT write paragraphs. If it shows emojis, USE emojis. If it shows vulnerability stories, INCLUDE them.\n";
+      trainingSection += "ABSOLUTE RULE: Match this person's conversational rhythm, length, warmth and informal style without copying prospect facts. Questions, emojis and personal stories are optional; use them only when the current reply_act and approved identity support them.\n";
       // Prepend training section so it appears BEFORE brain chunks
       brainChunksFormatted = trainingSection + brainChunksFormatted;
     }
@@ -1253,7 +1332,7 @@ Search ALL brain chunks across ALL sources for:
 - Treat ORIGINAL SOURCE PASSAGES as evidence and STRUCTURED PRINCIPLES as the action framework. Never invent a script or teaching that the retrieved passage does not support.
 
 **Step 3 — STRATEGIC APPLICATION:**
-Use the single best-supported principle for the buyer's current moment. Add another only when it provides a distinct benefit; relevance and truth matter more than source count.
+First follow the analyzed reply_act. Use the single best-supported principle only when it helps that act. Use no formal principle when a simple peer response is more natural. Add another only when it provides a distinct benefit; relevance and truth matter more than source count.
 
 **Step 4 — STRATEGY BREAKDOWN (Hidden — include in JSON response):**
 For each suggestion, track internally which principles and sources you used and why.
@@ -1263,17 +1342,6 @@ Include this in the "frameworkUsed" field of the JSON response.
 `;
 
     const fullSystemPromptBase = `${layeredReasoning}\n${systemPrompt}`;
-
-    let chat;
-    try {
-      chat = await resolveUserChatTarget(supabase, user.id);
-    } catch (e) {
-      if (e instanceof NoUserAiKeyError) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-      throw e;
-    }
-
 
     // Build task instructions based on mode
     let taskInstructions = "";
@@ -1356,7 +1424,7 @@ The "whyThisWorks" should explain what you changed and why it's better.`;
 
     const friendJsonFormat = `
 === FRIEND CONVERSATION ANALYSIS (run silently before writing) ===
-Read the complete conversation, the newest message, profile/screenshot evidence, and approved workspace truth. Determine:
+Read the complete conversation, newest message, profile/screenshot evidence, approved workspace truth, and the precomputed FRIEND DECISION ANALYSIS. Treat the precomputed reply_act and question_needed as locked unless they are absent. Determine:
 1. The prospect's current stage: opener, common_ground, motivation, current_strategy, problem, desired_result, objection, permission, expert_introduction, or decision.
 2. Their stated pain, motivation, desired result, objection, trust/readiness, and what is still unknown. Do not infer facts without evidence.
 3. Questions already answered and promises or details already shared, so nothing is repeated.
@@ -1398,6 +1466,14 @@ Return valid JSON with this exact compatible shape:
     "current_strategy": "explicit strategy or unknown",
     "interests": [], "desires": [], "pain_points": [], "objections": [],
     "motivation": "evidenced motivation or unknown",
+    "intent": "what they are trying to protect, prove, avoid or achieve",
+    "tangible_goal": "concrete desired result or unknown",
+    "problem_gap": "distance between current and desired state",
+    "doubt_cause": "why they hesitate or unknown",
+    "certainty_gap": "what must become logically clear or unknown",
+    "reply_act": "relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop",
+    "question_needed": false,
+    "knowledge_need": "exact principle/evidence needed, or none",
     "readiness": "not_ready|exploring|problem_aware|wants_help|accepted_referral",
     "contact_status": "active|not_now|do_not_contact|not_a_fit",
     "next_best_action": "one consent-respecting action",
@@ -1562,8 +1638,13 @@ ${jsonFormat}
       };
     }
 
+    const combinedFriendLearning = activeThreadType === "friend"
+      ? mode === "first_message"
+        ? { ...(friendDecisionAnalysis || {}), ...(parsed.prospectLearning || {}) }
+        : { ...(parsed.prospectLearning || {}), ...(friendDecisionAnalysis || {}) }
+      : null;
     const structuredFriendProfile = activeThreadType === "friend"
-      ? buildFriendProspectProfile(parsed.prospectLearning || parsed, existingFriendProfile)
+      ? buildFriendProspectProfile(combinedFriendLearning || parsed, existingFriendProfile)
       : null;
     if (structuredFriendProfile?.contact_status === "do_not_contact") {
       parsed.questioningPattern = "decision";
@@ -1785,7 +1866,7 @@ ${jsonFormat}
         const { error: signalError } = await supabase.rpc("record_friend_learning_signals", {
           p_user_id: user.id,
           p_workspace_id: prospect.workspace_id,
-          p_profile: parsed.prospectLearning || parsed,
+          p_profile: combinedFriendLearning || parsed,
           p_metric: "observation",
           p_prospect_id: prospectId,
         });
@@ -1807,6 +1888,7 @@ ${jsonFormat}
       uniqueSources: new Set([...topChunks.map((c: any) => c.source_id)].filter(Boolean)).size,
       sources: Array.from(sourceTypes),
       insightsRetrieved: brainInsights?.length || 0,
+      retrievalPhase: activeThreadType === "friend" ? "analysis_then_decision_search" : "message_search",
     };
 
     return new Response(JSON.stringify(parsed), {

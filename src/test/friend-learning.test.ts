@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
+  buildFriendDecisionSearchQuery,
   buildFriendLearningContext,
   buildFriendProspectProfile,
 } from "../../supabase/functions/_shared/friend-learning";
@@ -42,5 +44,49 @@ describe("Friend conversation learning", () => {
 
     expect(context.indexOf("past bad experience")).toBeLessThan(context.indexOf("price"));
     expect(context).toContain("facts stay with this prospect");
+  });
+
+  it("builds retrieval around intent, gap and certainty instead of keywords alone", () => {
+    const query = buildFriendDecisionSearchQuery({
+      intent: "prove she can create repeatable sales independently",
+      tangible_goal: "consistent weekly sales",
+      sales_status: "made one sale",
+      problem_gap: "cannot repeat the first result",
+      doubt_cause: "previous mentor support did not help",
+      certainty_gap: "does not know whether the strategy is repeatable",
+      reply_act: "relate_then_reframe",
+      knowledge_need: "autonomy-safe reframe and repeatable process",
+      objections: ["wants to do it alone"],
+    }, "I already made a sale so I can do it myself");
+
+    expect(query).toContain("consistent weekly sales");
+    expect(query).toContain("cannot repeat the first result");
+    expect(query).toContain("autonomy-safe reframe");
+    expect(query).toContain("I already made a sale");
+  });
+
+  it("keeps known prospect facts when a later analysis returns unknown", () => {
+    const profile = buildFriendProspectProfile({
+      sales_status: "unknown",
+      doubt_cause: "not inferred",
+    }, {
+      sales_status: "made one sale",
+      doubt_cause: "lost trust after a previous program",
+    });
+
+    expect(profile.sales_status).toBe("made one sale");
+    expect(profile.doubt_cause).toBe("lost trust after a previous program");
+  });
+
+  it("uses analysis-first retrieval and does not force a question in Friend mode", () => {
+    const generateReply = readFileSync("supabase/functions/generate-reply/index.ts", "utf8");
+    const chatSuggest = readFileSync("supabase/functions/chat-suggest/index.ts", "utf8");
+
+    expect(generateReply).toContain("FRIEND PASS 2: DECISION-AWARE KNOWLEDGE RETRIEVAL");
+    expect(generateReply).toContain("buildFriendDecisionSearchQuery(analysisJson");
+    expect(chatSuggest).toContain("FRIEND DECISION ANALYSIS — locked for this generation");
+    expect(chatSuggest).toContain("buildFriendDecisionSearchQuery(friendDecisionAnalysis");
+    expect(generateReply).not.toContain("End with a question that deepens rapport");
+    expect(chatSuggest).not.toContain("SELECT appropriate SPIN question type based on conversation depth");
   });
 });
