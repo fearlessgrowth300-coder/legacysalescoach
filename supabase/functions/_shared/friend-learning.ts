@@ -112,7 +112,7 @@ export function buildFriendLearningContext(
     `Next best action: ${cleanText(p.next_best_action, "continue discovery")}`,
   ];
 
-  const scoredSignals = audienceSignals
+  const scoredSignals: Array<Record<string, unknown> & { score: number }> = audienceSignals
     .map((signal) => ({
       ...signal,
       score: Number(signal.observation_count || 0)
