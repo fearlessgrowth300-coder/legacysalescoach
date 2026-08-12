@@ -29,19 +29,17 @@ import AiTypingIndicator from "@/components/AiTypingIndicator";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import TikTokOutreach from "@/components/TikTokOutreach";
 import ConversationIntelligencePanel, { type ConversationAnalysis } from "@/components/ConversationIntelligencePanel";
+import {
+  latestProspectScreenshotMessage,
+  latestScreenshotTurn,
+  orderedScreenshotMessages,
+  type ScreenshotMessage,
+  type ScreenshotSpeaker,
+} from "@/lib/screenshot-conversation";
 
 import SuggestionCard, { ReferralWarningBanner, type Suggestion } from "@/components/SuggestionCard";
 type FeedbackMap = Record<number, "positive" | "negative">;
 
-type ScreenshotSpeaker = "me" | "them" | "unknown";
-type ScreenshotMessage = {
-  speaker: ScreenshotSpeaker;
-  text: string;
-  timestamp?: string | null;
-  status?: string | null;
-  reply_to?: string | null;
-  order?: number;
-};
 type ScreenshotAnalysis = {
   name?: string | null;
   platform?: string | null;
@@ -509,7 +507,9 @@ export default function Chats() {
           user_id: user.id,
           prospect_id: prospectId,
           content: screenshot.text,
-          direction: "inbound",
+          // A non-JSON OCR fallback can contain both sides of the conversation.
+          // Never store that mixed transcript as if the prospect said it all.
+          direction: "unknown",
           thread_type: currentThreadType,
           screenshot_url: screenshot.filePath,
           created_at: new Date(Date.now() + index * 1000).toISOString(),
@@ -867,9 +867,45 @@ export default function Chats() {
     setIsAnalyzing(true);
     setIsAnalyzingIntel(true);
 
-    const tiktokUrl = detectTikTokUrl(messageInput);
-    const instagramUrl = detectInstagramUrl(messageInput);
-    let enrichedMessage = messageInput;
+    let screenshotForRequest = pendingScreenshot;
+    let screenshotContext = "";
+    let requestMessage = messageInput.trim();
+
+    if (pendingScreenshot) {
+      const markerIndex = messageInput.indexOf(SCREENSHOT_TRANSCRIPT_MARKER);
+      const userNote = markerIndex >= 0
+        ? messageInput.slice(0, markerIndex).trim()
+        : pendingScreenshotNote;
+      const editedTranscript = markerIndex >= 0
+        ? messageInput.slice(markerIndex + SCREENSHOT_TRANSCRIPT_MARKER.length).trim()
+        : messageInput.trim();
+      const editedMessages = parseTranscriptMessages(editedTranscript);
+      const resolvedMessages = editedMessages.length > 0
+        ? orderedScreenshotMessages(editedMessages)
+        : orderedScreenshotMessages(pendingScreenshot.analysis?.messages);
+      const latestTurn = latestScreenshotTurn(resolvedMessages);
+
+      screenshotForRequest = {
+        ...pendingScreenshot,
+        text: editedTranscript || pendingScreenshot.text,
+        analysis: {
+          ...(pendingScreenshot.analysis || {}),
+          ...(resolvedMessages.length > 0 ? { messages: resolvedMessages } : {}),
+          latest_speaker: latestTurn?.speaker || pendingScreenshot.analysis?.latest_speaker || "unknown",
+          latest_message: latestTurn?.text || pendingScreenshot.analysis?.latest_message || null,
+        },
+      };
+      screenshotContext = buildScreenshotContext([screenshotForRequest], userNote);
+      requestMessage = latestProspectScreenshotMessage(resolvedMessages)
+        || latestTurn?.text?.trim()
+        || editedTranscript
+        || pendingScreenshot.text;
+      await saveScreenshotConversation(selectedProspectId, [screenshotForRequest], userNote);
+    }
+
+    const tiktokUrl = detectTikTokUrl(requestMessage);
+    const instagramUrl = detectInstagramUrl(requestMessage);
+    let enrichedMessage = requestMessage;
 
     // Auto-scrape TikTok profile if URL detected
     if (tiktokUrl && activeWorkspace) {
@@ -883,7 +919,7 @@ export default function Chats() {
           },
         });
         if (!tiktokError && tiktokData && !tiktokData.error) {
-          enrichedMessage = `${messageInput}\n\n--- TIKTOK PROFILE AUTO-SCRAPED ---\n${tiktokData.summary || ""}`;
+          enrichedMessage = `${requestMessage}\n\n--- TIKTOK PROFILE AUTO-SCRAPED ---\n${tiktokData.summary || ""}`;
           if (tiktokData.suggestedComment) {
             enrichedMessage += `\nSuggested Comment: ${tiktokData.suggestedComment}`;
           }
@@ -930,32 +966,11 @@ export default function Chats() {
       }
     }
 
-    let screenshotForRequest = pendingScreenshot;
-    let screenshotContext = "";
-    if (pendingScreenshot) {
-      const markerIndex = messageInput.indexOf(SCREENSHOT_TRANSCRIPT_MARKER);
-      const userNote = markerIndex >= 0
-        ? messageInput.slice(0, markerIndex).trim()
-        : pendingScreenshotNote;
-      const editedTranscript = markerIndex >= 0
-        ? messageInput.slice(markerIndex + SCREENSHOT_TRANSCRIPT_MARKER.length).trim()
-        : messageInput.trim();
-      const editedMessages = parseTranscriptMessages(editedTranscript);
-      screenshotForRequest = {
-        ...pendingScreenshot,
-        text: editedTranscript || pendingScreenshot.text,
-        analysis: {
-          ...(pendingScreenshot.analysis || {}),
-          ...(editedMessages.length > 0 ? { messages: editedMessages } : {}),
-        },
-      };
-      screenshotContext = buildScreenshotContext([screenshotForRequest], userNote);
-      await saveScreenshotConversation(selectedProspectId, [screenshotForRequest], userNote);
-    } else {
+    if (!pendingScreenshot) {
       await supabase.from("chat_messages").insert({
         user_id: user!.id,
         prospect_id: selectedProspectId,
-        content: messageInput,
+        content: requestMessage,
         direction: "inbound",
         thread_type: currentThreadType,
       });

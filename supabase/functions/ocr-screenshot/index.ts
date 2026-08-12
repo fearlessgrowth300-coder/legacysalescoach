@@ -101,6 +101,7 @@ Return one valid JSON object with this exact shape:
       "timestamp": "visible timestamp or null",
       "status": "seen|delivered|sent|failed|null",
       "reply_to": "quoted/replied-to text or null",
+      "alignment": "left|right|center|unknown",
       "order": 1
     }
   ],
@@ -114,7 +115,10 @@ Return one valid JSON object with this exact shape:
 
 Rules:
 - Extract every visible chat message verbatim and in chronological order.
-- Determine speaker from alignment, bubble color, avatar, and platform layout. Do not guess silently; use "unknown" and explain uncertainty when needed.
+- Record each bubble's physical alignment independently from its speaker. For ordinary Instagram, TikTok, WhatsApp, Messenger, iMessage, and SMS chats: RIGHT-aligned bubbles are "me" (the signed-in account/app user) and LEFT-aligned bubbles are "them" (the prospect). Alignment outranks wording, topic, names, and who asked a question.
+- Instagram dark mode commonly shows the signed-in account's messages as right-aligned purple/gradient bubbles and the prospect's messages as left-aligned dark/gray bubbles beside their avatar.
+- A "You replied" quoted preview describes reply context; it is not a new message and must not change the speaker of the bubble containing it.
+- Do not infer the speaker from whether the text sounds like a salesperson, tells a personal story, asks about a journey, or mentions earnings. Use visible layout. If alignment is genuinely unreadable, use "unknown" and explain uncertainty.
 - Preserve emojis, prices, dates, punctuation, URLs, and short replies exactly.
 - Do not merge separate bubbles into one message.
 - Capture reactions, quoted replies, timestamps, read/seen state, attachments, and who sent the latest message.
@@ -164,21 +168,38 @@ Rules:
       console.warn("ocr-screenshot returned non-JSON; using text fallback", parseError);
     }
 
+    const platformUsesStandardChatAlignment = /instagram|tiktok|whatsapp|messenger|imessage|sms/i.test(String(analysis?.platform || ""));
     const structuredMessages = Array.isArray(analysis?.messages)
       ? analysis.messages
           .filter((m: any) => typeof m?.text === "string" && m.text.trim())
-          .map((m: any, index: number) => ({
-            speaker: m.speaker === "me" ? "me" : m.speaker === "them" ? "them" : "unknown",
-            text: m.text.trim(),
-            timestamp: typeof m.timestamp === "string" ? m.timestamp : null,
-            status: typeof m.status === "string" ? m.status : null,
-            reply_to: typeof m.reply_to === "string" ? m.reply_to : null,
-            order: Number.isFinite(Number(m.order)) ? Number(m.order) : index + 1,
-          }))
+          .map((m: any, index: number) => {
+            const alignment = m.alignment === "left" || m.alignment === "right" || m.alignment === "center"
+              ? m.alignment
+              : "unknown";
+            const alignedSpeaker = platformUsesStandardChatAlignment && alignment === "right"
+              ? "me"
+              : platformUsesStandardChatAlignment && alignment === "left"
+                ? "them"
+                : null;
+            return {
+              speaker: alignedSpeaker || (m.speaker === "me" ? "me" : m.speaker === "them" ? "them" : "unknown"),
+              text: m.text.trim(),
+              timestamp: typeof m.timestamp === "string" ? m.timestamp : null,
+              status: typeof m.status === "string" ? m.status : null,
+              reply_to: typeof m.reply_to === "string" ? m.reply_to : null,
+              alignment,
+              order: Number.isFinite(Number(m.order)) ? Number(m.order) : index + 1,
+            };
+          })
           .sort((a: any, b: any) => a.order - b.order)
       : [];
 
-    if (analysis) analysis.messages = structuredMessages;
+    if (analysis) {
+      analysis.messages = structuredMessages;
+      const latestTurn = structuredMessages[structuredMessages.length - 1];
+      analysis.latest_speaker = latestTurn?.speaker || "unknown";
+      analysis.latest_message = latestTurn?.text || null;
+    }
     const transcript = structuredMessages.length > 0
       ? structuredMessages.map((m: any) => `${m.speaker === "me" ? "Me" : m.speaker === "them" ? "Them" : "Unknown"}: ${m.text}`).join("\n")
       : extractedText;

@@ -113,7 +113,7 @@ serve(async (req) => {
   try {
     const { prospectId, message: rawMessage, threadType, styleModifier, screenshotPath, screenshotContext: rawScreenshotContext } = await req.json();
     const activeThreadType: "friend" | "expert" = threadType === "expert" ? "expert" : "friend";
-    const message = typeof rawMessage === "string" ? keepHeadAndLatest(rawMessage, 12000) : "";
+    let message = typeof rawMessage === "string" ? keepHeadAndLatest(rawMessage, 12000) : "";
     const screenshotContext = typeof rawScreenshotContext === "string" ? keepHeadAndLatest(rawScreenshotContext, 6000, 1000) : "";
 
     const authHeader = req.headers.get("Authorization");
@@ -194,6 +194,14 @@ serve(async (req) => {
     const history = allHistory || [];
     const speakerMessages = history.filter((m: any) => m.direction === "inbound" || m.direction === "outbound");
     const recentMessages = history.slice(-10);
+    if (screenshotPath) {
+      // The client may supply the full editable OCR transcript. Never label
+      // that mixed-speaker block as the prospect's latest message. The bubbles
+      // were already stored with directions, so the newest inbound row is the
+      // authoritative prospect turn.
+      const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
+      if (latestInbound?.content?.trim()) message = keepHeadAndLatest(latestInbound.content.trim(), 12000);
+    }
 
     // Resolve the configured Friend -> Expert relationship so referral-stage
     // replies can hand the prospect to the correct expert instead of inventing
@@ -538,7 +546,12 @@ FRIEND_LEARNING_MEMORY:
 ${friendLearningContext.substring(0, 5000)}
 
 CONVERSATION_HISTORY:
-${conversationHistory}`;
+${conversationHistory}
+
+AUTHORITATIVE LATEST PROSPECT MESSAGE:
+${message || "No inbound prospect message was found."}
+
+SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND rows are the buyer's messages. Never answer a YOU message as though the prospect said it.`;
     const screenshotSignedUrl = await createScreenshotSignedUrl(supabase, user.id, screenshotPath);
     const analysisUserContent: any = screenshotSignedUrl && !chat.isAnthropic
       ? [

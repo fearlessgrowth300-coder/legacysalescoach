@@ -657,7 +657,7 @@ serve(async (req) => {
     const activeThreadType: "friend" | "expert" = threadType === "expert" ? "expert" : "friend";
     
     // Input validation
-    const message = typeof rawMessage === "string" ? keepHeadAndLatest(rawMessage, MAX_MESSAGE_LENGTH) : "";
+    let message = typeof rawMessage === "string" ? keepHeadAndLatest(rawMessage, MAX_MESSAGE_LENGTH) : "";
     const screenshotContext = typeof rawScreenshotContext === "string" ? keepHeadAndLatest(rawScreenshotContext, 8000, 1200) : "";
     
     const authHeader = req.headers.get("Authorization");
@@ -765,6 +765,12 @@ serve(async (req) => {
 
     const history = allHistory || [];
     const speakerMessages = history.filter((m: any) => m.direction === "inbound" || m.direction === "outbound");
+    if (screenshotContext) {
+      // Screenshot creation sends a complete OCR transcript for context. Use
+      // the newest stored inbound bubble as the actual message being answered.
+      const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
+      if (latestInbound?.content?.trim()) message = keepHeadAndLatest(latestInbound.content.trim(), MAX_MESSAGE_LENGTH);
+    }
     
     // Build conversation memory: summarize older messages, keep recent ones verbatim
     const recentCount = 10;
@@ -1584,6 +1590,9 @@ ${prospect.suggested_comment ? `COMMENT YOU LEFT ON THEIR POST: "${prospect.sugg
 
 PREVIOUS CONVERSATION:
 ${conversationHistory}
+
+SPEAKER SAFETY:
+"You" rows are the app user's messages. "Prospect" rows are the buyer's messages. The user message supplied to this generation is the authoritative latest inbound prospect bubble. Never reply to a "You" row as though the prospect said it.
 
 SCREENSHOT VISUAL CONTEXT:
 ${screenshotContext || "No screenshot visual metadata supplied."}
