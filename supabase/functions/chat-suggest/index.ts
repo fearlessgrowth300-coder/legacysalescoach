@@ -14,6 +14,7 @@ import {
   applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
   applyEarliestMissingFriendCheckpoint,
+  buildDeterministicFriendFallbackMessages,
   buildFriendQualityValidatorPrompt,
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
@@ -1761,35 +1762,65 @@ ${jsonFormat}
       parsed.questioningPattern = finalFriendStageResult.stage;
       const finalStageDirective = buildFriendStageDirective(finalFriendStageResult);
       const originalSuggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
-      if (originalSuggestions.length === 0) throw new Error("Reply generator returned no Friend suggestions");
       const deterministicIssues = originalSuggestions.flatMap((suggestion: any, index: number) =>
         deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {})
           .map((issue) => `suggestion ${index + 1}: ${issue}`)
       );
-      const qualityResponse = await userChat(chat, {
-        model: chat.models.reasoning,
-        messages: [
-          { role: "system", content: buildFriendQualityValidatorPrompt("suggestions") },
-          {
-            role: "user",
-            content: `${finalStageDirective}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nEXACT-MOMENT RETRIEVED KNOWLEDGE:\n${exactMomentKnowledge.substring(0, 12000)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
-          },
-        ],
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-      });
-      if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
-      const qualityData = await qualityResponse.json();
-      const qualityRaw = qualityData.choices?.[0]?.message?.content || "{}";
-      const qualityMatch = qualityRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
-      const qualityJson = JSON.parse((qualityMatch ? qualityMatch[1] : qualityRaw).trim());
-      const repairedSuggestions = Array.isArray(qualityJson.suggestions) ? qualityJson.suggestions : [];
-      if (repairedSuggestions.length !== originalSuggestions.length) throw new Error("Friend quality validator returned an incomplete suggestion set");
-      const remainingIssues = repairedSuggestions.flatMap((suggestion: any, index: number) =>
-        deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {})
-          .map((issue) => `suggestion ${index + 1}: ${issue}`)
-      );
-      if (remainingIssues.length > 0) throw new Error(`Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`);
+      let repairedSuggestions: any[] = [];
+      let validationFailure = "";
+      try {
+        if (originalSuggestions.length === 0) throw new Error("Reply generator returned no Friend suggestions");
+        const qualityResponse = await userChat(chat, {
+          model: chat.models.reasoning,
+          messages: [
+            { role: "system", content: buildFriendQualityValidatorPrompt("suggestions") },
+            {
+              role: "user",
+              content: `${finalStageDirective}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nEXACT-MOMENT RETRIEVED KNOWLEDGE:\n${exactMomentKnowledge.substring(0, 12000)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
+            },
+          ],
+          temperature: 0.2,
+          response_format: { type: "json_object" },
+        });
+        if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
+        const qualityData = await qualityResponse.json();
+        const qualityRaw = qualityData.choices?.[0]?.message?.content || "{}";
+        const qualityMatch = qualityRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
+        const qualityJson = JSON.parse((qualityMatch ? qualityMatch[1] : qualityRaw).trim());
+        repairedSuggestions = Array.isArray(qualityJson.suggestions) ? qualityJson.suggestions : [];
+        if (repairedSuggestions.length !== originalSuggestions.length) throw new Error("Friend quality validator returned an incomplete suggestion set");
+        const remainingIssues = repairedSuggestions.flatMap((suggestion: any, index: number) =>
+          deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {})
+            .map((issue) => `suggestion ${index + 1}: ${issue}`)
+        );
+        if (remainingIssues.length > 0) validationFailure = `Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`;
+      } catch (qualityError) {
+        validationFailure = qualityError instanceof Error ? qualityError.message : "Friend quality validation failed";
+      }
+
+      const useDeterministicFallback = Boolean(validationFailure);
+      if (useDeterministicFallback) {
+        const fallbackMessages = buildDeterministicFriendFallbackMessages(
+          repairedSuggestions.length > 0 ? repairedSuggestions : originalSuggestions,
+          finalFriendStageResult.stage,
+          finalFriendStageResult.checkpoint,
+          combinedFriendLearning || parsed.prospectLearning || {},
+          message,
+        );
+        repairedSuggestions = fallbackMessages.map((fallbackMessage, index) => ({
+          ...(originalSuggestions[index] || {
+            id: index + 1,
+            type: index === 0 ? "primary" : index === 1 ? "alternative" : "softer",
+            whyThisWorks: "Continues from the earliest unverified checkpoint without inventing facts.",
+            frameworkUsed: "evidence-gated certainty funnel",
+            sourceUsed: "current conversation",
+            principleUsed: "truthful diagnosis",
+          }),
+          text: fallbackMessage,
+        }));
+        console.warn("chat-suggest used deterministic Friend fallback:", validationFailure);
+      }
+
       parsed.suggestions = repairedSuggestions.map((suggestion: any, index: number) => ({
         ...originalSuggestions[index],
         ...suggestion,
@@ -1797,6 +1828,8 @@ ${jsonFormat}
       parsed.qualityValidation = {
         passed: true,
         repaired: JSON.stringify(repairedSuggestions) !== JSON.stringify(originalSuggestions),
+        fallbackApplied: useDeterministicFallback,
+        fallbackReason: useDeterministicFallback ? validationFailure : null,
       };
     }
 

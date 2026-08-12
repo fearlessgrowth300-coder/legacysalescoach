@@ -516,3 +516,164 @@ export function deterministicFriendQualityIssues(
   }
   return issues;
 }
+
+function fallbackLeadFromDraft(value: unknown, stage: FriendStage): string {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+
+  // Keep only the declarative part of the repaired draft. This preserves a
+  // useful answer to a direct prospect question, while replacing the weak or
+  // off-stage question that caused deterministic validation to fail.
+  const safeSentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence && !sentence.includes("?"))
+    .filter((sentence) => !/good vibes|if you ever want to chat|what do you think would be possible|amplify that feeling/i.test(sentence))
+    .filter((sentence) => stage !== "intent" || !/expert|mentor|buy|price|link|offer/i.test(sentence));
+  const firstSentences = safeSentences
+    .slice(0, 2)
+    .join(" ")
+    .trim();
+  const candidate = firstSentences.slice(0, 260).replace(/[,:;\-\s]+$/, "").trim();
+  if (candidate.length < 12) return "";
+  if (/good vibes|if you ever want to chat|what do you think would be possible|amplify that feeling/i.test(candidate)) return "";
+  if (stage === "intent" && /expert|mentor|buy|price|link|offer/i.test(candidate)) return "";
+  return candidate;
+}
+
+/**
+ * Last-resort, evidence-gated Friend replies. The AI validator is allowed to
+ * repair prose, but a formatting mistake or a missed required checkpoint must
+ * never turn a safe suggestion request into an HTTP 500. These messages keep
+ * the current stage locked and are deliberately limited to one question.
+ */
+export function buildDeterministicFriendFallbackMessages(
+  drafts: unknown[],
+  stage: FriendStage,
+  checkpoint: FriendFunnelCheckpoint,
+  analysis: Record<string, unknown> | null | undefined,
+  latestProspectMessage = "",
+): string[] {
+  const thanks = /\b(?:thanks?|thank you|appreciate|wishing you)\b/i.test(latestProspectMessage);
+  const confident = /\b(?:intentional|happy with|know what works|working for me|direction)\b/i.test(latestProspectMessage);
+  const defaultLeads = thanks
+    ? [
+      "Thank you, I really appreciate that 🤍",
+      "That means a lot, thank you 🤍",
+      "Same here—it is genuinely nice connecting 🤍",
+    ]
+    : confident
+      ? [
+        "I respect how intentional you are about what you are building.",
+        "It sounds like you have put real thought into your direction.",
+        "I can see why staying focused on what works matters to you.",
+      ]
+      : [
+        "I hear you, and that makes sense.",
+        "That is fair, and I appreciate you being honest.",
+        "I get what you mean.",
+      ];
+
+  const checkpointQuestions: Record<FriendFunnelCheckpoint, string[]> = {
+    tangible_goal: [
+      "What concrete result are you working toward most right now?",
+      "What would you most like what you are building to produce?",
+      "What is the main result you want this to create for you?",
+    ],
+    why_goal_matters: [
+      "What would reaching that result change for you personally?",
+      "Why does that result matter to you beyond the business itself?",
+      "What would achieving it make possible in your everyday life?",
+    ],
+    past_experience: [
+      "What have you tried so far, and what result did it actually produce?",
+      "What approaches have you already tested, and how did they turn out?",
+      "What have you been doing up to now, and what has the outcome been?",
+    ],
+    commercial_result: [
+      "When you say it is working, has that mainly meant content growth and leads, or is it already producing consistent sales?",
+      "Has the progress shown up mostly in reach and engagement, or are you already seeing steady leads and sales from it?",
+      "What is working commercially right now—content growth, buyer conversations, or consistent sales?",
+    ],
+    active_problem: [
+      "What feels like the biggest obstacle between what you are doing now and the result you want?",
+      "Where does the process still feel less reliable than you want it to be?",
+      "What part is creating the biggest gap between your effort and the outcome?",
+    ],
+    root_cause: [
+      "What do you think is really causing that gap to continue?",
+      "Why do you think that obstacle has stayed unresolved so far?",
+      "What do you believe is underneath that problem?",
+    ],
+    consequences: [
+      "If that stays the same, what does it delay or make harder for you?",
+      "What is that unresolved gap costing you right now?",
+      "How does leaving that problem unsolved affect the goal you described?",
+    ],
+    need_for_change: [
+      "What makes changing that situation important now?",
+      "Why do you feel that gap needs a different solution now?",
+      "What tells you continuing the same way is not enough?",
+    ],
+    inaction_pattern: [
+      "What has made it hardest to change that part before now?",
+      "What do you think has stopped you from solving it up to this point?",
+      "What usually gets in the way when you try to address it?",
+    ],
+    detailed_future_outcome: [
+      "If that were solved, what would your day-to-day life actually look like?",
+      "What would become different in your life once that result felt reliable?",
+      "If this worked consistently, what would it let you do that you cannot do now?",
+    ],
+    permission_for_help: [
+      "Would you be open to hearing what helped me solve a similar gap?",
+      "Would it be helpful if I shared the approach that made the difference for me?",
+      "Are you open to me explaining the kind of support that helped me?",
+    ],
+    handoff_acceptance: [
+      "Would you like me to connect you with the expert who helped me?",
+      "Do you want me to send you the approved place to speak with the team?",
+      "Would you like the direct next step for talking with the expert?",
+    ],
+    complete: [
+      "Would you like me to send the approved next step now?",
+      "Are you ready for the direct connection details?",
+      "Would you like the expert contact details now?",
+    ],
+  };
+
+  const commercialQuestions = checkpoint === "past_experience"
+    ? [
+      "What have you tried so far, and has it been bringing you consistent sales yet?",
+      "Which approaches have you already tested, and did they lead to steady leads or sales?",
+      "What have you been doing up to now, and has the result been content growth or consistent sales?",
+    ]
+    : checkpoint === "why_goal_matters"
+      ? [
+        "What would consistent sales change for you personally?",
+        "Why would turning that progress into steady sales matter to you?",
+        "What would reliable sales make possible in your everyday life?",
+      ]
+      : checkpoint === "tangible_goal"
+        ? [
+          "What result are you working toward most right now—more reach, steady leads, or consistent sales?",
+          "What would you most like this to produce—audience growth, buyer conversations, or regular sales?",
+          "What commercial result would make you feel this is truly working?",
+        ]
+        : checkpointQuestions["commercial_result"];
+
+  const questions = analysis?.result_verification_status === "unverified"
+    ? commercialQuestions
+    : checkpointQuestions[checkpoint];
+
+  return [0, 1, 2].map((index) => {
+    const draft = drafts[index] as Record<string, unknown> | string | undefined;
+    const draftText = typeof draft === "string"
+      ? draft
+      : String(draft?.message || draft?.text || "");
+    const lead = fallbackLeadFromDraft(draftText, stage) || defaultLeads[index];
+    const candidate = `${lead} ${questions[index]}`.replace(/\s+/g, " ").trim();
+    if (deterministicFriendQualityIssues(candidate, stage, analysis).length === 0) return candidate;
+    return `${defaultLeads[index]} ${questions[index]}`.replace(/\s+/g, " ").trim();
+  });
+}
