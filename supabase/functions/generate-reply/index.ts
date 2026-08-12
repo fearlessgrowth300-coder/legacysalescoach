@@ -5,6 +5,7 @@ import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
+  applyDeterministicSalesSignals,
   buildFriendQualityValidatorPrompt,
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
@@ -523,12 +524,14 @@ serve(async (req) => {
     const analysisPrompt = `You are a sales conversation intelligence engine with an OBJECTION RADAR and multi-framework analyzer. Analyze and return JSON ONLY.
 
 Return the existing sales fields plus these REQUIRED structured learning fields: "segment" (beginner|first_sale_stuck|mentor_no_results|independent|tried_before|already_successful|not_ready|other), "experience_level", "sales_status", "mentor_status", "current_strategy", "interests" (array), "desires" (array), "pain_points" (array), "objections" (array), "motivation", "intent" (what they are trying to protect, prove, avoid or achieve), "tangible_goal" (the concrete result they want), "problem_gap" (distance between current and desired state), "problem_status" (active|past_resolved|unclear|none), "doubt_cause" (why they hesitate), "certainty_gap" (what must become logically clear), "reply_act" (relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop), "question_needed" (boolean), "knowledge_need" (the exact principle or evidence needed, or "none"), "readiness" (not_ready|exploring|problem_aware|wants_help|accepted_referral), "contact_status" (active|not_now|do_not_contact|not_a_fit), "next_best_action", "learning_confidence" (0-100), and "evidence" (short array of conversation facts supporting the profile).
+Also REQUIRED for the certainty funnel: "why_goal_matters", "past_experiences" (array), "root_cause", "consequences", "need_for_change_reason", "inaction_pattern", and "detailed_future_outcome".
 
-Existing sales fields: { "warmth_score": <0-100>, "stage": <"opener"|"rapport"|"pain"|"offer"|"close">, "prospect_psychology": <string — what they REALLY mean>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <"empathy_mirror"|"story_drop"|"curiosity_gap"|"referral"|"re_engage"|"spin_situation"|"spin_problem"|"spin_implication"|"spin_need_payoff"|"five_whys"|"pain_dream_gap"|"micro_commitment"|"objection_navigate"|"respect_boundary">, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <"TIME"|"MONEY"|"TRUST"|"CERTAINTY"|"PRIORITY"|"FEAR"|"TIMING"|"NEED_MORE_CLARITY"|null>, "objection_response_type": <"CLARIFY"|"REASSURE"|"REFRAME"|"DEEPEN"|"ISOLATE"|"HAND_OFF"|"RESPECT_NO"|null>, "spin_stage": <"situation"|"problem"|"implication"|"need_payoff">, "offer_fit": <"high"|"uncertain"|"low">, "referral_readiness": <"not_ready"|"ask_permission"|"ready_for_handoff">, "next_objective": <single concrete objective for the next message>, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
+Existing sales fields: { "warmth_score": <0-100>, "stage": <"intent"|"logical_certainty"|"emotional_certainty"|"pitch"|"handoff">, "prospect_psychology": <string>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <string>, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <string|null>, "objection_response_type": <string|null>, "spin_stage": <string>, "offer_fit": <string>, "referral_readiness": <string>, "next_objective": <string>, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
 
 OBJECTION RADAR: Scan EVERY message for objection language. Classify: TIME, MONEY, TRUST, CERTAINTY, PRIORITY, FEAR, TIMING, NEED_MORE_CLARITY. Recommend response type: CLARIFY, REASSURE, REFRAME, DEEPEN, ISOLATE, HAND_OFF.
 SPIN DETECTION: <4 exchanges="situation", personal but no pain="problem", pain not amplified="implication", pain+wants change="need_payoff".
-STAGE RULES OVERRIDE THE LEGACY stage enum above: return opener|rapport|pain|offer|close. opener earns a reply. rapport establishes the prospect's OWN motivation, result status, and current strategy. pain requires an explicit ACTIVE unresolved problem/gap in their own situation, not their audience's problem and not a resolved past problem. offer requires an active problem, a desired result, and explicit interest in help or permission. close requires acceptance of the expert introduction/handoff or a direct practical decision question. Warmth and message count never prove a stage.
+CERTAINTY FUNNEL: return intent|logical_certainty|emotional_certainty|pitch|handoff. intent = surface goal -> why it matters -> previous attempts -> actual experience -> their explanation -> likely root cause. logical_certainty = goal -> reason -> obstacle -> root cause -> consequences -> unresolved gap -> need for change. emotional_certainty = inaction pattern -> empathetic mirror -> detailed future outcome. pitch = full-context recap -> confirm gap -> connect desired outcome -> position relevant approved expert help -> ask permission. handoff = accepted permission -> concrete approved expert/team destination. Follow the stages in order and preserve prior answers. Warmth, message count, or a shallow first answer never completes a stage. A clear refusal exits safely; an explicit request for the expert may proceed directly to handoff.
+SALES-GAP RULE: "I am not making sales", "sales are inconsistent", "I need more sales", and equivalent first-person statements are an active personal sales gap, not casual rapport. Identify whether the bottleneck is traffic, offer, messaging, conversion, follow-up, or consistency. Set knowledge_need to the exact sales psychology or framework needed. If the prospect explicitly asks for help with sales, readiness=wants_help and reply_act=ask_permission; otherwise use one focused diagnostic act and move toward a permission-based transition when the gap is sufficiently understood.
 REFERRAL READINESS: not_ready until a relevant problem/desire is clear; ask_permission when fit looks plausible and the prospect wants help; ready_for_handoff only after permission or an explicit request for the expert/link. Never use warmth alone as proof of fit.
 LEARNING: Build structured fields only from explicit evidence. "Made one sale", "working with a mentor", "tried before", and "doing it alone" are different states. Preserve useful known facts from CURRENT PROSPECT MEMORY unless newer evidence corrects them.
 REPLY ACT: Choose what a real peer should do next. A question is optional. Prefer relating, sharing an approved experience, answering, observing or validating when discovery is not needed. Set question_needed=true only when one answer is necessary to understand the person or advance the conversation naturally.
@@ -600,6 +603,21 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
       analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything", segment: "other", experience_level: "unknown", sales_status: "unknown", mentor_status: "unknown", current_strategy: "unknown", interests: [], desires: [], pain_points: [], objections: [], motivation: "unknown", intent: "unknown", tangible_goal: "unknown", problem_gap: "unknown", doubt_cause: "unknown", certainty_gap: "unknown", reply_act: "respond naturally", question_needed: false, knowledge_need: "none", readiness: "not_ready", contact_status: "active", next_best_action: "continue discovery", learning_confidence: 0, evidence: [] };
     }
 
+    if (activeThreadType === "friend") {
+      const prospectOnlyHistory = speakerMessages
+        .filter((item: any) => item.direction === "inbound")
+        .map((item: any) => String(item.content || ""))
+        .join("\n");
+      analysisJson = applyDeterministicSalesSignals(analysisJson, message, prospectOnlyHistory);
+      // Merge the newest evidence into this prospect's durable memory before
+      // deriving a stage. This prevents later short replies from erasing
+      // Intent, Logical, or Emotional evidence collected earlier.
+      analysisJson = {
+        ...analysisJson,
+        ...buildFriendProspectProfile(analysisJson, existingFriendProfile),
+      };
+    }
+
     // Both Friend reply paths use one evidence-gated five-stage journey. A
     // warm tone or a long thread can never advance a prospect by itself.
     const explicitContactBoundary = analysisJson.contact_status === "do_not_contact";
@@ -667,8 +685,10 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
           matchScore: scoreForDecision(`${c.content || ""} ${c.trigger_phrases || ""}`, c._decisionSemantic ? (c.relevance_score || 0) / 100 : 0),
         })).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-        replyTopPrinciples = sourceBalancedTake(decisionPrinciples, 2, 32);
-        replyTopChunks = sourceBalancedTake(decisionChunks, 3, 28);
+        // Keep the second pass tightly focused on the diagnosed moment. A huge
+        // context set lets broad material overpower the exact sales gap.
+        replyTopPrinciples = sourceBalancedTake(decisionPrinciples, 1, 8);
+        replyTopChunks = sourceBalancedTake(decisionChunks, 1, 10);
         replyPrinciplesText = replyTopPrinciples.length
           ? replyTopPrinciples.map((p: any) => {
               const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : p.source_name;
@@ -750,7 +770,7 @@ Use SPIN only as a silent diagnostic. question_needed=${Boolean(analysisJson.que
 
     const modeInstruction = activeThreadType === "expert"
       ? `MODE: EXPERT. Respond as the trusted expert/consultant. Diagnose precisely, give useful clarity, handle the objection directly, and recommend the clearest next step. Do not pretend to be a peer who personally lived every detail.`
-      : `MODE: FRIEND. Respond as a warm peer using only the workspace's approved identity, real story and offer truth. Do not pitch early. At stage=offer, ask permission before explaining what helped. At stage=close, make the concrete approved handoff using LINKED_EXPERT_CONTEXT and the approved referral URL. Never invent an expert, destination, proof, price, purchase or personal result.`;
+      : `MODE: FRIEND. Respond as a warm peer using only the workspace's approved identity, real story and offer truth. Follow Intent -> Logical Certainty -> Emotional Certainty -> Pitch -> Handoff without losing earlier context. At stage=pitch, recap their own context and ask permission before explaining what helped. At stage=handoff, make the concrete approved handoff using LINKED_EXPERT_CONTEXT and the approved referral URL. Never invent an expert, destination, proof, price, purchase or personal result.`;
 
     const replySystemPrompt = `You are an evidence-grounded DM reply generator for social media sales conversations. Use the user's approved identity, offer truth, verified result evidence and uploaded sales knowledge. Choose the smallest effective technique for the current moment. Never pressure a poor-fit prospect and never present an inference as a fact.
 
@@ -793,6 +813,7 @@ FRIEND PERSONA + OFFER TRUTH RULES:
 - Current prospect memory belongs only to this person. Never attribute another prospect's personal fact, result, family detail, desire or objection to them.
 - Workspace audience signals are anonymous recurring patterns, not proof about this person. The current conversation always wins.
 - If contact_status=do_not_contact, write one brief respectful acknowledgement with no question, persuasion, follow-up promise, offer, link or referral. If contact_status=not_now, do not push an expert; leave the door open calmly.
+- In this digital-marketing context, sales may mean first sale, more sales, consistent sales, or scalable sales. Preserve that exact level. Never congratulate one sale as though the prospect has reached consistency, and never assume someone wants help unless their words support it.
 
 TONE: Warm, human, calm, confident, relatable, NOT needy. Like a friend who's been through the same struggle.
 
@@ -827,6 +848,7 @@ VARIANT RULES:
 - Variant 3 (casual): Shortest natural version. It may contain no question and no framework.
 
 KNOWLEDGE GROUNDING: When a variant uses a retrieved principle, cite its exact principle and source in metadata. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES; never invent.
+- At logical_certainty, emotional_certainty, or pitch with an active sales gap, the primary variant MUST apply the single strongest retrieved sales principle internally and cite it in metadata. The visible message must still sound like a friend, never a lesson or framework recital.
 - When knowledge_need="none" or a simple human response is best, set cited_principle_name and cited_source_name to null. Do not force a framework into the visible message.
 - Prefer the most relevant source for each variant. Diversity is secondary to relevance and truth.
 - Do NOT keep defaulting to OBJECTION CRUSHER or Go Pro. Pick the principle whose actual lesson best matches the latest prospect message and buyer psychology.

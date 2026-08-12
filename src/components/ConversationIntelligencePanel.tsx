@@ -14,7 +14,7 @@ import {
 
 export interface ConversationAnalysis {
   warmth_score: number;
-  stage: "opener" | "rapport" | "pain" | "offer" | "close";
+  stage: "intent" | "logical_certainty" | "emotional_certainty" | "pitch" | "handoff";
   prospect_psychology: string;
   pain_expressed: boolean;
   pain_summary: string | null;
@@ -55,11 +55,28 @@ const moveLabels: Record<string, string> = {
 };
 
 const stageColors: Record<string, string> = {
-  opener: "bg-blue-500/15 text-blue-700 border-blue-500/30 dark:text-blue-400",
-  rapport: "bg-cyan-500/15 text-cyan-700 border-cyan-500/30 dark:text-cyan-400",
-  pain: "bg-amber-500/15 text-amber-700 border-amber-500/30 dark:text-amber-400",
-  offer: "bg-violet-500/15 text-violet-700 border-violet-500/30 dark:text-violet-400",
-  close: "bg-emerald-500/15 text-emerald-700 border-emerald-500/30 dark:text-emerald-400",
+  intent: "bg-blue-500/15 text-blue-700 border-blue-500/30 dark:text-blue-400",
+  logical_certainty: "bg-cyan-500/15 text-cyan-700 border-cyan-500/30 dark:text-cyan-400",
+  emotional_certainty: "bg-amber-500/15 text-amber-700 border-amber-500/30 dark:text-amber-400",
+  pitch: "bg-violet-500/15 text-violet-700 border-violet-500/30 dark:text-violet-400",
+  handoff: "bg-emerald-500/15 text-emerald-700 border-emerald-500/30 dark:text-emerald-400",
+};
+
+const normalizeCertaintyStage = (value?: string): keyof typeof stageColors => {
+  const stage = String(value || "").toLowerCase().replace(/[\s-]+/g, "_");
+  if (["handoff", "close", "closing", "decision"].includes(stage)) return "handoff";
+  if (["pitch", "offer", "solution", "referral"].includes(stage)) return "pitch";
+  if (["emotional_certainty", "need_payoff", "future_pacing"].includes(stage)) return "emotional_certainty";
+  if (["logical_certainty", "pain", "problem", "implication"].includes(stage)) return "logical_certainty";
+  return "intent";
+};
+
+const certaintyStageLabels: Record<keyof typeof stageColors, string> = {
+  intent: "Intent",
+  logical_certainty: "Logical Certainty",
+  emotional_certainty: "Emotional Certainty",
+  pitch: "Pitch",
+  handoff: "Handoff",
 };
 
 const warmthColor = (score: number) => {
@@ -124,6 +141,7 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
   if (!prospectId) return null;
 
   const currentSpinIdx = spinStepIndex(analysis?.spin_stage);
+  const displayStage = normalizeCertaintyStage(analysis?.stage);
 
   return (
     <div className="border-t bg-muted/20">
@@ -137,8 +155,8 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
             Intelligence
           </span>
           {analysis && (
-            <Badge variant="outline" className={`text-[10px] px-1.5 py-0 border ${stageColors[analysis.stage]}`}>
-              {analysis.stage} · {analysis.warmth_score}°
+            <Badge variant="outline" className={`text-[10px] px-1.5 py-0 border ${stageColors[displayStage]}`}>
+              {certaintyStageLabels[displayStage]} · {analysis.warmth_score}°
             </Badge>
           )}
           {analysis?.objection_detected && analysis.objection_bucket && (
@@ -183,7 +201,7 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
                   <div className="flex items-center gap-1.5">
                     <Target className="h-3.5 w-3.5 text-muted-foreground" />
                     <span className="text-xs font-medium">Stage</span>
-                    <Badge variant="outline" className={`text-[10px] ml-auto px-1.5 py-0 border ${stageColors[analysis.stage]}`}>{analysis.stage}</Badge>
+                    <Badge variant="outline" className={`text-[10px] ml-auto px-1.5 py-0 border ${stageColors[displayStage]}`}>{certaintyStageLabels[displayStage]}</Badge>
                   </div>
                   <p className="text-[11px] text-muted-foreground">{analysis.stage_reason}</p>
                 </Card>

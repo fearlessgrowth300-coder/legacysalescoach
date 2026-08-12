@@ -59,6 +59,15 @@ type ProcessedScreenshot = {
 
 const SCREENSHOT_TRANSCRIPT_MARKER = "--- SCREENSHOT TRANSCRIPT ---";
 
+const friendStageDisplayLabel = (value?: string | null) => {
+  const stage = String(value || "").toLowerCase().replace(/[\s_-]+/g, "");
+  if (["handoff", "close", "closing", "decision"].includes(stage)) return "handoff";
+  if (["pitch", "offer", "solution", "presenting", "referral"].includes(stage)) return "pitch";
+  if (["emotionalcertainty", "needpayoff", "futurepacing"].includes(stage)) return "emotional certainty";
+  if (["logicalcertainty", "pain", "paindiscovery", "problem", "implication"].includes(stage)) return "logical certainty";
+  return "intent";
+};
+
 const parseTranscriptMessages = (text: string): ScreenshotMessage[] => {
   const messages: ScreenshotMessage[] = [];
   for (const rawLine of text.split(/\r?\n/)) {
@@ -1110,7 +1119,7 @@ export default function Chats() {
           user_id: user!.id,
           workspace_id: activeWorkspace.id,
           source_type: "conversation",
-          category: conversationStage === "offer" ? "closing_techniques" : "approved_reply",
+          category: conversationStage === "pitch" || conversationStage === "handoff" ? "closing_techniques" : "approved_reply",
           content: `PROSPECT: "${(lastInbound?.content || "").substring(0, 500)}"\nAPPROVED REPLY: "${suggestion.text.substring(0, 500)}"\nFramework: ${suggestion.frameworkUsed || "natural conversation"}`,
           brain_type: currentThreadType,
           trigger_phrases: `${conversationStage || selectedProspect?.conversation_stage || "general"}, approved, ${currentThreadType}`,
@@ -1626,7 +1635,10 @@ export default function Chats() {
                         {prospect.reply_mode === "expert" ? <Briefcase className="h-3 w-3 text-blue-500" /> : <Heart className="h-3 w-3 text-pink-500" />}
                       </div>
                       <p className="text-xs text-muted-foreground truncate">
-                        {(prospect as any).instagram_username ? `@${(prospect as any).instagram_username} · ` : ""}{prospect.conversation_stage?.replace(/_/g, " ")}
+                        {(prospect as any).instagram_username ? `@${(prospect as any).instagram_username} · ` : ""}
+                        {prospect.reply_mode === "expert"
+                          ? prospect.conversation_stage?.replace(/_/g, " ")
+                          : friendStageDisplayLabel(prospect.conversation_stage)}
                       </p>
                     </div>
                     {prospect.outcome !== "active" && (
@@ -1783,17 +1795,18 @@ export default function Chats() {
               </div>
               {/* Stage Progress Bar */}
               {(() => {
-                const stages = ["opener", "rapport", "pain", "offer", "close"];
-                const stageLabels: Record<string, string> = { opener: "Opener", rapport: "Rapport", pain: "Pain", offer: "Offer", close: "Close" };
+                const stages = ["intent", "logical_certainty", "emotional_certainty", "pitch", "handoff"];
+                const stageLabels: Record<string, string> = { intent: "Intent", logical_certainty: "Logical certainty", emotional_certainty: "Emotional certainty", pitch: "Pitch", handoff: "Handoff" };
                 const currentStageRaw = (conversationStage || selectedProspect?.conversation_stage || "first_contact").toLowerCase().replace(/[\s_-]/g, "");
                 const stageMap: Record<string, string> = {
-                  firstcontact: "opener", opener: "opener", continuing: "rapport",
-                  rapport: "rapport", rapportbuilding: "rapport",
-                  pain: "pain", paindiscovery: "pain", problem: "pain",
-                  offer: "offer", solution: "offer", presenting: "offer",
-                  close: "close", closing: "close", ghosted: "rapport",
+                  firstcontact: "intent", opener: "intent", intent: "intent", continuing: "intent",
+                  rapport: "intent", rapportbuilding: "intent", ghosted: "intent",
+                  pain: "logical_certainty", paindiscovery: "logical_certainty", problem: "logical_certainty", logicalcertainty: "logical_certainty",
+                  offer: "pitch", solution: "pitch", presenting: "pitch", pitch: "pitch",
+                  emotionalcertainty: "emotional_certainty", needpayoff: "emotional_certainty",
+                  close: "handoff", closing: "handoff", handoff: "handoff",
                 };
-                const activeStage = stageMap[currentStageRaw] || "opener";
+                const activeStage = stageMap[currentStageRaw] || "intent";
                 const activeIdx = stages.indexOf(activeStage);
                 return (
                   <div className="flex items-center gap-1">
@@ -1804,7 +1817,7 @@ export default function Chats() {
                         <div key={stage} className="flex items-center flex-1">
                           <div className="flex flex-col items-center flex-1">
                             <div className={`h-2 w-full rounded-full transition-all ${isCompleted ? "bg-primary" : isActive ? "bg-primary/70 animate-pulse" : "bg-muted-foreground/20"}`} />
-                            <span className={`text-[10px] mt-1 font-medium ${isActive ? "text-primary" : isCompleted ? "text-primary/70" : "text-muted-foreground/50"}`}>
+                            <span className={`min-h-6 text-center leading-tight text-[9px] mt-1 font-medium ${isActive ? "text-primary" : isCompleted ? "text-primary/70" : "text-muted-foreground/50"}`}>
                               {stageLabels[stage]}
                             </span>
                           </div>
@@ -1873,7 +1886,7 @@ export default function Chats() {
                 )}
 
                 {/* Referral warning banner */}
-                {(conversationAnalysis?.stage === "offer" || conversationAnalysis?.stage === "close") && conversationAnalysis?.pain_expressed && (
+                {(conversationAnalysis?.stage === "pitch" || conversationAnalysis?.stage === "handoff") && conversationAnalysis?.pain_expressed && (
                   <ReferralWarningBanner warmthScore={conversationAnalysis.warmth_score} />
                 )}
 

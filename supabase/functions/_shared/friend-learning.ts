@@ -13,8 +13,15 @@ export type FriendProspectProfile = {
   motivation: string;
   intent: string;
   tangible_goal: string;
+  why_goal_matters: string;
+  past_experiences: string[];
   problem_gap: string;
   problem_status: string;
+  root_cause: string;
+  consequences: string;
+  need_for_change_reason: string;
+  inaction_pattern: string;
+  detailed_future_outcome: string;
   doubt_cause: string;
   certainty_gap: string;
   reply_act: string;
@@ -98,8 +105,15 @@ export function buildFriendProspectProfile(
     motivation: choose("motivation", "unknown", 300),
     intent: choose("intent", "unknown", 300),
     tangible_goal: choose("tangible_goal", "unknown", 300),
+    why_goal_matters: choose("why_goal_matters", choose("motivation", "unknown", 300), 300),
+    past_experiences: mergeLists(prior.past_experiences, next.past_experiences ?? next.previous_attempts, 16),
     problem_gap: choose("problem_gap", "unknown", 400),
     problem_status: choose("problem_status", "unclear", 80),
+    root_cause: choose("root_cause", "unknown", 400),
+    consequences: choose("consequences", "unknown", 500),
+    need_for_change_reason: choose("need_for_change_reason", "unknown", 400),
+    inaction_pattern: choose("inaction_pattern", choose("why_not_solved", "unknown", 400), 400),
+    detailed_future_outcome: choose("detailed_future_outcome", "unknown", 600),
     doubt_cause: choose("doubt_cause", "unknown", 300),
     certainty_gap: choose("certainty_gap", "unknown", 300),
     reply_act: choose("reply_act", "respond naturally", 100),
@@ -132,8 +146,15 @@ export function buildFriendLearningContext(
     `Motivation: ${cleanText(p.motivation)}`,
     `Intent: ${cleanText(p.intent)}`,
     `Tangible goal: ${cleanText(p.tangible_goal)}`,
+    `Why the goal matters: ${cleanText(p.why_goal_matters)}`,
+    `Past attempts and experience: ${cleanList(p.past_experiences, 16).join("; ") || "unknown"}`,
     `Problem/gap: ${cleanText(p.problem_gap)}`,
     `Problem status: ${cleanText(p.problem_status, "unclear")}`,
+    `Root cause: ${cleanText(p.root_cause)}`,
+    `Consequences: ${cleanText(p.consequences)}`,
+    `Why change is needed: ${cleanText(p.need_for_change_reason)}`,
+    `Inaction pattern: ${cleanText(p.inaction_pattern)}`,
+    `Detailed future outcome: ${cleanText(p.detailed_future_outcome)}`,
     `Doubt cause: ${cleanText(p.doubt_cause)}`,
     `Certainty gap: ${cleanText(p.certainty_gap)}`,
     `Recommended reply act: ${cleanText(p.reply_act, "respond naturally")}`,
@@ -178,6 +199,9 @@ export function buildFriendDecisionSearchQuery(
 ): string {
   const current = analysis || {};
   const previous = previousProfile || {};
+  const salesSignal = current.sales_conversion_signal && typeof current.sales_conversion_signal === "object"
+    ? current.sales_conversion_signal as Record<string, unknown>
+    : {};
   const list = (key: string) => mergeLists(previous[key], current[key], 8).join(", ") || "unknown";
   const value = (key: string, fallback = "unknown") =>
     informativeText(current[key], 420) || informativeText(previous[key], 420) || fallback;
@@ -185,12 +209,19 @@ export function buildFriendDecisionSearchQuery(
     `Latest prospect message: ${cleanText(latestMessage, "none", 900)}`,
     `Intent: ${value("intent")}`,
     `Tangible desired result: ${value("tangible_goal", value("motivation"))}`,
+    `Why that goal matters: ${value("why_goal_matters", value("motivation"))}`,
+    `Past attempts and actual experience: ${list("past_experiences")}`,
     `Experience level: ${value("experience_level")}`,
     `Sales status: ${value("sales_status")}`,
     `Mentor or support status: ${value("mentor_status")}`,
     `Current strategy: ${value("current_strategy")}`,
     `Problem and gap: ${value("problem_gap", list("pain_points"))}`,
     `Problem status: ${value("problem_status", "unclear")}`,
+    `Likely root cause: ${value("root_cause")}`,
+    `Consequences of the unresolved problem: ${value("consequences")}`,
+    `Need-for-change recognition: ${value("need_for_change_reason")}`,
+    `Inaction thought pattern: ${value("inaction_pattern", value("why_not_solved"))}`,
+    `Detailed future outcome if solved: ${value("detailed_future_outcome")}`,
     `Doubt cause: ${value("doubt_cause")}`,
     `Missing logical certainty: ${value("certainty_gap")}`,
     `Objections: ${list("objections")}`,
@@ -198,6 +229,9 @@ export function buildFriendDecisionSearchQuery(
     `Conversation stage: ${value("stage", value("questioningPattern", "unknown"))}`,
     `Best conversational act: ${value("reply_act", value("recommended_move", "respond naturally"))}`,
     `Knowledge needed: ${value("knowledge_need", "none or one relevant principle")}`,
+    `Sales conversion objective: ${salesSignal.activeSalesGap === true ? "diagnose and resolve the prospect's own active sales gap" : "follow the evidenced conversation objective"}`,
+    `Known sales bottleneck: ${informativeText(salesSignal.bottleneck, 80) || "unknown"}`,
+    `Retrieval instruction: ${salesSignal.activeSalesGap === true ? "retrieve the most applicable sales psychology, discovery, gap, objection, or permission-transition passage for this exact bottleneck" : "retrieve only knowledge relevant to the latest message"}`,
     `Contact boundary: ${value("contact_status", "active")}`,
   ].join("\n");
   return query.length <= maxLength ? query : query.slice(0, maxLength);

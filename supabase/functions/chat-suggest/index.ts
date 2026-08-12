@@ -7,6 +7,7 @@ import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
+  applyDeterministicSalesSignals,
   buildFriendQualityValidatorPrompt,
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
@@ -290,6 +291,8 @@ ABSOLUTE RULES:
 - NEVER say "according to the knowledge base" and NEVER convert book knowledge into a fake personal story.
 - NEVER mention other workspaces, other niches, or conversations from other prospects
 - When the prospect shares pain, understand it before choosing a move. Do not manufacture urgency or intensify distress.
+- When the prospect explicitly says their own problem is no sales, inconsistent sales, or needing more sales, this is an active sales gap. Use the single strongest exact-moment sales principle to diagnose the bottleneck or make a permission-based transition; never continue with generic rapport.
+- Keep the result level exact: first sale, more sales, consistent sales, and scalable sales are different goals. One sale does not prove consistency, but it is not a problem unless the prospect expresses a remaining gap.
 - Your goal is clarity and fit: help a suitable prospect choose a truthful next step without pressure.
 ` : `
 
@@ -433,6 +436,14 @@ ${personaApproved ? (workspace?.forbidden_claims || "Never invent purchases, inc
 8. Respect a no. Do not keep pushing or disguise a pitch as friendship.
 9. Use the Brain as strategy, never as fabricated biography.
 10. Prefer one natural next objective and zero or one question per reply.
+
+CERTAINTY FUNNEL (mandatory internal progression):
+- Intent: surface goal -> why it matters -> previous attempts -> actual experience -> their explanation -> likely root cause.
+- Logical Certainty: goal -> reason -> obstacle -> root cause -> consequences -> unresolved gap -> their own need for change.
+- Emotional Certainty: inaction pattern -> empathetic mirror -> detailed future outcome -> permission transition.
+- Pitch: recap the complete conversation -> confirm the gap -> connect the desired outcome -> position the relevant approved expert help -> ask permission.
+- Handoff: after acceptance, provide the approved expert/team destination and one concrete next step.
+Carry every established fact forward. Never restart discovery, repeat an answered question, or jump to Pitch from a surface-level goal. A refusal exits the funnel safely; nobody is pressured through it.
 
 OBJECTION PATTERN:
 - Money: clarify whether the issue is affordability, timing, value, or trust; use only the approved price and evidence.
@@ -1092,9 +1103,9 @@ serve(async (req) => {
             role: "system",
             content: `Analyze a peer-to-peer Friend conversation before Knowledge Base retrieval. Return JSON only. Do not write the reply.
 
-Return: {"intent":"what they are trying to protect, prove, avoid or achieve","tangible_goal":"concrete desired result or unknown","experience_level":"evidence-based level","sales_status":"explicit result status or unknown","mentor_status":"explicit support status or unknown","current_strategy":"explicit approach or unknown","problem_gap":"distance between current and desired state","problem_status":"active|past_resolved|unclear|none","pain_points":[],"objections":[],"doubt_cause":"why they hesitate","certainty_gap":"what must become logically clear","motivation":"why it matters","readiness":"not_ready|exploring|problem_aware|wants_help|accepted_referral","stage":"opener|rapport|pain|offer|close","reply_act":"relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop","question_needed":false,"knowledge_need":"the exact principle/evidence needed, or none","contact_status":"active|not_now|do_not_contact|not_a_fit","next_best_action":"one natural peer action","learning_confidence":0,"evidence":[]}
+Return: {"intent":"what they are trying to protect, prove, avoid or achieve","tangible_goal":"concrete desired result or unknown","why_goal_matters":"why it matters","past_experiences":[],"experience_level":"evidence-based level","sales_status":"explicit result status or unknown","mentor_status":"explicit support status or unknown","current_strategy":"explicit approach or unknown","problem_gap":"distance between current and desired state","problem_status":"active|past_resolved|unclear|none","root_cause":"their explanation and likely root cause","consequences":"what leaving it unresolved costs","need_for_change_reason":"their own recognition that change is needed","inaction_pattern":"why they have not solved it","detailed_future_outcome":"specific lived outcome if solved","pain_points":[],"objections":[],"doubt_cause":"why they hesitate","certainty_gap":"what must become logically clear","motivation":"why it matters","readiness":"not_ready|exploring|problem_aware|wants_help|accepted_referral","stage":"intent|logical_certainty|emotional_certainty|pitch|handoff","reply_act":"relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop","question_needed":false,"knowledge_need":"the exact principle/evidence needed, or none","contact_status":"active|not_now|do_not_contact|not_a_fit","next_best_action":"one natural peer action","learning_confidence":0,"evidence":[]}
 
-Choose a question only when one missing answer is genuinely necessary. A real friend often relates, shares, answers, validates or observes without asking anything. The problem must belong to this prospect, not merely their audience, and problem_status must distinguish an active gap from a resolved historical struggle. An explicit request to stop means reply_act=stop and contact_status=do_not_contact. Never treat a boundary as an objection. Use only conversation evidence and preserved CURRENT PROSPECT MEMORY.`
+Choose a question only when one missing answer is genuinely necessary. Follow Intent -> Logical Certainty -> Emotional Certainty -> Pitch -> Handoff and preserve prior answers. Do not pitch from a surface goal. A real friend often relates, shares, answers, validates or observes without asking anything. The problem must belong to this prospect, not merely their audience. An explicit first-person lack of sales, inconsistent sales, or desire for more sales is an active sales gap: identify traffic, offer, messaging, conversion, follow-up, or consistency, then retrieve accordingly. At pitch, recap the prospect's complete context and ask permission. At handoff, give the approved destination only after acceptance. A clear stop means reply_act=stop and contact_status=do_not_contact. Never treat a boundary as an objection.`
           },
           {
             role: "user",
@@ -1116,6 +1127,22 @@ Choose a question only when one missing answer is genuinely necessary. A real fr
       } else {
         console.warn("[chat-suggest] Friend decision analysis failed", decisionResponse.status);
       }
+    }
+
+    if (activeThreadType === "friend") {
+      const prospectOnlyHistory = speakerMessages
+        .filter((item: any) => item.direction === "inbound")
+        .map((item: any) => String(item.content || ""))
+        .join("\n");
+      friendDecisionAnalysis = applyDeterministicSalesSignals(
+        friendDecisionAnalysis,
+        message,
+        prospectOnlyHistory,
+      );
+      friendDecisionAnalysis = {
+        ...friendDecisionAnalysis,
+        ...buildFriendProspectProfile(friendDecisionAnalysis, existingFriendProfile),
+      };
     }
 
     const decisionSearchQuery = activeThreadType === "friend"
@@ -1236,14 +1263,16 @@ Choose a question only when one missing answer is genuinely necessary. A real fr
       return { ...chunk, matchScore: scoreAgainstMessage(text, sem) };
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-    const workspaceFirst = scoredWorkspaceChunks.slice(0, 20);
+    const workspaceFirst = scoredWorkspaceChunks.slice(0, activeThreadType === "friend" ? 4 : 20);
 
     // Dynamic retrieval caps: scale with total KB items
     const kbCount = kbItems?.length || 0;
-    const chunksCap = Math.min(Math.max(35, kbCount * 8), 150);
-    const principlesCap = Math.min(Math.max(60, kbCount * 10), 200);
+    const chunksCap = activeThreadType === "friend" ? 14 : Math.min(Math.max(35, kbCount * 8), 150);
+    const principlesCap = activeThreadType === "friend" ? 10 : Math.min(Math.max(60, kbCount * 10), 200);
 
-    const remainingSlots = Math.max(chunksCap - workspaceFirst.length, 15);
+    const remainingSlots = activeThreadType === "friend"
+      ? Math.max(chunksCap - workspaceFirst.length, 8)
+      : Math.max(chunksCap - workspaceFirst.length, 15);
     const topChunks = [...workspaceFirst, ...scoredCoreChunks.slice(0, remainingSlots)].slice(0, chunksCap);
 
     // Score EVERY principle against the incoming message. No rotation, no shuffle.
@@ -1254,7 +1283,7 @@ Choose a question only when one missing answer is genuinely necessary. A real fr
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
     // Keep diverse sources (≤2 per source) but ordered strictly by message relevance.
-    const topPrinciples = sourceBalancedTake(scoredPrinciples, 2, principlesCap);
+    const topPrinciples = sourceBalancedTake(scoredPrinciples, activeThreadType === "friend" ? 1 : 2, principlesCap);
 
     // Build a unique-source roster ranked by relevance — one entry per source,
     // showing the BEST-MATCHING principle + a snippet so the AI can ground the
@@ -1297,6 +1326,7 @@ Choose a question only when one missing answer is genuinely necessary. A real fr
           return `• ${sp.principle_name}: ${sp.what_i_learned}\n  How to apply: ${sp.how_to_apply}\n  (From: "${realSource}")`;
         }).join("\n");
     }
+    const exactMomentKnowledge = brainChunksFormatted;
 
     if (brainInsights && brainInsights.length > 0) {
       brainChunksFormatted += "\n\n[LEARNED INSIGHTS FROM THIS WORKSPACE'S CONVERSATIONS]:\n" + 
@@ -1462,11 +1492,15 @@ The "whyThisWorks" should explain what you changed and why it's better.`;
     const friendJsonFormat = `
 === FRIEND CONVERSATION ANALYSIS (run silently before writing) ===
 Read the complete conversation, newest message, profile/screenshot evidence, approved workspace truth, and the precomputed FRIEND DECISION ANALYSIS. Treat the precomputed reply_act and question_needed as locked unless they are absent. Determine:
-1. The prospect's evidence-gated current stage: opener, rapport, pain, offer, or close.
+1. The prospect's evidence-gated current stage: intent, logical_certainty, emotional_certainty, pitch, or handoff.
 2. Their stated pain, motivation, desired result, objection, trust/readiness, and what is still unknown. Do not infer facts without evidence.
 3. Questions already answered and promises or details already shared, so nothing is repeated.
 4. The single best next objective. The objective may be empathy, a direct answer, clarification, discovery, permission, referral, or respectfully stopping.
-5. A structured prospect profile: experience level, sales status, mentor/support status, current strategy, interests, desires, pain points, objections, motivation, readiness and contact boundary.
+5. A structured prospect profile including tangible goal, why it matters, past experiences, root cause, consequences, need for change, inaction pattern, detailed future outcome, readiness and contact boundary.
+
+CERTAINTY FUNNEL: Intent = surface goal -> why it matters -> previous attempts -> actual experience -> their explanation -> likely root cause. Logical Certainty = goal -> reason -> obstacle -> root cause -> consequences -> unresolved gap -> need for change. Emotional Certainty = inaction pattern -> emotional mirror -> detailed future outcome -> permission transition. Pitch = full-context recap -> confirm gap -> connect desired outcome -> position relevant approved expert help -> ask permission. Handoff = accepted permission -> concrete approved expert/team destination. Never lose an earlier answer or cut the process off halfway merely because the chat is warm.
+
+SALES CONVERSION RULE: An explicit first-person sales gap is not a reason for more generic rapport. Use the precomputed sales signal and the strongest retrieved sales psychology to diagnose the real bottleneck. Once the gap and desired result are clear, transition toward permission to explain what helped; when help is explicitly requested, ask permission now. Keep the strategy invisible in the ready-to-send text.
 
 Treat "made one sale", "has a mentor but no results", "doing it alone", "tried before", and "already successful" as different states. Use only explicit evidence. Current prospect memory may preserve earlier facts, but newer conversation evidence can correct them. Workspace audience signals are anonymous hints, never facts about this individual.
 
@@ -1505,8 +1539,15 @@ Return valid JSON with this exact compatible shape:
     "motivation": "evidenced motivation or unknown",
     "intent": "what they are trying to protect, prove, avoid or achieve",
     "tangible_goal": "concrete desired result or unknown",
+    "why_goal_matters": "why the tangible goal matters or unknown",
+    "past_experiences": [],
     "problem_gap": "distance between current and desired state",
     "problem_status": "active|past_resolved|unclear|none",
+    "root_cause": "their explanation and likely root cause or unknown",
+    "consequences": "impact of leaving the problem unresolved or unknown",
+    "need_for_change_reason": "their own reason the problem must change or unknown",
+    "inaction_pattern": "thought pattern behind why they have not solved it or unknown",
+    "detailed_future_outcome": "specific future life/business outcome if solved or unknown",
     "doubt_cause": "why they hesitate or unknown",
     "certainty_gap": "what must become logically clear or unknown",
     "reply_act": "relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop",
@@ -1700,7 +1741,7 @@ ${jsonFormat}
     }
 
     const finalFriendStageResult = deriveEvidenceGatedFriendStage(
-      combinedFriendLearning || parsed,
+      structuredFriendProfile || combinedFriendLearning || parsed,
       speakerMessages.length,
     );
     if (activeThreadType === "friend") {
@@ -1718,7 +1759,7 @@ ${jsonFormat}
           { role: "system", content: buildFriendQualityValidatorPrompt("suggestions") },
           {
             role: "user",
-            content: `${finalStageDirective}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nRETRIEVED KNOWLEDGE:\n${brainChunksFormatted.substring(0, 9000)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
+            content: `${finalStageDirective}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nEXACT-MOMENT RETRIEVED KNOWLEDGE:\n${exactMomentKnowledge.substring(0, 12000)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
           },
         ],
         temperature: 0.2,
