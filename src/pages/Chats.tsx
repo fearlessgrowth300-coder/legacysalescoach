@@ -33,6 +33,7 @@ import {
   latestProspectScreenshotMessage,
   latestScreenshotTurn,
   orderedScreenshotMessages,
+  removeDuplicateConversationMessages,
   type ScreenshotMessage,
   type ScreenshotSpeaker,
 } from "@/lib/screenshot-conversation";
@@ -530,7 +531,19 @@ export default function Chats() {
     }
 
     if (rows.length > 0) {
-      const { error } = await supabase.from("chat_messages").insert(rows);
+      const { data: existingRows } = await supabase
+        .from("chat_messages")
+        .select("direction, content")
+        .eq("user_id", user.id)
+        .eq("prospect_id", prospectId)
+        .eq("thread_type", currentThreadType);
+      const existingKeys = new Set((existingRows || []).map((row: any) =>
+        `${row.direction}:${String(row.content || "").replace(/\s+/g, " ").trim().toLowerCase()}`,
+      ));
+      const uniqueRows = removeDuplicateConversationMessages(rows)
+        .filter((row) => !existingKeys.has(`${row.direction}:${String(row.content || "").replace(/\s+/g, " ").trim().toLowerCase()}`));
+      if (uniqueRows.length === 0) return;
+      const { error } = await supabase.from("chat_messages").insert(uniqueRows);
       if (error) throw error;
     }
   };
@@ -981,7 +994,10 @@ export default function Chats() {
     }
 
     if (!pendingScreenshot) {
-      await supabase.from("chat_messages").insert({
+      const latestInbound = messages?.filter((item) => item.direction === "inbound").pop();
+      const isSameInbound = latestInbound?.content?.replace(/\s+/g, " ").trim().toLowerCase()
+        === requestMessage.replace(/\s+/g, " ").trim().toLowerCase();
+      if (!isSameInbound) await supabase.from("chat_messages").insert({
         user_id: user!.id,
         prospect_id: selectedProspectId,
         content: requestMessage,
@@ -1049,6 +1065,14 @@ export default function Chats() {
 
   const handleUseSuggestion = async (suggestion: Suggestion) => {
     if (!selectedProspectId) return;
+    const latestOutbound = messages?.filter((item) => item.direction === "outbound").pop();
+    const alreadyRecorded = latestOutbound?.content?.replace(/\s+/g, " ").trim().toLowerCase()
+      === suggestion.text.replace(/\s+/g, " ").trim().toLowerCase();
+    if (alreadyRecorded) {
+      setSuggestions([]);
+      toast.info("This response is already recorded.");
+      return;
+    }
     const { error: messageError } = await supabase.from("chat_messages").insert({
       user_id: user!.id,
       prospect_id: selectedProspectId,
@@ -1836,6 +1860,12 @@ export default function Chats() {
               messageCount={messages?.length || 0}
               analysis={conversationAnalysis}
               isLoading={isAnalyzingIntel}
+              threadType={currentThreadType}
+              onAnalysisComplete={(analysis) => {
+                setConversationAnalysis(analysis);
+                if (analysis.stage) setConversationStage(analysis.stage);
+                queryClient.invalidateQueries({ queryKey: ["prospects"] });
+              }}
             />
 
             {/* Messages */}

@@ -10,6 +10,19 @@ export type ScreenshotMessage = {
   order?: number;
 };
 
+export const conversationMessageKey = (direction: string, text: string) =>
+  `${direction}:${String(text || "").replace(/\s+/g, " ").trim().toLowerCase()}`;
+
+export function removeDuplicateConversationMessages<T extends { direction: string; content: string }>(messages: T[]) {
+  const seen = new Set<string>();
+  return messages.filter((message) => {
+    const key = conversationMessageKey(message.direction, message.content);
+    if (!message.content?.trim() || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function orderedScreenshotMessages(messages: ScreenshotMessage[] | null | undefined) {
   return (messages || [])
     .filter((message) => Boolean(message?.text?.trim()))

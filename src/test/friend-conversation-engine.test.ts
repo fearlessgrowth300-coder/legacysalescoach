@@ -268,6 +268,11 @@ describe("Friend conversation engine", () => {
     const analyzeConversation = readFileSync("supabase/functions/analyze-conversation/index.ts", "utf8");
     expect(analyzeConversation).toContain("applyDeterministicCommercialRealityCheck");
     expect(analyzeConversation).toContain("friendStageToDatabase(certaintyStage.stage)");
+    expect(analyzeConversation).toContain('.eq("thread_type", activeThreadType)');
+    expect(analyzeConversation).toContain("buildFriendProspectProfile(analysis, existingFriendProfile)");
+    expect(analyzeConversation).toContain("PROSPECT_EVIDENCE_LEDGER");
+    expect(chatSuggest).toContain("buildProspectEvidenceLedger(history)");
+    expect(generateReply).toContain("buildProspectEvidenceLedger(history)");
     expect(chatsUi).toContain('const stages = ["intent", "logical_certainty", "emotional_certainty", "pitch", "handoff"]');
   });
 });

@@ -37,6 +37,11 @@ export interface ConversationAnalysis {
   trust_words_detected?: string[];
   resistance_words_detected?: string[];
   prospect_decision_language?: string | null;
+  earliest_missing_checkpoint?: string;
+  stage_missing?: string[];
+  stage_evidence?: Record<string, boolean>;
+  result_verification_status?: string;
+  next_best_action?: string;
 }
 
 interface ConversationIntelligencePanelProps {
@@ -44,6 +49,8 @@ interface ConversationIntelligencePanelProps {
   messageCount: number;
   analysis?: ConversationAnalysis | null;
   isLoading?: boolean;
+  threadType?: "friend" | "expert";
+  onAnalysisComplete?: (analysis: ConversationAnalysis) => void;
 }
 
 const moveLabels: Record<string, string> = {
@@ -114,7 +121,7 @@ const spinStepIndex = (stage?: string | null): number => {
   return -1;
 };
 
-export default function ConversationIntelligencePanel({ prospectId, messageCount, analysis: externalAnalysis, isLoading: externalLoading }: ConversationIntelligencePanelProps) {
+export default function ConversationIntelligencePanel({ prospectId, messageCount, analysis: externalAnalysis, isLoading: externalLoading, threadType = "friend", onAnalysisComplete }: ConversationIntelligencePanelProps) {
   const [manualAnalysis, setManualAnalysis] = useState<ConversationAnalysis | null>(null);
   const [isManualLoading, setIsManualLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
@@ -126,10 +133,11 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
     if (!prospectId) return;
     setIsManualLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("analyze-conversation", { body: { prospectId } });
+      const { data, error } = await supabase.functions.invoke("analyze-conversation", { body: { prospectId, threadType } });
       if (error) throw error;
       if (data.error) throw new Error(data.error);
       setManualAnalysis(data);
+      onAnalysisComplete?.(data);
     } catch (e: any) {
       console.error("Analysis error:", e);
       toast.error(e.message || "Failed to analyze conversation");
@@ -213,6 +221,25 @@ export default function ConversationIntelligencePanel({ prospectId, messageCount
                   <p className="text-[11px] text-muted-foreground">{analysis.prospect_psychology}</p>
                 </Card>
               </div>
+
+              {analysis.earliest_missing_checkpoint && analysis.earliest_missing_checkpoint !== "complete" && (
+                <Card className="p-2.5 space-y-1.5 border-primary/25 bg-primary/5">
+                  <div className="flex items-center gap-1.5">
+                    <Crosshair className="h-3.5 w-3.5 text-primary" />
+                    <span className="text-xs font-medium">Next required checkpoint</span>
+                    <Badge variant="outline" className="ml-auto text-[10px] px-1.5 py-0 border-primary/30 text-primary">
+                      {analysis.earliest_missing_checkpoint.replace(/_/g, " ")}
+                    </Badge>
+                  </div>
+                  {analysis.next_best_action && <p className="text-[11px] text-muted-foreground">{analysis.next_best_action}</p>}
+                  {analysis.stage_missing && analysis.stage_missing.length > 0 && (
+                    <p className="text-[10px] text-muted-foreground">Still missing: {analysis.stage_missing.join("; ")}</p>
+                  )}
+                  {analysis.result_verification_status === "unverified" && (
+                    <p className="text-[10px] font-medium text-amber-700 dark:text-amber-400">Commercial result is not verified yet.</p>
+                  )}
+                </Card>
+              )}
 
               {/* SPIN Stage Indicator */}
               {analysis.spin_stage && (
