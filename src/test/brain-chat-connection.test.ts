@@ -72,13 +72,13 @@ describe("AI Chat connection helpers", () => {
 
   it("routes direct Gemini calls through current chat and embedding models", () => {
     expect(GEMINI_CHAT_MODELS).toEqual({
-      fast: "gemini-3.5-flash-lite",
-      balanced: "gemini-3.6-flash",
-      reasoning: "gemini-3.6-flash",
-      vision: "gemini-3.6-flash",
+      fast: "gemini-3.1-flash-lite",
+      balanced: "gemini-3.5-flash",
+      reasoning: "gemini-3.5-flash",
+      vision: "gemini-3.5-flash",
     });
     expect(GEMINI_EMBEDDING_MODEL).toBe("gemini-embedding-2");
-    expect(shouldOmitGeminiSamplingParameters("gemini", GEMINI_CHAT_MODELS.fast)).toBe(true);
+    expect(shouldOmitGeminiSamplingParameters("gemini", GEMINI_CHAT_MODELS.fast)).toBe(false);
     expect(shouldOmitGeminiSamplingParameters("gemini", GEMINI_CHAT_MODELS.balanced)).toBe(true);
     expect(shouldOmitGeminiSamplingParameters("gemini", "gemini-2.5-flash")).toBe(false);
     expect(shouldOmitGeminiSamplingParameters("lovable", "google/gemini-3.6-flash")).toBe(false);
