@@ -15,6 +15,11 @@
 
 import { getLatestUserApiKey } from "./api-key-utils.ts";
 import { coerceEmbeddingDimensions, SEARCH_EMBEDDING_DIMENSIONS } from "./embedding-vector.ts";
+import {
+  GEMINI_CHAT_MODELS,
+  GEMINI_EMBEDDING_MODEL,
+  shouldOmitGeminiSamplingParameters,
+} from "./gemini-models.ts";
 
 export type ModelTier = "fast" | "balanced" | "reasoning";
 
@@ -88,9 +93,9 @@ export async function resolveAiProvider(supabase: any, userId: string | null): P
       name: "gemini",
       chatUrl: `${GEMINI_BASE}/chat/completions`,
       key: found.key,
-      model: (t) => t === "reasoning" ? "gemini-2.5-flash" : t === "fast" ? "gemini-2.5-flash-lite" : "gemini-2.5-flash",
+      model: (t) => GEMINI_CHAT_MODELS[t],
       isAnthropic: false,
-      embed: { url: `${GEMINI_BASE}/embeddings`, key: found.key, model: "text-embedding-004", provider: "gemini" },
+      embed: { url: `${GEMINI_BASE}/embeddings`, key: found.key, model: GEMINI_EMBEDDING_MODEL, provider: "gemini" },
     };
   }
 
@@ -137,8 +142,10 @@ export async function aiChat(provider: AiProvider, opts: AiChatOpts): Promise<Ai
   const body: any = {
     model,
     messages: opts.messages,
-    temperature: opts.temperature ?? 0.3,
   };
+  if (!shouldOmitGeminiSamplingParameters(provider.name, model)) {
+    body.temperature = opts.temperature ?? 0.3;
+  }
   if (opts.max_tokens) body.max_tokens = opts.max_tokens;
   if (opts.response_format) body.response_format = opts.response_format;
   if (opts.tools) { body.tools = opts.tools; if (opts.tool_choice) body.tool_choice = opts.tool_choice; }
@@ -239,8 +246,14 @@ export async function aiEmbed(provider: AiProvider, text: string): Promise<numbe
   const target = provider.embed;
   if (!target?.key) return null;
   try {
-    const body: any = { model: target.model, input: (text || "").substring(0, 32000) };
-    if (target.provider === "openai") body.dimensions = 768;
+    const body: any = {
+      model: target.model,
+      input: (text || "").substring(0, 32000),
+      // OpenAI and Gemini's OpenAI-compatible embedding endpoints both accept
+      // this field. Request the database's native vector size instead of
+      // truncating Gemini's larger default after generation.
+      dimensions: SEARCH_EMBEDDING_DIMENSIONS,
+    };
     const res = await fetch(target.url, {
       method: "POST",
       headers: { Authorization: `Bearer ${target.key}`, "Content-Type": "application/json" },

@@ -10,6 +10,11 @@ import {
 } from "../../supabase/functions/brain-chat/lib";
 import { PROVIDER_MODEL } from "@/hooks/useActiveAiModel";
 import {
+  GEMINI_CHAT_MODELS,
+  GEMINI_EMBEDDING_MODEL,
+  shouldOmitGeminiSamplingParameters,
+} from "../../supabase/functions/_shared/gemini-models";
+import {
   isSimpleBrainChatGreeting,
   simpleBrainChatGreetingResponse,
 } from "@/lib/brain-chat-small-talk";
@@ -61,7 +66,22 @@ describe("AI Chat connection helpers", () => {
   it("shows the same generation models used by the backend", () => {
     expect(PROVIDER_MODEL.lovable.model).toBe("google/gemini-2.5-flash");
     expect(PROVIDER_MODEL.openai.model).toBe("gpt-4o");
+    expect(PROVIDER_MODEL.gemini.model).toBe(GEMINI_CHAT_MODELS.balanced);
     expect(PROVIDER_MODEL.anthropic.model).toBe("claude-opus-4-8");
+  });
+
+  it("routes direct Gemini calls through current chat and embedding models", () => {
+    expect(GEMINI_CHAT_MODELS).toEqual({
+      fast: "gemini-3.5-flash-lite",
+      balanced: "gemini-3.6-flash",
+      reasoning: "gemini-3.6-flash",
+      vision: "gemini-3.6-flash",
+    });
+    expect(GEMINI_EMBEDDING_MODEL).toBe("gemini-embedding-2");
+    expect(shouldOmitGeminiSamplingParameters("gemini", GEMINI_CHAT_MODELS.fast)).toBe(true);
+    expect(shouldOmitGeminiSamplingParameters("gemini", GEMINI_CHAT_MODELS.balanced)).toBe(true);
+    expect(shouldOmitGeminiSamplingParameters("gemini", "gemini-2.5-flash")).toBe(false);
+    expect(shouldOmitGeminiSamplingParameters("lovable", "google/gemini-3.6-flash")).toBe(false);
   });
 
   it("keeps simple greetings out of the full sales-analysis pipeline", () => {
