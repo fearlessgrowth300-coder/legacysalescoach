@@ -4,6 +4,7 @@ export type FriendProspectProfile = {
   segment: string;
   experience_level: string;
   sales_status: string;
+  result_verification_status: string;
   mentor_status: string;
   current_strategy: string;
   interests: string[];
@@ -95,7 +96,10 @@ export function buildFriendProspectProfile(
   return {
     segment: choose("segment", cleanText(next.prospectType ?? prior.segment, "unknown", 120), 120),
     experience_level: choose("experience_level", "unknown", 100),
-    sales_status: choose("sales_status", "unknown", 140),
+    sales_status: cleanText(next.result_verification_status, "", 80) === "unverified"
+      ? "unknown"
+      : choose("sales_status", "unknown", 140),
+    result_verification_status: choose("result_verification_status", "unknown", 80),
     mentor_status: choose("mentor_status", "unknown", 140),
     current_strategy: choose("current_strategy", "unknown", 300),
     interests: mergeLists(prior.interests, next.interests),
@@ -137,6 +141,7 @@ export function buildFriendLearningContext(
     `Segment: ${cleanText(p.segment)}`,
     `Experience: ${cleanText(p.experience_level)}`,
     `Sales status: ${cleanText(p.sales_status)}`,
+    `Result verification: ${cleanText(p.result_verification_status)}`,
     `Mentor/support status: ${cleanText(p.mentor_status)}`,
     `Current strategy: ${cleanText(p.current_strategy)}`,
     `Interests: ${cleanList(p.interests).join(", ") || "unknown"}`,

@@ -7,7 +7,9 @@ import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
+  applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
+  applyEarliestMissingFriendCheckpoint,
   buildFriendQualityValidatorPrompt,
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
@@ -1093,7 +1095,7 @@ serve(async (req) => {
       ? { ...existingFriendProfile, reply_act: mode === "first_message" ? "relate" : "respond naturally", question_needed: false, knowledge_need: "none" }
       : null;
     if (activeThreadType === "friend" && mode !== "first_message") {
-      const decisionHistory = recentMessages.map((m: any) =>
+      const decisionHistory = speakerMessages.map((m: any) =>
         `${m.direction === "outbound" ? "FRIEND" : m.direction === "context" ? "NOTE" : "PROSPECT"}: ${m.content}`
       ).join("\n");
       const decisionResponse = await userChat(chat, {
@@ -1139,10 +1141,16 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
         message,
         prospectOnlyHistory,
       );
+      friendDecisionAnalysis = applyDeterministicCommercialRealityCheck(
+        friendDecisionAnalysis,
+        message,
+        prospectOnlyHistory,
+      );
       friendDecisionAnalysis = {
         ...friendDecisionAnalysis,
         ...buildFriendProspectProfile(friendDecisionAnalysis, existingFriendProfile),
       };
+      friendDecisionAnalysis = applyEarliestMissingFriendCheckpoint(friendDecisionAnalysis);
     }
 
     const decisionSearchQuery = activeThreadType === "friend"
@@ -1750,7 +1758,7 @@ ${jsonFormat}
       const originalSuggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
       if (originalSuggestions.length === 0) throw new Error("Reply generator returned no Friend suggestions");
       const deterministicIssues = originalSuggestions.flatMap((suggestion: any, index: number) =>
-        deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage)
+        deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {})
           .map((issue) => `suggestion ${index + 1}: ${issue}`)
       );
       const qualityResponse = await userChat(chat, {
@@ -1773,7 +1781,7 @@ ${jsonFormat}
       const repairedSuggestions = Array.isArray(qualityJson.suggestions) ? qualityJson.suggestions : [];
       if (repairedSuggestions.length !== originalSuggestions.length) throw new Error("Friend quality validator returned an incomplete suggestion set");
       const remainingIssues = repairedSuggestions.flatMap((suggestion: any, index: number) =>
-        deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage)
+        deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {})
           .map((issue) => `suggestion ${index + 1}: ${issue}`)
       );
       if (remainingIssues.length > 0) throw new Error(`Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`);

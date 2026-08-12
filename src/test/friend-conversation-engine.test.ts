@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
+  applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
+  applyEarliestMissingFriendCheckpoint,
+  detectFriendCommercialReality,
   detectFriendSalesSignal,
+  deriveEarliestMissingFriendCheckpoint,
   deriveEvidenceGatedFriendStage,
   deterministicFriendQualityIssues,
   friendStageToDatabase,
@@ -117,6 +121,113 @@ describe("Friend conversation engine", () => {
     expect(signal.explicitSalesGoal).toBe(false);
   });
 
+  it("does not confuse confidence with a verified commercial result", () => {
+    const history = [
+      "I wanted more freedom and something I could build for myself.",
+      "The biggest impact is having more control over my time and income.",
+      "I've learned a lot over the past couple of years and I'm pretty intentional about what I'm building.",
+      "Definitely learning to trust my own experience and stay focused on what I know works.",
+      "I'm pretty happy with the direction I'm heading right now.",
+    ].join("\n");
+    const signal = detectFriendCommercialReality(
+      "I'm pretty happy with the direction I'm heading right now.",
+      history,
+    );
+    expect(signal.outcomeUnknown).toBe(true);
+    expect(signal.verifiedCommercialResult).toBe(false);
+
+    const enriched = applyDeterministicCommercialRealityCheck(
+      { stage: "intent", recommended_move: "re_engage", sales_status: "doing well" },
+      "I'm pretty happy with the direction I'm heading right now.",
+      history,
+    );
+    expect(enriched.result_verification_status).toBe("unverified");
+    expect(enriched.reply_act).toBe("probe");
+    expect(enriched.question_needed).toBe(true);
+    expect(enriched.recommended_move).toBe("spin_problem");
+    expect(enriched.next_best_action).toContain("content growth, leads, or consistent sales");
+  });
+
+  it("overrides an AI-inferred success label when the transcript never verifies the result", () => {
+    const enriched = applyDeterministicCommercialRealityCheck(
+      { sales_status: "already successful", recommended_move: "re_engage" },
+      "I know what works and I'm happy with my direction.",
+      "I want control over my time and income while building my business.",
+    );
+    expect(enriched.sales_status).toBe("unknown");
+    expect(enriched.result_verification_status).toBe("unverified");
+  });
+
+  it("does not re-open result verification when consistent sales were explicitly established", () => {
+    const history = "My content is working and I now make consistent sales every month.";
+    const signal = detectFriendCommercialReality("I'm happy with the direction I'm heading.", history);
+    expect(signal.verifiedCommercialResult).toBe(true);
+    expect(signal.outcomeUnknown).toBe(false);
+  });
+
+  it("rejects good-vibes endings when commercial results are still unverified", () => {
+    const analysis = { result_verification_status: "unverified" };
+    expect(deterministicFriendQualityIssues("Keep crushing it, I'm always here if you want to chat!", "intent", analysis))
+      .toContain("closes or drifts without verifying the prospect's commercial result");
+    expect(deterministicFriendQualityIssues("Love that. When you say it is working, do you mean content growth, leads, or consistent sales?", "intent", analysis))
+      .not.toContain("closes or drifts without verifying the prospect's commercial result");
+  });
+
+  it("routes every new message to the earliest incomplete funnel checkpoint", () => {
+    const accumulated = {
+      tangible_goal: "control over time and income",
+      why_goal_matters: "build something of her own",
+      past_experiences: ["learned for two years and stayed focused on what she believes works"],
+      current_strategy: "building a mindset quote page",
+      sales_status: "unknown",
+      result_verification_status: "unverified",
+      commercial_reality_signal: { commercialContext: true },
+      problem_status: "unclear",
+      contact_status: "active",
+    };
+    expect(deriveEarliestMissingFriendCheckpoint(accumulated)).toBe("commercial_result");
+    const routed = applyEarliestMissingFriendCheckpoint(accumulated);
+    expect(routed.earliest_missing_checkpoint).toBe("commercial_result");
+    expect(routed.reply_act).toBe("probe");
+    expect(routed.next_best_action).toContain("consistent sales");
+  });
+
+  it("moves forward from verified results without repeating earlier intent questions", () => {
+    const accumulated = {
+      tangible_goal: "replace her income",
+      why_goal_matters: "more time with family",
+      past_experiences: ["posted consistently for six months"],
+      sales_status: "no_sales",
+      problem_status: "active",
+      problem_gap: "content has not produced a sale",
+      root_cause: "unknown",
+      contact_status: "active",
+    };
+    expect(deriveEarliestMissingFriendCheckpoint(accumulated)).toBe("root_cause");
+  });
+
+  it("reaches permission pitch only after certainty evidence is complete", () => {
+    const beforePermission = {
+      tangible_goal: "consistent sales",
+      why_goal_matters: "leave an exhausting job",
+      past_experiences: ["tried organic content and a previous course"],
+      sales_status: "inconsistent_sales",
+      problem_status: "active",
+      problem_gap: "attention is not converting",
+      root_cause: "no clear buyer transition",
+      consequences: "income remains unpredictable",
+      need_for_change_reason: "more posting alone will repeat the result",
+      inaction_pattern: "afraid another investment will fail",
+      detailed_future_outcome: "predictable income and afternoons with family",
+      readiness: "exploring",
+      contact_status: "active",
+    };
+    expect(deriveEarliestMissingFriendCheckpoint(beforePermission)).toBe("permission_for_help");
+    expect(applyEarliestMissingFriendCheckpoint(beforePermission).reply_act).toBe("ask_permission");
+    expect(deriveEarliestMissingFriendCheckpoint({ ...beforePermission, readiness: "wants_help" })).toBe("handoff_acceptance");
+    expect(deriveEarliestMissingFriendCheckpoint({ ...beforePermission, readiness: "accepted_referral" })).toBe("complete");
+  });
+
   it("retrieves the reference section that matches the exact stage", () => {
     const reference = [
       "Hey, I saw your profile and wanted to say hi.",
@@ -149,6 +260,14 @@ describe("Friend conversation engine", () => {
     expect(chatSuggest).toContain("friendStageToDatabase(finalFriendStageResult.stage)");
     expect(chatSuggest).toContain('const principlesCap = activeThreadType === "friend" ? 10');
     expect(chatSuggest).not.toContain("conversation_examples || \"\").trim().substring(0, 14000)");
+    expect(generateReply).toContain("applyDeterministicCommercialRealityCheck");
+    expect(chatSuggest).toContain("applyDeterministicCommercialRealityCheck");
+    expect(chatSuggest).toContain("const decisionHistory = speakerMessages.map");
+    expect(generateReply).toContain("applyEarliestMissingFriendCheckpoint");
+    expect(chatSuggest).toContain("applyEarliestMissingFriendCheckpoint");
+    const analyzeConversation = readFileSync("supabase/functions/analyze-conversation/index.ts", "utf8");
+    expect(analyzeConversation).toContain("applyDeterministicCommercialRealityCheck");
+    expect(analyzeConversation).toContain("friendStageToDatabase(certaintyStage.stage)");
     expect(chatsUi).toContain('const stages = ["intent", "logical_certainty", "emotional_certainty", "pitch", "handoff"]');
   });
 });

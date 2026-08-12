@@ -3,6 +3,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import {
+  applyDeterministicCommercialRealityCheck,
+  applyDeterministicSalesSignals,
+  applyEarliestMissingFriendCheckpoint,
+  deriveEvidenceGatedFriendStage,
+  friendStageToDatabase,
+} from "../_shared/friend-conversation-engine.ts";
 
 
 const corsHeaders = {
@@ -330,6 +337,31 @@ ${conversationHistory}`;
         conversion_triggers: [],
         detectedTone: "neutral", prospectType: "unknown",
       };
+    }
+
+    const prospectOnlyHistory = (messages || [])
+      .filter((message: any) => message.direction === "inbound")
+      .map((message: any) => String(message.content || ""))
+      .join("\n");
+    const latestProspectMessage = [...(messages || [])]
+      .reverse()
+      .find((message: any) => message.direction === "inbound")?.content || "";
+    analysis = applyDeterministicSalesSignals(analysis, latestProspectMessage, prospectOnlyHistory);
+    analysis = applyDeterministicCommercialRealityCheck(analysis, latestProspectMessage, prospectOnlyHistory);
+    analysis = applyEarliestMissingFriendCheckpoint(analysis);
+    const certaintyStage = deriveEvidenceGatedFriendStage(analysis, (messages || []).length);
+    analysis.stage = friendStageToDatabase(certaintyStage.stage);
+    analysis.stage_evidence = certaintyStage.evidence;
+    analysis.stage_missing = certaintyStage.missing;
+    analysis.earliest_missing_checkpoint = certaintyStage.checkpoint;
+    if (analysis.result_verification_status === "unverified") {
+      analysis.pain_expressed = false;
+      analysis.pain_summary = null;
+      analysis.prospect_psychology = "The prospect sounds confident and satisfied with her direction, but the conversation has not established whether that progress includes leads, conversions, or consistent sales.";
+      analysis.recommended_move = "spin_problem";
+      analysis.spin_stage = "problem";
+      analysis.discovery_question_type = "commercial result verification";
+      analysis.brain_principle_reason = "Preserve trust while testing the unverified result with one concrete, non-confrontational question.";
     }
 
     return new Response(JSON.stringify(analysis), {

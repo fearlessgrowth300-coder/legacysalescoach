@@ -14,12 +14,35 @@ export type FriendStageEvidence = {
   acceptedHandoff: boolean;
 };
 
+export type FriendFunnelCheckpoint =
+  | "tangible_goal"
+  | "why_goal_matters"
+  | "past_experience"
+  | "commercial_result"
+  | "active_problem"
+  | "root_cause"
+  | "consequences"
+  | "need_for_change"
+  | "inaction_pattern"
+  | "detailed_future_outcome"
+  | "permission_for_help"
+  | "handoff_acceptance"
+  | "complete";
+
 export type FriendSalesSignal = {
   explicitSalesGoal: boolean;
   activeSalesGap: boolean;
   wantsSalesHelp: boolean;
   resultState: "no_sales" | "first_sale" | "inconsistent_sales" | "wants_more_sales" | "unknown";
   bottleneck: "traffic" | "offer" | "messaging" | "conversion" | "follow_up" | "consistency" | "unknown";
+  evidence: string[];
+};
+
+export type FriendCommercialRealitySignal = {
+  commercialContext: boolean;
+  confidenceClaim: boolean;
+  verifiedCommercialResult: boolean;
+  outcomeUnknown: boolean;
   evidence: string[];
 };
 
@@ -127,6 +150,73 @@ function appendUnique(current: unknown, addition: string): string[] {
   return Array.from(new Set([...values, addition].map((item) => item.trim()).filter(Boolean)));
 }
 
+export function detectFriendCommercialReality(
+  latestProspectMessage: string,
+  prospectHistory = "",
+): FriendCommercialRealitySignal {
+  const latest = normalized(latestProspectMessage);
+  const context = normalized(`${prospectHistory} ${latestProspectMessage}`);
+  const commercialContext = /\b(?:sales?|income|revenue|business|offer|funnel|marketing|content|course|product|customers?|clients?|leads?|conversions?|traffic|build(?:ing)?\s+(?:something|my own|a business)|time and income)\b/i.test(context);
+  const confidenceEvidence = firstMatch(context, [
+    /\b(?:happy with (?:(?:the|my) )?(?:direction|progress)|what(?:'s| is) already working|i know what works|what i know works|nothing (?:is )?holding me back|wouldn['’]t say i feel held back|pretty intentional|going in the right direction|doing (?:really )?well|things? (?:are|is) working)\b/i,
+  ]);
+  const confidenceClaim = Boolean(confidenceEvidence);
+  const resultEvidence = [
+    firstMatch(context, [
+      /\b(?:made|generated|earned|closed|got)\s+(?:about\s+|over\s+|more than\s+)?(?:[$£€]\s*)?\d[\d,.]*(?:k|m)?\s*(?:in\s+)?(?:sales?|revenue|income|profit|customers?|clients?|orders?)\b/i,
+      /\b(?:consistent|predictable|regular)\s+(?:sales?|revenue|income|clients?|customers?|orders?)\b/i,
+      /\b(?:sales?|revenue|income|clients?|customers?|orders?)\s+(?:are|is|have been)\s+(?:consistent|predictable|regular)\b/i,
+      /\b(?:i|we)\s+(?:make|get|close|generate|bring in)\s+(?:[$£€]\s*)?\d[\d,.]*(?:k|m)?\s*(?:a|per|each)?\s*(?:day|week|month|year)?\b/i,
+    ]),
+  ].filter(Boolean);
+  const verifiedCommercialResult = resultEvidence.length > 0;
+  return {
+    commercialContext,
+    confidenceClaim,
+    verifiedCommercialResult,
+    outcomeUnknown: commercialContext && confidenceClaim && !verifiedCommercialResult,
+    evidence: [confidenceEvidence, ...resultEvidence].filter(Boolean),
+  };
+}
+
+export function applyDeterministicCommercialRealityCheck(
+  analysis: Record<string, any> | null | undefined,
+  latestProspectMessage: string,
+  prospectHistory = "",
+): Record<string, any> {
+  const result = { ...(analysis || {}) };
+  const signal = detectFriendCommercialReality(latestProspectMessage, prospectHistory);
+  const salesStatus = normalized(result.sales_status).replace(/[ -]+/g, "_");
+  const explicitGapStatus = ["no_sales", "first_sale", "inconsistent_sales", "wants_more_sales"].includes(salesStatus);
+  const inferredSuccessWithoutEvidence = signal.commercialContext
+    && !signal.verifiedCommercialResult
+    && ["already_successful", "successful", "consistent_sales", "profitable", "doing_well"].includes(salesStatus);
+  if ((!signal.outcomeUnknown && !inferredSuccessWithoutEvidence) || explicitGapStatus) {
+    result.commercial_reality_signal = signal;
+    return result;
+  }
+
+  result.result_verification_status = "unverified";
+  result.sales_status = "unknown";
+  if (!includesAny(result.problem_status, ["active"])) result.problem_status = "unclear";
+  result.reply_act = "probe";
+  result.question_needed = true;
+  result.readiness = includesAny(result.readiness, ["wants_help", "accepted_referral"])
+    ? result.readiness
+    : "exploring";
+  result.referral_readiness = "not_ready";
+  result.knowledge_need = "commercial-result verification: distinguish content or directional progress from leads, conversions, and consistent sales";
+  result.next_best_action = "affirm their confidence, then ask one concrete peer-level question clarifying whether what is working means content growth, leads, or consistent sales";
+  result.recommended_move = "spin_problem";
+  result.spin_stage = "problem";
+  result.discovery_question_type = "commercial result verification";
+  result.stage_reason = "The prospect is confident about her direction, but no commercial result has been established; confidence is not evidence of consistent sales.";
+  result.signals_detected = appendUnique(result.signals_detected, "commercial_results_unverified");
+  result.evidence = appendUnique(result.evidence, `Prospect expressed confidence without a verified commercial result: ${signal.evidence[0] || latestProspectMessage.trim()}`);
+  result.commercial_reality_signal = signal;
+  return result;
+}
+
 export function applyDeterministicSalesSignals(
   analysis: Record<string, any> | null | undefined,
   latestProspectMessage: string,
@@ -224,7 +314,7 @@ export function collectFriendStageEvidence(analysis: Record<string, unknown> | n
 export function deriveEvidenceGatedFriendStage(
   analysis: Record<string, unknown> | null | undefined,
   messageCount: number,
-): { stage: FriendStage; evidence: FriendStageEvidence; missing: string[] } {
+): { stage: FriendStage; evidence: FriendStageEvidence; missing: string[]; checkpoint: FriendFunnelCheckpoint } {
   const value = analysis || {};
   const evidence = collectFriendStageEvidence(value);
   const contactStatus = normalized(value.contact_status).replace(/[ -]+/g, "_");
@@ -254,15 +344,81 @@ export function deriveEvidenceGatedFriendStage(
   if (!evidence.wantsHelp) missing.push("permission or explicit interest in help");
   if (!evidence.acceptedHandoff) missing.push("acceptance of the expert introduction or handoff");
 
-  return { stage, evidence, missing };
+  return { stage, evidence, missing, checkpoint: deriveEarliestMissingFriendCheckpoint(value) };
 }
 
 export function friendStageToDatabase(stage: FriendStage): string {
   return stage;
 }
 
+export function deriveEarliestMissingFriendCheckpoint(
+  analysis: Record<string, unknown> | null | undefined,
+): FriendFunnelCheckpoint {
+  const value = analysis || {};
+  const evidence = collectFriendStageEvidence(value);
+  if (!evidence.tangibleGoal) return "tangible_goal";
+  if (!evidence.whyGoalMatters) return "why_goal_matters";
+  if (!evidence.pastExperience) return "past_experience";
+
+  const salesStatus = normalized(value.sales_status).replace(/[ -]+/g, "_");
+  const commercialContext = Boolean((value.commercial_reality_signal as Record<string, unknown> | undefined)?.commercialContext)
+    || known(value.sales_status)
+    || /\b(?:sales?|income|revenue|business|marketing|offer|product|course|leads?|conversions?)\b/i.test(normalized(`${value.tangible_goal || ""} ${value.current_strategy || ""} ${value.motivation || ""}`));
+  const commercialResultKnown = [
+    "no_sales", "first_sale", "inconsistent_sales", "wants_more_sales",
+    "consistent_sales", "profitable", "verified_success", "already_successful",
+  ].includes(salesStatus) && normalized(value.result_verification_status) !== "unverified";
+  if (commercialContext && !commercialResultKnown) return "commercial_result";
+
+  if (!evidence.activeProblem) return "active_problem";
+  if (!evidence.rootCause) return "root_cause";
+  if (!evidence.consequences) return "consequences";
+  if (!evidence.needForChange) return "need_for_change";
+  if (!evidence.inactionPattern) return "inaction_pattern";
+  if (!evidence.detailedFutureOutcome) return "detailed_future_outcome";
+  if (!evidence.wantsHelp) return "permission_for_help";
+  if (!evidence.acceptedHandoff) return "handoff_acceptance";
+  return "complete";
+}
+
+export function applyEarliestMissingFriendCheckpoint(
+  analysis: Record<string, any> | null | undefined,
+): Record<string, any> {
+  const result = { ...(analysis || {}) };
+  const checkpoint = deriveEarliestMissingFriendCheckpoint(result);
+  result.earliest_missing_checkpoint = checkpoint;
+  if (checkpoint === "complete") return result;
+  if (includesAny(result.contact_status, ["do_not_contact", "not_a_fit"])) return result;
+
+  const actions: Record<Exclude<FriendFunnelCheckpoint, "complete">, string> = {
+    tangible_goal: "understand the concrete result they are building toward",
+    why_goal_matters: "understand why that result matters personally",
+    past_experience: "understand what they have already tried and the result it produced",
+    commercial_result: "clarify whether current progress means content growth, leads, conversions, or consistent sales",
+    active_problem: "test respectfully whether an unresolved obstacle exists in their own situation",
+    root_cause: "understand their explanation of why the obstacle persists",
+    consequences: "understand what continuing without solving it costs them",
+    need_for_change: "help them state why the current gap needs to change",
+    inaction_pattern: "understand the thought pattern behind not solving it yet",
+    detailed_future_outcome: "help them describe the concrete lived outcome after solving it",
+    permission_for_help: "recap the verified context and ask permission to share the relevant expert help",
+    handoff_acceptance: "wait for explicit acceptance before giving the approved handoff destination",
+  };
+  result.next_best_action = actions[checkpoint];
+  result.next_objective = actions[checkpoint];
+  result.question_needed = !["permission_for_help", "handoff_acceptance"].includes(checkpoint);
+  result.reply_act = checkpoint === "permission_for_help"
+    ? "ask_permission"
+    : checkpoint === "handoff_acceptance"
+      ? "transition"
+      : checkpoint === "need_for_change" || checkpoint === "detailed_future_outcome"
+        ? "reframe"
+        : "probe";
+  return result;
+}
+
 export function buildFriendStageDirective(stageResult: ReturnType<typeof deriveEvidenceGatedFriendStage>): string {
-  const { stage, evidence, missing } = stageResult;
+  const { stage, evidence, missing, checkpoint } = stageResult;
   const objectives: Record<FriendStage, string> = {
     intent: "Keep the focus on the prospect. Move naturally through surface goal -> why it matters -> previous attempts -> actual experience -> their explanation -> likely root cause. Do not build a pitch from a shallow first answer.",
     logical_certainty: "Use the prospect's own facts to move through goal -> reason -> obstacle -> root cause -> consequences -> unresolved gap -> need for change. Clarify rather than exaggerate. For a sales problem, diagnose traffic, offer, messaging, conversion, follow-up, or consistency.",
@@ -270,7 +426,7 @@ export function buildFriendStageDirective(stageResult: ReturnType<typeof deriveE
     pitch: "Tie together the full conversation: context recap -> confirmed gap -> desired outcome -> relevant approved expert help -> permission. Personalize every point from the prospect's own words and do not introduce unapproved claims.",
     handoff: "After explicit acceptance, provide the approved expert or team destination and one concrete next step. Answer practical objections directly and never manufacture urgency.",
   };
-  return `[EVIDENCE-GATED FRIEND CERTAINTY FUNNEL]\nCanonical stage: ${stage}\nStage objective: ${objectives[stage]}\nEvidence: ${JSON.stringify(evidence)}\nStill missing: ${missing.join("; ") || "none"}\nFollow the stages in order and never mark one complete from warmth or message count. Ask only the single most useful question, mix discovery with genuine peer reactions, and preserve everything already learned. A clear refusal exits safely; an explicit request for the expert may proceed directly to handoff.`;
+  return `[EVIDENCE-GATED FRIEND CERTAINTY FUNNEL]\nCanonical stage: ${stage}\nEarliest incomplete checkpoint: ${checkpoint}\nStage objective: ${objectives[stage]}\nEvidence: ${JSON.stringify(evidence)}\nStill missing: ${missing.join("; ") || "none"}\nAnswer the newest message first, then continue from the earliest incomplete checkpoint without repeating an answered question or sounding like the conversation moved backward. Follow the stages in order and never mark one complete from warmth or message count. Ask only the single most useful question, mix discovery with genuine peer reactions, and preserve everything already learned. A clear refusal exits safely; an explicit request for the expert may proceed directly to handoff.`;
 }
 
 function meaningfulTerms(value: string): string[] {
@@ -334,11 +490,18 @@ Every ready-to-send message must pass all checks:
 10. At pitch/handoff, it asks permission before an introduction and gives a concrete approved handoff only after acceptance.
 11. When the prospect explicitly says sales are the problem, it must acknowledge that concrete gap and either diagnose the specific sales bottleneck or, if they already asked for help, make the permission-based transition. It must not fall back to generic rapport.
 12. It follows the certainty funnel in order: Intent (goal, why, past experience) -> Logical Certainty (obstacle, root cause, consequences, need for change) -> Emotional Certainty (inaction pattern, emotional mirror, detailed future) -> Pitch (full-context recap and permission) -> Handoff. It must not repeatedly ask discovery questions or lose earlier answers.
+13. Confidence, intentionality, "I know what works," and "I'm happy with my direction" are not verified sales outcomes. When result_verification_status=unverified, affirm the confidence and ask one respectful concrete question that distinguishes content/directional progress from leads, conversions, or consistent sales. Do not close the conversation or manufacture a problem.
+14. Use earliest_missing_checkpoint as the locked next destination on every new message. Continue from that checkpoint after answering the newest message; never rely on the previously displayed UI stage, skip required evidence, or repeat a field already answered.
+15. Every qualified active prospect should eventually receive a permission-based pitch after the certainty checkpoints are complete. Never end with generic encouragement while a material checkpoint remains unknown. Explicit do-not-contact, not-a-fit, or refusal boundaries always override progression.
 
 The three items must pursue the same next objective with different natural wording. Preserve metadata fields, but correct them when the message changed.`;
 }
 
-export function deterministicFriendQualityIssues(text: string, stage: FriendStage): string[] {
+export function deterministicFriendQualityIssues(
+  text: string,
+  stage: FriendStage,
+  analysis: Record<string, unknown> | null | undefined = undefined,
+): string[] {
   const message = String(text || "").trim();
   const issues: string[] = [];
   if (!message) issues.push("empty reply");
@@ -347,5 +510,9 @@ export function deterministicFriendQualityIssues(text: string, stage: FriendStag
   if (stage === "intent" && /expert|mentor|buy|price|link|offer/i.test(message)) issues.push("premature expert transition in intent");
   if (stage === "intent" && /\baudience\b/i.test(message) && /struggl|problem|intimidat|overwhelm/i.test(message)) issues.push("asks about the audience instead of the prospect");
   if ((stage === "logical_certainty" || stage === "emotional_certainty") && /(?:sales?|clients?|customers?)/i.test(message) && /what.*(?:journey|inspire|passionate)|how.*feel/i.test(message)) issues.push("ignores a concrete sales gap for generic rapport");
+  if (analysis?.result_verification_status === "unverified") {
+    const testsCommercialReality = /\b(?:sales?|leads?|clients?|customers?|buyers?|orders?|income|revenue|conversions?|traffic|content (?:growth|reach)|what (?:is|has been) working)\b/i.test(message) && message.includes("?");
+    if (!testsCommercialReality) issues.push("closes or drifts without verifying the prospect's commercial result");
+  }
   return issues;
 }

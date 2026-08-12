@@ -5,7 +5,9 @@ import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
+  applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
+  applyEarliestMissingFriendCheckpoint,
   buildFriendQualityValidatorPrompt,
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
@@ -609,6 +611,7 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
         .map((item: any) => String(item.content || ""))
         .join("\n");
       analysisJson = applyDeterministicSalesSignals(analysisJson, message, prospectOnlyHistory);
+      analysisJson = applyDeterministicCommercialRealityCheck(analysisJson, message, prospectOnlyHistory);
       // Merge the newest evidence into this prospect's durable memory before
       // deriving a stage. This prevents later short replies from erasing
       // Intent, Logical, or Emotional evidence collected earlier.
@@ -616,6 +619,7 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
         ...analysisJson,
         ...buildFriendProspectProfile(analysisJson, existingFriendProfile),
       };
+      analysisJson = applyEarliestMissingFriendCheckpoint(analysisJson);
     }
 
     // Both Friend reply paths use one evidence-gated five-stage journey. A
@@ -629,6 +633,7 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
     }
     const friendStageResult = deriveEvidenceGatedFriendStage(analysisJson, speakerMessages.length);
     analysisJson.stage = friendStageResult.stage;
+    analysisJson.earliest_missing_checkpoint = friendStageResult.checkpoint;
     analysisJson.stage_evidence = friendStageResult.evidence;
     analysisJson.stage_missing = friendStageResult.missing;
 
@@ -942,7 +947,7 @@ ${winningPatternsText.substring(0, 2000)}`;
       const originalVariants = Array.isArray(replyJson.variants) ? replyJson.variants : [];
       if (originalVariants.length === 0) throw new Error("Reply generator returned no Friend variants");
       const deterministicIssues = originalVariants.flatMap((variant: any, index: number) =>
-        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage)
+        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson)
           .map((issue) => `variant ${index + 1}: ${issue}`)
       );
       const qualityResponse = await userChat(chat, {
@@ -965,7 +970,7 @@ ${winningPatternsText.substring(0, 2000)}`;
       const repairedVariants = Array.isArray(qualityJson.variants) ? qualityJson.variants : [];
       if (repairedVariants.length !== originalVariants.length) throw new Error("Friend quality validator returned an incomplete variant set");
       const remainingIssues = repairedVariants.flatMap((variant: any, index: number) =>
-        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage)
+        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson)
           .map((issue) => `variant ${index + 1}: ${issue}`)
       );
       if (remainingIssues.length > 0) throw new Error(`Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`);
