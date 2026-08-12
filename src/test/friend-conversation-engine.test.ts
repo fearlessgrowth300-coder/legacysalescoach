@@ -4,6 +4,7 @@ import {
   applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
   applyEarliestMissingFriendCheckpoint,
+  buildDeterministicFriendFallbackMessages,
   detectFriendCommercialReality,
   detectFriendSalesSignal,
   deriveEarliestMissingFriendCheckpoint,
@@ -173,6 +174,43 @@ describe("Friend conversation engine", () => {
       .not.toContain("closes or drifts without verifying the prospect's commercial result");
   });
 
+  it("repairs rejected Alpha-style drafts without returning an empty reply", () => {
+    const analysis = { result_verification_status: "unverified" };
+    const fallbacks = buildDeterministicFriendFallbackMessages(
+      [
+        { message: "You too! Keep crushing it and I am always here if you want to chat!" },
+        { message: "It is lovely connecting. Wishing you all the best!" },
+        { message: "Just good vibes from here!" },
+      ],
+      "intent",
+      "past_experience",
+      analysis,
+      "Thanks! Same to you, it is always nice connecting with other people building their own thing.",
+    );
+
+    expect(fallbacks).toHaveLength(3);
+    for (const reply of fallbacks) {
+      expect(reply.match(/\?/g)).toHaveLength(1);
+      expect(reply).toMatch(/sales/i);
+      expect(deterministicFriendQualityIssues(reply, "intent", analysis)).toEqual([]);
+    }
+    expect(fallbacks[0]).toContain("What have you tried so far");
+  });
+
+  it("keeps a useful declarative answer while replacing an off-stage question", () => {
+    const fallbacks = buildDeterministicFriendFallbackMessages(
+      [{ message: "What helped me was simplifying my weekly plan. What do you think would be possible if you amplified that feeling?" }],
+      "intent",
+      "past_experience",
+      { result_verification_status: "unverified" },
+      "What helped you get past the overwhelm?",
+    );
+
+    expect(fallbacks[0]).toContain("What helped me was simplifying my weekly plan.");
+    expect(fallbacks[0]).toContain("consistent sales yet?");
+    expect(deterministicFriendQualityIssues(fallbacks[0], "intent", { result_verification_status: "unverified" })).toEqual([]);
+  });
+
   it("routes every new message to the earliest incomplete funnel checkpoint", () => {
     const accumulated = {
       tangible_goal: "control over time and income",
@@ -265,6 +303,10 @@ describe("Friend conversation engine", () => {
     expect(chatSuggest).toContain("const decisionHistory = speakerMessages.map");
     expect(generateReply).toContain("applyEarliestMissingFriendCheckpoint");
     expect(chatSuggest).toContain("applyEarliestMissingFriendCheckpoint");
+    expect(generateReply).toContain("buildDeterministicFriendFallbackMessages");
+    expect(chatSuggest).toContain("buildDeterministicFriendFallbackMessages");
+    expect(generateReply).not.toContain('throw new Error(`Friend quality validator rejected the reply:');
+    expect(chatSuggest).not.toContain('throw new Error(`Friend quality validator rejected the reply:');
     const analyzeConversation = readFileSync("supabase/functions/analyze-conversation/index.ts", "utf8");
     expect(analyzeConversation).toContain("applyDeterministicCommercialRealityCheck");
     expect(analyzeConversation).toContain("friendStageToDatabase(certaintyStage.stage)");

@@ -13,6 +13,7 @@ import {
   applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
   applyEarliestMissingFriendCheckpoint,
+  buildDeterministicFriendFallbackMessages,
   buildFriendQualityValidatorPrompt,
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
@@ -954,35 +955,64 @@ ${winningPatternsText.substring(0, 2000)}`;
     // preserving the locked stage, objective, approved truth and metadata.
     if (activeThreadType === "friend") {
       const originalVariants = Array.isArray(replyJson.variants) ? replyJson.variants : [];
-      if (originalVariants.length === 0) throw new Error("Reply generator returned no Friend variants");
       const deterministicIssues = originalVariants.flatMap((variant: any, index: number) =>
         deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson)
           .map((issue) => `variant ${index + 1}: ${issue}`)
       );
-      const qualityResponse = await userChat(chat, {
-        model: chat.models.reasoning,
-        messages: [
-          { role: "system", content: buildFriendQualityValidatorPrompt("variants") },
-          {
-            role: "user",
-            content: `${friendStageDirective}\n\nLOCKED ANALYSIS:\n${JSON.stringify(analysisJson)}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nRETRIEVED KNOWLEDGE:\n${replyPrinciplesText.substring(0, 4500)}\n${replyChunksText.substring(0, 4500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT VARIANTS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalVariants)}`,
-          },
-        ],
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-      });
-      if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
-      const qualityData = await qualityResponse.json();
-      const qualityRaw = qualityData.choices?.[0]?.message?.content || "{}";
-      const qualityMatch = qualityRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
-      const qualityJson = JSON.parse((qualityMatch ? qualityMatch[1] : qualityRaw).trim());
-      const repairedVariants = Array.isArray(qualityJson.variants) ? qualityJson.variants : [];
-      if (repairedVariants.length !== originalVariants.length) throw new Error("Friend quality validator returned an incomplete variant set");
-      const remainingIssues = repairedVariants.flatMap((variant: any, index: number) =>
-        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson)
-          .map((issue) => `variant ${index + 1}: ${issue}`)
-      );
-      if (remainingIssues.length > 0) throw new Error(`Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`);
+      let repairedVariants: any[] = [];
+      let validationFailure = "";
+      try {
+        if (originalVariants.length === 0) throw new Error("Reply generator returned no Friend variants");
+        const qualityResponse = await userChat(chat, {
+          model: chat.models.reasoning,
+          messages: [
+            { role: "system", content: buildFriendQualityValidatorPrompt("variants") },
+            {
+              role: "user",
+              content: `${friendStageDirective}\n\nLOCKED ANALYSIS:\n${JSON.stringify(analysisJson)}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nRETRIEVED KNOWLEDGE:\n${replyPrinciplesText.substring(0, 4500)}\n${replyChunksText.substring(0, 4500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT VARIANTS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalVariants)}`,
+            },
+          ],
+          temperature: 0.2,
+          response_format: { type: "json_object" },
+        });
+        if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
+        const qualityData = await qualityResponse.json();
+        const qualityRaw = qualityData.choices?.[0]?.message?.content || "{}";
+        const qualityMatch = qualityRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
+        const qualityJson = JSON.parse((qualityMatch ? qualityMatch[1] : qualityRaw).trim());
+        repairedVariants = Array.isArray(qualityJson.variants) ? qualityJson.variants : [];
+        if (repairedVariants.length !== originalVariants.length) throw new Error("Friend quality validator returned an incomplete variant set");
+        const remainingIssues = repairedVariants.flatMap((variant: any, index: number) =>
+          deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson)
+            .map((issue) => `variant ${index + 1}: ${issue}`)
+        );
+        if (remainingIssues.length > 0) validationFailure = `Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`;
+      } catch (qualityError) {
+        validationFailure = qualityError instanceof Error ? qualityError.message : "Friend quality validation failed";
+      }
+
+      const useDeterministicFallback = Boolean(validationFailure);
+      if (useDeterministicFallback) {
+        const fallbackMessages = buildDeterministicFriendFallbackMessages(
+          repairedVariants.length > 0 ? repairedVariants : originalVariants,
+          friendStageResult.stage,
+          friendStageResult.checkpoint,
+          analysisJson,
+          message,
+        );
+        repairedVariants = fallbackMessages.map((fallbackMessage, index) => ({
+          ...(originalVariants[index] || {
+            variant: index === 0 ? "primary" : index === 1 ? "alternative" : "casual",
+            move_used: analysisJson.reply_act || "probe",
+            principle_applied: "evidence-gated certainty funnel",
+            why_this_works: "Continues from the earliest unverified checkpoint without inventing facts.",
+            warmth_prediction: analysisJson.warmth_score,
+          }),
+          message: fallbackMessage,
+        }));
+        console.warn("generate-reply used deterministic Friend fallback:", validationFailure);
+      }
+
       replyJson.variants = repairedVariants.map((variant: any, index: number) => ({
         ...originalVariants[index],
         ...variant,
@@ -990,6 +1020,8 @@ ${winningPatternsText.substring(0, 2000)}`;
       replyJson.qualityValidation = {
         passed: true,
         repaired: JSON.stringify(repairedVariants) !== JSON.stringify(originalVariants),
+        fallbackApplied: useDeterministicFallback,
+        fallbackReason: useDeterministicFallback ? validationFailure : null,
       };
     }
 
