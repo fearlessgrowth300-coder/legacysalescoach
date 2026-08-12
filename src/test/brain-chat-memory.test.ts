@@ -5,6 +5,7 @@ import {
   normalizeConversationMemory,
   renderConversationMemory,
 } from "../../supabase/functions/brain-chat/memory";
+import { selectBalancedSupportingChunks } from "../../supabase/functions/_shared/brain-pipeline";
 
 describe("AI Chat durable conversation memory", () => {
   it("keeps the beginning, samples the middle, and keeps the latest history", () => {
@@ -55,5 +56,17 @@ describe("AI Chat durable conversation memory", () => {
     expect(memory.goals).toEqual(["Launch three courses"]);
     expect(rendered).toContain("Buyer/client name: Val");
     expect(rendered).toContain("Latest known state: Recovering");
+  });
+
+  it("keeps original source passages represented alongside summaries", () => {
+    const chunks = [
+      { id: "s1", source_id: "a", source_title: "Book A", content: "summary", category: "general", source_type: "core_knowledge", chunk_kind: "principle_summary", similarity: 0.7 },
+      { id: "p1", source_id: "a", source_title: "Book A", content: "original A", category: "source_evidence", source_type: "pdf", chunk_kind: "source_passage", similarity: 0.66 },
+      { id: "p2", source_id: "b", source_title: "Book B", content: "original B", category: "source_evidence", source_type: "video", chunk_kind: "source_passage", similarity: 0.64 },
+      { id: "s2", source_id: "b", source_title: "Book B", content: "summary B", category: "general", source_type: "core_knowledge", chunk_kind: "principle_summary", similarity: 0.63 },
+    ];
+    const selected = selectBalancedSupportingChunks(chunks, 4);
+    expect(selected.filter((chunk) => chunk.chunk_kind === "source_passage")).toHaveLength(2);
+    expect(new Set(selected.map((chunk) => chunk.source_id)).size).toBe(2);
   });
 });

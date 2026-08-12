@@ -130,7 +130,39 @@ export type RetrievalDebug = {
   candidate_source_titles?: string[];
   selected_source_titles?: string[];
   chunk_source_count?: number;
+  best_semantic_similarity?: number;
+  evidence_confidence?: "strong" | "moderate" | "weak" | "none";
 };
+
+export function selectBalancedSupportingChunks(chunks: Chunk[], limit = 12): Chunk[] {
+  const ranked = [...chunks].sort((a, b) => {
+    const aScore = (a.similarity || 0) + (a.chunk_kind === "source_passage" ? 0.025 : 0);
+    const bScore = (b.similarity || 0) + (b.chunk_kind === "source_passage" ? 0.025 : 0);
+    return bScore - aScore;
+  });
+  const sourcePassages = ranked.filter((chunk) => chunk.chunk_kind === "source_passage");
+  const summaries = ranked.filter((chunk) => chunk.chunk_kind !== "source_passage");
+  const selected: Chunk[] = [];
+  const seen = new Set<string>();
+  const perSource = new Map<string, number>();
+  const addRoundRobin = (pool: Chunk[], sourceCap: number) => {
+    for (const chunk of pool) {
+      if (selected.length >= limit || seen.has(chunk.id)) continue;
+      const source = chunk.source_id || chunk.source_title || chunk.id;
+      const used = perSource.get(source) || 0;
+      if (used >= sourceCap) continue;
+      selected.push(chunk);
+      seen.add(chunk.id);
+      perSource.set(source, used + 1);
+    }
+  };
+  // Reserve most of the context for original material, while retaining the
+  // concise principle summaries that often carry the clearest application.
+  addRoundRobin(sourcePassages, 2);
+  addRoundRobin(summaries, 1);
+  addRoundRobin(ranked, 3);
+  return selected.slice(0, limit);
+}
 
 export type PipelineOutput = {
   selected: SelectedPrinciple[];
@@ -1087,12 +1119,24 @@ export async function runPipelineFast(opts: {
   const candidateSourceTitles = [...new Set(top.map((p) => sourceTitleOf(p)).filter(Boolean))];
   const selectedIds = new Set(selected.map((s) => s.id));
   const evidence = top.filter((p) => !selectedIds.has(p.id)).slice(0, 16);
+  const bestSemanticSimilarity = Math.max(
+    0,
+    ...semP.map((item) => Number(item.similarity || 0)),
+    ...semC.map((item) => Number(item.similarity || 0)),
+  );
+  const evidenceConfidence: RetrievalDebug["evidence_confidence"] = !embeddingUsed
+    ? "none"
+    : bestSemanticSimilarity >= 0.42
+      ? "strong"
+      : bestSemanticSimilarity >= 0.24
+        ? "moderate"
+        : "weak";
 
   return {
     selected,
     contradictions: [],
     framework_name,
-    supporting_chunks: semC.slice(0, 12),
+    supporting_chunks: selectBalancedSupportingChunks(semC, 12),
     evidence_principles: evidence,
     debug: {
       subqueries: semanticQueries.map((query) => query.substring(0, 160)),
@@ -1100,7 +1144,7 @@ export async function runPipelineFast(opts: {
       reranked_count: top.length,
       top_score: topScore,
       embedding_used: embeddingUsed,
-      empty_vault: selected.length === 0,
+      empty_vault: selected.length === 0 && semC.length === 0,
       semantic_principles_count: semP.length,
       static_principles_count: 0,
       candidate_source_count: candidateSourceTitles.length,
@@ -1109,6 +1153,8 @@ export async function runPipelineFast(opts: {
       candidate_source_titles: candidateSourceTitles.slice(0, 25),
       selected_source_titles: [...new Set(selected.map((s) => s.source_title))],
       chunk_source_count: new Set(semC.map((c) => c.source_id)).size,
+      best_semantic_similarity: bestSemanticSimilarity,
+      evidence_confidence: evidenceConfidence,
     },
   };
 }

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { toAnthropicContent } from "../../supabase/functions/_shared/anthropic-content";
 import {
   buildBrainRetrievalMeta,
+  classifyBrainChatIntent,
   isAllowedBrainChatOrigin,
   isSimpleBrainChatSmallTalk,
+  responseMentionsUnknownSources,
   simpleBrainChatResponse,
 } from "../../supabase/functions/brain-chat/lib";
 import { PROVIDER_MODEL } from "@/hooks/useActiveAiModel";
@@ -71,5 +73,22 @@ describe("AI Chat connection helpers", () => {
     expect(isSimpleBrainChatGreeting("Hi")).toBe(true);
     expect(isSimpleBrainChatGreeting("Hi, what should I send this buyer?")).toBe(false);
     expect(simpleBrainChatGreetingResponse("Hi")).toBe(simpleBrainChatResponse("Hi"));
+  });
+
+  it("routes knowledge questions separately from buyer-conversation coaching", () => {
+    expect(classifyBrainChatIntent("Summarize the main lessons from Objection Crusher")).toBe("source_summary");
+    expect(classifyBrainChatIntent("Compare SPIN Selling versus Never Split the Difference")).toBe("source_comparison");
+    expect(classifyBrainChatIntent("Write an Instagram caption for my course")).toBe("copywriting");
+    expect(classifyBrainChatIntent("What does the knowledge base teach about trust?")).toBe("knowledge_qa");
+    expect(classifyBrainChatIntent("How should objections be handled according to the books?")).toBe("knowledge_qa");
+    expect(classifyBrainChatIntent("This buyer said the price is too high. What should I reply?")).toBe("conversation_coaching");
+    expect(classifyBrainChatIntent("What is shown here?", true)).toBe("conversation_coaching");
+  });
+
+  it("detects citations to sources that were not retrieved", () => {
+    expect(responseMentionsUnknownSources(
+      '(Source: "SPIN Selling") and (Source: "Made Up Book")',
+      ["SPIN Selling"],
+    )).toEqual(["Made Up Book"]);
   });
 });

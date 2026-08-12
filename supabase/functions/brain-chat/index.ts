@@ -7,9 +7,12 @@ import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/us
 import { BRAIN_PERSONA } from "../_shared/persona.ts";
 import {
   buildBrainRetrievalMeta,
+  classifyBrainChatIntent,
   isAllowedBrainChatOrigin,
   isSimpleBrainChatSmallTalk,
+  responseMentionsUnknownSources,
   simpleBrainChatResponse,
+  type BrainChatIntent,
 } from "./lib.ts";
 import {
   buildFocusedRetrievalQueries,
@@ -40,6 +43,90 @@ const USER_INPUT_CHAR_LIMIT = 3600;
 const RECENT_EXCHANGES_CHAR_LIMIT = 6000;
 const WORKSPACE_PROFILE_CHAR_LIMIT = 500;
 const PRIOR_SUMMARY_CHAR_LIMIT = 5000;
+const VALIDATION_DRAFT_CHAR_LIMIT = 22000;
+
+function responseFormatForIntent(intent: BrainChatIntent): string {
+  if (intent === "conversation_coaching") return `RESPONSE MODE: CONVERSATION COACHING
+Use these sections only: SITUATION, STRATEGY, REPLY (Copy & Paste), WHY IT WORKS, NEXT STEP. End with one question only when an unanswered fact would materially change the advice.`;
+  if (intent === "source_summary") return `RESPONSE MODE: SOURCE SUMMARY
+Answer with: concise overview, key teachings, practical applications, and important limitations. Cite the supporting source inline. Do not invent a buyer, write a sales reply, or add buyer psychology.`;
+  if (intent === "source_comparison") return `RESPONSE MODE: SOURCE COMPARISON
+Compare agreements, differences, best use cases, and a practical combined recommendation. Cite each compared source inline. Do not write a buyer reply unless explicitly requested.`;
+  if (intent === "copywriting") return `RESPONSE MODE: COPYWRITING
+Give the requested copy first, then a short explanation of the retrieved principles applied. Match the requested channel, audience, tone, and length. Do not add buyer psychology unless a real buyer conversation was supplied.`;
+  return `RESPONSE MODE: KNOWLEDGE Q&A
+Answer the user's exact question directly and naturally, like a capable Knowledge-Base-powered assistant. Adjust depth to the request. Use headings only when useful. Cite supporting vault sources inline. Do not force buyer psychology, a reply script, a next-step plan, or a question back to the user.`;
+}
+
+async function validateGroundedBrainResponse(args: {
+  chat: any;
+  intent: BrainChatIntent;
+  userRequest: string;
+  draft: string;
+  allowedSourceTitles: string[];
+  evidencePack: string;
+  durableMemory: string;
+}): Promise<{ response: string; repaired: boolean; issues: string[] }> {
+  const { chat, intent, userRequest, draft, allowedSourceTitles, evidencePack, durableMemory } = args;
+  const unknownSources = responseMentionsUnknownSources(draft, allowedSourceTitles);
+  const prompt = `You are the final grounding and answer-quality validator for a Knowledge-Base-powered AI Chat.
+
+REQUEST MODE: ${intent}
+USER REQUEST:
+${clampText(userRequest, 4000)}
+
+ALLOWED SOURCE TITLES:
+${allowedSourceTitles.map((title) => `- ${title}`).join("\n") || "- none"}
+
+RETRIEVED EVIDENCE:
+${clampText(evidencePack, 15000)}
+
+DURABLE CONVERSATION MEMORY:
+${clampText(durableMemory, 5000)}
+
+DRAFT RESPONSE:
+${clampText(draft, 16000)}
+
+KNOWN DETERMINISTIC ISSUES:
+${unknownSources.length ? `The draft names unapproved sources: ${unknownSources.join(", ")}` : "none"}
+
+Validate all of these:
+1. It answers every material part of the user's latest request.
+2. Its structure matches REQUEST MODE. Only conversation_coaching may force buyer psychology or a copy-paste sales reply.
+3. Every named source is in ALLOWED SOURCE TITLES.
+4. Every attributed teaching is supported by RETRIEVED EVIDENCE.
+5. Buyer/client facts agree with memory or visible request; no invented facts, payments, results, guarantees, relationships, or promises.
+6. It distinguishes weak evidence from certainty.
+7. It is concise enough for the request and does not expose hidden reasoning.
+
+Return JSON only:
+{"pass":true,"issues":[],"corrected_response":""}
+or
+{"pass":false,"issues":["short issue"],"corrected_response":"complete corrected final answer"}`;
+  try {
+    const response = await userChat(chat, {
+      model: chat.models.reasoning,
+      temperature: 0.05,
+      max_tokens: 6000,
+      response_format: { type: "json_object" },
+      messages: [{ role: "user", content: prompt }],
+      timeout_ms: 60000,
+    });
+    if (!response.ok) return { response: draft, repaired: false, issues: ["validator unavailable"] };
+    const data = await response.json();
+    const raw = String(data.choices?.[0]?.message?.content || "").trim();
+    const match = raw.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : raw);
+    const issues = Array.isArray(parsed.issues) ? parsed.issues.map(String).slice(0, 12) : [];
+    const corrected = String(parsed.corrected_response || "").trim();
+    if (parsed.pass === false && corrected) return { response: corrected, repaired: true, issues };
+    if (unknownSources.length && !corrected) return { response: draft, repaired: false, issues: [...issues, "unknown source citation"] };
+    return { response: draft, repaired: false, issues };
+  } catch (error) {
+    console.warn("[brain-chat] response validator failed", error);
+    return { response: draft, repaired: false, issues: ["validator unavailable"] };
+  }
+}
 
 function clampText(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
@@ -162,6 +249,7 @@ const EMPTY_VAULT_RESPONSE = (topic: string) =>
   `I couldn't find a strong principle match for **${topic}** inside your vault yet. Upload more material on **${topic}** or rephrase the message with more context so I can pull the right principles.\n\nThe Brain only speaks from what you've taught it — no general-knowledge fallback.`;
 
 function buildSystemPrompt(opts: {
+  responseMode: string;
   selectedBlock: string;
   evidenceBlock: string;
   chunksBlock: string;
@@ -176,11 +264,15 @@ function buildSystemPrompt(opts: {
   whySkeleton: string;
   openerHint: string;
 }) {
-  const { selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, workspaceProfile, recentExchanges, priorSummary, durableMemory, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
+  const { responseMode, selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, workspaceProfile, recentExchanges, priorSummary, durableMemory, frameworkName, sourceTitles, whySkeleton, openerHint } = opts;
   const sourceList = sourceTitles.length ? sourceTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n") : "  (none)";
   return `You are an elite sales Brain. You have been given multiple principles from DIFFERENT books and videos in the user's vault.
 
 You are NOT a general AI assistant. Every claim is grounded in the user's vault. You are direct, confident, specific. You give word-for-word scripts. You explain the psychology. You never say "I think" or "maybe".
+
+${responseMode}
+
+MODE OVERRIDE: The response mode above controls the answer structure. The fixed sales-coaching structure below applies ONLY when RESPONSE MODE is CONVERSATION COACHING. For every other mode, ignore that fixed structure and follow the selected mode exactly.
 
 ${BRAIN_PERSONA}
 
@@ -247,7 +339,7 @@ Under WHY THIS WORKS, use this exact source rotation. Replace only [Point name] 
 
 ${whySkeleton}
 
-RESPONSE FORMAT — USE THIS EXACT STRUCTURE, IN THIS EXACT ORDER, EVERY TIME. NO EXTRA SECTIONS, NO PREAMBLE, NO RECAP, NO SOURCE LISTS AT THE END. EVERY SECTION HEADER BELOW IS MANDATORY.
+CONVERSATION-COACHING RESPONSE FORMAT — use this structure only in CONVERSATION COACHING mode.
 
 BUYER PSYCHOLOGY:
 [2-4 sentences reading what the buyer is actually FEELING right now — the hidden emotion, status frame, fear, hesitation, or hope behind the words. Reference the EMOTIONAL JOURNEY across this conversation (how they felt earlier vs now — colder, warming, stalling, testing, ghosting, re-engaging). Treat this as a continuing thread, NOT a brand new message. Name the stage of the buyer's internal arc. Cite 1 source inline.]
@@ -447,7 +539,7 @@ serve(async (req) => {
           .maybeSingle(),
         supabaseAdmin
           .from("ai_chat_messages")
-          .select("role, content, created_at", { count: "exact" })
+          .select("role, content, created_at, image_url, metadata", { count: "exact" })
           .eq("conversation_id", conversation_id)
           .eq("user_id", user.id)
           .in("role", ["user", "assistant"])
@@ -455,7 +547,7 @@ serve(async (req) => {
           .limit(MAX_MESSAGES),
         supabaseAdmin
           .from("ai_chat_messages")
-          .select("role, content, created_at")
+          .select("role, content, created_at, image_url, metadata")
           .eq("conversation_id", conversation_id)
           .eq("user_id", user.id)
           .in("role", ["user", "assistant"])
@@ -479,7 +571,10 @@ serve(async (req) => {
           ));
         const dbMessages = allHistoryRows.map((m: any) => ({
           role: m.role === "assistant" ? "assistant" : "user",
-          content: String(m.content || ""),
+          content: [
+            String(m.content || ""),
+            m.metadata?.vision_analysis ? `\n\n[Stored image evidence]\n${String(m.metadata.vision_analysis)}` : "",
+          ].join(""),
           created_at: m.created_at,
         }));
 
@@ -602,7 +697,7 @@ serve(async (req) => {
         else rememberedMessageCount = storedMessageCount;
       }
     }
-    const durableMemoryText = renderConversationMemory(durableMemory, 7000);
+    let durableMemoryText = renderConversationMemory(durableMemory, 7000);
 
     // Build session context (last 3 exchanges + previous-turn principles)
     const session = await buildSessionContext(supabaseAdmin, conversation_id || null, modelMessages);
@@ -687,6 +782,30 @@ serve(async (req) => {
 
       conversationText = analysis;
 
+      // Persist the vision/OCR result on the current user message. Future turns
+      // can then rebuild durable memory from what the screenshot actually said,
+      // even though the browser no longer resends that old image.
+      if (conversation_id && conversationText.length >= 5) {
+        const { data: latestImageRow } = await supabaseAdmin
+          .from("ai_chat_messages")
+          .select("id, metadata")
+          .eq("conversation_id", conversation_id)
+          .eq("user_id", user.id)
+          .eq("role", "user")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (latestImageRow?.id) {
+          await supabaseAdmin.from("ai_chat_messages").update({
+            metadata: {
+              ...(latestImageRow.metadata || {}),
+              vision_analysis: clampText(conversationText, 12000),
+              vision_analyzed_at: new Date().toISOString(),
+            },
+          }).eq("id", latestImageRow.id).eq("user_id", user.id);
+        }
+      }
+
       // Only bail when BOTH vision and OCR gave us nothing usable.
       if (conversationText.length < 5) {
         const fixed = "I couldn't make out that image. Try a clearer photo, or just tell me in words what's going on and I'll pull the right plays from your brain.";
@@ -699,6 +818,29 @@ serve(async (req) => {
           },
         });
         return new Response(stream, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
+      }
+
+      if (conversation_id && conversationRecord) {
+        const memoryMessages = [
+          ...conversationMessages,
+          { role: "user", content: `${lastUserText || "Analyze image"}\n\n[Image evidence]\n${conversationText}` },
+        ];
+        const refreshed = await refreshDurableConversationMemory(
+          chat,
+          conversationRecord.title || "Untitled conversation",
+          durableMemory,
+          memoryMessages,
+        );
+        if (hasConversationMemory(refreshed)) {
+          durableMemory = refreshed;
+          rememberedMessageCount = storedMessageCount;
+          durableMemoryText = renderConversationMemory(durableMemory, 7000);
+          await supabaseAdmin.from("ai_conversations").update({
+            conversation_memory: refreshed,
+            memory_message_count: storedMessageCount,
+            memory_updated_at: new Date().toISOString(),
+          }).eq("id", conversation_id).eq("user_id", user.id);
+        }
       }
 
       // Drive vector retrieval from the vision/OCR analysis + the user's instruction.
@@ -714,6 +856,7 @@ serve(async (req) => {
     // retrieval template. This is what makes each question pull different,
     // genuinely relevant principles instead of the same ones every time.
     const cleanMsg = (lastUserText || "").trim();
+    const responseIntent = classifyBrainChatIntent(cleanMsg, hasImageAttachment);
     const embedQuery = hasImageAttachment
       ? retrievalQuery // already a clean 1-sentence situation description
       : (cleanMsg.length >= 12
@@ -737,10 +880,26 @@ serve(async (req) => {
       session,
     });
 
+    const { data: vaultCoverageRows } = await supabaseAdmin
+      .from("knowledge_base_items")
+      .select("status, source_index_version, source_chunk_count")
+      .eq("user_id", user.id);
+    const vaultCoverage = {
+      total: vaultCoverageRows?.length || 0,
+      ready: (vaultCoverageRows || []).filter((item: any) => item.status === "ready").length,
+      failed_or_incomplete: (vaultCoverageRows || []).filter((item: any) => item.status !== "ready").length,
+      full_source_indexed: (vaultCoverageRows || []).filter((item: any) => Number(item.source_index_version || 0) >= 1 && Number(item.source_chunk_count || 0) > 0).length,
+    };
+
+    const evidenceConfidence = pipeline.debug.evidence_confidence || "none";
+    const weakEvidenceNote = evidenceConfidence === "weak" || evidenceConfidence === "none"
+      ? `\n\nEVIDENCE CONFIDENCE: ${evidenceConfidence.toUpperCase()}. The retrieved vault material is not a strong semantic match. State this limitation briefly, answer only what the retrieved evidence supports, and ask for a more specific source/topic when necessary. Never turn a weak match into a confident factual claim.`
+      : "";
+
     // (encoder declared above)
 
     // ─── EMPTY VAULT — fixed-form, no Step 5 ───
-    if (pipeline.debug.empty_vault || pipeline.selected.length === 0) {
+    if (pipeline.debug.empty_vault || (pipeline.selected.length === 0 && pipeline.supporting_chunks.length === 0)) {
       const topic = pipeline.empty_vault_topic || "this topic";
       const fixed = EMPTY_VAULT_RESPONSE(topic);
       const brainMeta = {
@@ -799,6 +958,7 @@ serve(async (req) => {
     const sourceTitles = [...new Set([
       ...pipeline.selected.map((s) => s.source_title),
       ...pipeline.evidence_principles.map((p) => p.source_title || p.source_name),
+      ...pipeline.supporting_chunks.map((chunk) => chunk.source_title),
     ].filter((x): x is string => !!x))];
 
     const distinctSources = distinctSourcesFor(pipeline.selected, pipeline.evidence_principles, 5);
@@ -807,6 +967,7 @@ serve(async (req) => {
     const forcedSourceFooter = buildForcedSourceFooter(distinctSources.length >= 3 ? distinctSources : sourceTitles);
 
     let systemPrompt = buildSystemPrompt({
+      responseMode: responseFormatForIntent(responseIntent),
       selectedBlock: buildPrinciplesBlock(pipeline.selected),
       evidenceBlock: buildEvidenceBlock(pipeline.evidence_principles),
       chunksBlock: buildChunksBlock(pipeline.supporting_chunks),
@@ -821,6 +982,7 @@ serve(async (req) => {
       whySkeleton,
       openerHint,
     });
+    systemPrompt += weakEvidenceNote;
 
     if (hasImageAttachment && conversationText) {
       systemPrompt += `\n\n=== WHAT'S IN THE IMAGE(S) — VISION ANALYSIS (FULL CONVERSATION) ===\n${conversationText}\n\n=== THE USER'S FULL INSTRUCTION (read ALL of it, not just the last line) ===\n"${userInstruction}"\n\nHOW TO USE THIS:\n1. Read the ENTIRE conversation transcript above from the FIRST message to the last — understand the whole arc (how it started, what was offered, every objection, where it stands now). Do NOT base your reply on only the most recent message.\n2. The user's instruction almost always contains SEVERAL distinct requests in one block — for example: (a) justify/frame a price or offer, (b) smooth over a time gap since they last replied (team was busy/building, etc.), (c) position the offer as premium, (d) a specific ask. Identify EACH request and make your single reply address ALL of them naturally — e.g., OPEN by acknowledging the delay, THEN deliver the value/price framing, THEN the close. Do NOT answer only the last sentence.\n3. Then diagnose what's really happening across the whole thread and follow the response style above. Reference specific things the prospect actually said earlier in the conversation when relevant.\n\nIf it's a conversation, end with a clear copy-paste ready message to send that covers every part of the user's instruction. If it's a profile/product/other image, give the concrete next move and the exact words — always grounded in the vault principles.`;
@@ -843,12 +1005,13 @@ serve(async (req) => {
       brainRetrieval: buildBrainRetrievalMeta(pipeline),
       debug: {
         ...pipeline.debug,
+        response_mode: responseIntent,
+        vault_coverage: vaultCoverage,
         durable_memory_used: hasConversationMemory(durableMemory),
         durable_memory_message_count: rememberedMessageCount,
         stored_conversation_message_count: storedMessageCount,
       },
     };
-    const metaEvent = `data: ${JSON.stringify({ brain_meta: brainMeta })}\n\n`;
     const loadingEvent = `data: ${JSON.stringify({ brain_meta: { loading: true } })}\n\n`;
 
     // Strip any [[cite:...]] / [^N] tokens and any "SOURCE CHECK" trailing block — sources stay inline only.
@@ -859,13 +1022,12 @@ serve(async (req) => {
     const transformed = new ReadableStream({
       async start(controller) {
         controller.enqueue(encoder.encode(loadingEvent));
-        controller.enqueue(encoder.encode(metaEvent));
         const aiResp = await userChat(chat, {
           model: chat.models.reasoning,
           max_tokens: 6000,
           temperature: 0.35,
           messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
-          stream: !chat.isAnthropic,
+          stream: false,
         });
 
 
@@ -883,59 +1045,38 @@ serve(async (req) => {
           return;
         }
 
-        if (chat.isAnthropic) {
-          const data = await aiResp.json();
-          const clean = sanitize(String(data.choices?.[0]?.message?.content || ""));
-          if (!clean) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "Anthropic returned an empty response" })}\n\n`));
-          } else {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: clean } }] })}\n\n`));
-          }
+        const data = await aiResp.json();
+        const draft = sanitize(String(data.choices?.[0]?.message?.content || "")).trim();
+        if (!draft) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "AI returned an empty response" })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
           return;
         }
 
-        const reader = aiResp.body!.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        let fullReply = "";
-        const reEncoder = new TextEncoder();
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            let outBuf = "";
-            let idx: number;
-            while ((idx = buf.indexOf("\n")) !== -1) {
-              const line = buf.slice(0, idx);
-              buf = buf.slice(idx + 1);
-              if (line.startsWith("data: ")) {
-                const json = line.slice(6).trim();
-                if (json === "[DONE]") continue;
-                try {
-                  const parsed = JSON.parse(json);
-                  const c = parsed.choices?.[0]?.delta?.content;
-                  if (typeof c === "string") {
-                    const clean = sanitize(c);
-                    fullReply += clean;
-                    parsed.choices[0].delta.content = clean;
-                    outBuf += `data: ${JSON.stringify(parsed)}\n`;
-                    continue;
-                  }
-                } catch { /* fall through */ }
-              }
-              outBuf += line + "\n";
-            }
-            if (outBuf) controller.enqueue(reEncoder.encode(outBuf));
-          }
-          if (buf) controller.enqueue(reEncoder.encode(buf));
-          // Sources stay inline and natural — no appended SOURCE CHECK list.
-          controller.enqueue(reEncoder.encode("data: [DONE]\n\n"));
-        } finally {
-          controller.close();
-        }
+        const validation = await validateGroundedBrainResponse({
+          chat,
+          intent: responseIntent,
+          userRequest: hasImageAttachment ? `${userInstruction}\n\n${conversationText}` : (lastUserText || retrievalQuery),
+          draft: clampText(draft, VALIDATION_DRAFT_CHAR_LIMIT),
+          allowedSourceTitles: sourceTitles,
+          evidencePack: [buildPrinciplesBlock(pipeline.selected), buildEvidenceBlock(pipeline.evidence_principles), buildChunksBlock(pipeline.supporting_chunks)].join("\n\n"),
+          durableMemory: durableMemoryText,
+        });
+        const finalResponse = sanitize(validation.response).trim();
+        const validatedMeta = {
+          ...brainMeta,
+          debug: {
+            ...brainMeta.debug,
+            response_validated: true,
+            response_repaired: validation.repaired,
+            validation_issues: validation.issues,
+          },
+        };
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: validatedMeta })}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: finalResponse } }] })}\n\n`));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
       },
     });
 

@@ -912,6 +912,14 @@ export default function AiChat() {
           .delete()
           .eq("conversation_id", convId)
           .gt("created_at", editedRow.created_at);
+        // The saved memory may contain facts from messages that were just
+        // deleted. Clear its checkpoint so brain-chat rebuilds it from the
+        // corrected history on this resend.
+        await supabase.from("ai_conversations").update({
+          conversation_memory: {},
+          memory_message_count: 0,
+          memory_updated_at: null,
+        } as any).eq("id", convId).eq("user_id", user!.id);
       }
     }
     const subsequentIds = messages.slice(editingMsgIdx + 1).map((m) => m.id).filter((x): x is string => !!x);
