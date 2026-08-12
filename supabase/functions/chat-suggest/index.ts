@@ -4,6 +4,10 @@ import { SALES_PLAYBOOK, FRAMEWORK_DETECTION_PROMPT } from "./sales-playbook.ts"
 import { OBJECTION_HANDLERS, OBJECTION_DETECTION_PROMPT } from "./objection-handlers.ts";
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
+import {
+  buildProspectEvidenceLedger,
+  deduplicateConversationTurns,
+} from "../_shared/conversation-history.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
@@ -792,7 +796,7 @@ serve(async (req) => {
       .eq("thread_type", activeThreadType)
       .order("created_at", { ascending: true });
 
-    const history = allHistory || [];
+    const history = deduplicateConversationTurns(allHistory || []);
     const speakerMessages = history.filter((m: any) => m.direction === "inbound" || m.direction === "outbound");
     if (screenshotContext) {
       // Screenshot creation sends a complete OCR transcript for context. Use
@@ -1098,6 +1102,7 @@ serve(async (req) => {
       const decisionHistory = speakerMessages.map((m: any) =>
         `${m.direction === "outbound" ? "FRIEND" : m.direction === "context" ? "NOTE" : "PROSPECT"}: ${m.content}`
       ).join("\n");
+      const evidenceLedger = buildProspectEvidenceLedger(history);
       const decisionResponse = await userChat(chat, {
         model: chat.models.balanced,
         messages: [
@@ -1111,7 +1116,7 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
           },
           {
             role: "user",
-            content: `CURRENT PROSPECT MEMORY:\n${friendLearningContext.substring(0, 3000)}\n\nCONVERSATION:\n${keepHeadAndLatest(decisionHistory, 7000, 1200)}\n\nLATEST INPUT:\n${message}\n\nSCREENSHOT CONTEXT:\n${screenshotContext || "none"}`,
+            content: `CURRENT PROSPECT MEMORY:\n${friendLearningContext.substring(0, 4000)}\n\nPROSPECT EVIDENCE LEDGER (every unique inbound turn):\n${evidenceLedger}\n\nCONVERSATION HEAD + LATEST:\n${keepHeadAndLatest(decisionHistory, 7000, 1200)}\n\nLATEST INPUT:\n${message}\n\nSCREENSHOT CONTEXT:\n${screenshotContext || "none"}`,
           },
         ],
         temperature: 0.2,

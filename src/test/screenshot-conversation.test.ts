@@ -3,6 +3,7 @@ import {
   latestProspectScreenshotMessage,
   latestScreenshotTurn,
   orderedScreenshotMessages,
+  removeDuplicateConversationMessages,
 } from "@/lib/screenshot-conversation";
 
 const instagramConversation = [
@@ -30,5 +31,13 @@ describe("screenshot conversation speaker selection", () => {
       { speaker: "them", text: "I am just starting", order: 1 },
       { speaker: "me", text: "How has it been going?", order: 2 },
     ])).toBe("I am just starting");
+  });
+
+  it("removes exact OCR duplicates without confusing the two speakers", () => {
+    expect(removeDuplicateConversationMessages([
+      { direction: "inbound", content: "I want more sales" },
+      { direction: "inbound", content: " I want   more sales " },
+      { direction: "outbound", content: "I want more sales" },
+    ])).toHaveLength(2);
   });
 });

@@ -3,6 +3,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
+import {
+  buildProspectEvidenceLedger,
+  deduplicateConversationTurns,
+  formatConversationHistory,
+} from "../_shared/conversation-history.ts";
 import {
   applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
@@ -25,7 +31,8 @@ serve(async (req) => {
   }
 
   try {
-    const { prospectId } = await req.json();
+    const { prospectId, threadType = "friend" } = await req.json();
+    const activeThreadType = threadType === "expert" ? "expert" : "friend";
 
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -54,7 +61,7 @@ serve(async (req) => {
       { data: messages },
     ] = await Promise.all([
       supabase.from("prospects").select("*").eq("id", prospectId).eq("user_id", user.id).single(),
-      supabase.from("chat_messages").select("*").eq("prospect_id", prospectId).eq("user_id", user.id).order("created_at"),
+      supabase.from("chat_messages").select("*").eq("prospect_id", prospectId).eq("user_id", user.id).eq("thread_type", activeThreadType).order("created_at"),
     ]);
 
     if (!prospect) {
@@ -63,9 +70,8 @@ serve(async (req) => {
       });
     }
 
-    const conversationHistory = (messages || []).map((m: any) =>
-      `${m.direction === "outbound" ? "YOU" : m.direction === "context" ? "SALESPERSON NOTE" : m.direction === "unknown" ? "UNKNOWN SPEAKER" : "PROSPECT"}: ${m.content}`
-    ).join("\n");
+    const cleanMessages = deduplicateConversationTurns(messages || []);
+    const conversationHistory = formatConversationHistory(cleanMessages);
 
     if (!conversationHistory.trim()) {
       return new Response(JSON.stringify({
@@ -108,7 +114,7 @@ serve(async (req) => {
     ].filter(Boolean).join("\n") : "No workspace profile configured.";
 
     // Retrieve brain principles (semantic + static)
-    const lastMessages = (messages || []).slice(-5).map((m: any) => m.content).join(" ");
+    const lastMessages = cleanMessages.slice(-5).map((m: any) => m.content).join(" ");
     const queryText = lastMessages.substring(0, 1000);
     const embeddingPromise = generateEmbedding(queryText, supabase, user.id);
 
@@ -126,14 +132,29 @@ serve(async (req) => {
     ]);
 
     let semanticPrinciples: any[] = [];
+    let semanticChunks: any[] = [];
     if (queryEmbedding) {
-      const { data: semP } = await supabase.rpc("match_sales_brain", {
-        query_embedding: JSON.stringify(queryEmbedding),
-        match_count: 40,
-        match_threshold: 0.25,
-        p_user_id: user.id,
-      });
+      const embeddingText = JSON.stringify(queryEmbedding);
+      const [{ data: semP }, { data: semC }] = await Promise.all([
+        supabase.rpc("match_sales_brain", {
+          query_embedding: embeddingText,
+          match_count: 40,
+          match_threshold: 0.25,
+          p_user_id: user.id,
+        }),
+        supabase.rpc("match_knowledge_chunks", {
+          query_embedding: embeddingText,
+          match_count: 40,
+          match_threshold: 0.18,
+          p_user_id: user.id,
+        }),
+      ]);
       semanticPrinciples = (semP || []).map((p: any) => ({ ...p, _semantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
+      semanticChunks = deduplicateChunks((semC || []).map((chunk: any) => ({
+        ...chunk,
+        _semantic: true,
+        relevance_score: Math.round((chunk.similarity || 0) * 100),
+      })), "relevance_score").slice(0, 12);
     }
 
     const merged = mergeByIdPriority(semanticPrinciples, allPrinciples || []);
@@ -143,6 +164,11 @@ serve(async (req) => {
     const principlesContext = topPrinciples.length > 0
       ? topPrinciples.map((p: any) => `• ${p.principle_name} (${p.source_name}): ${p.what_i_learned} → Apply: ${p.how_to_apply}`).join("\n")
       : "No principles uploaded yet.";
+    const sourcePassagesContext = semanticChunks.length > 0
+      ? semanticChunks.map((chunk: any, index: number) =>
+          `${index + 1}. ${chunk.source_name || chunk.title || "Knowledge source"}${chunk.locator ? ` (${chunk.locator})` : ""}: ${String(chunk.content || "").slice(0, 900)}`,
+        ).join("\n")
+      : "No relevant original source passages found.";
 
     // Build lead history context
     let leadHistoryContext = "";
@@ -195,7 +221,17 @@ ${topWin.map(([p, c]) => `• ${p}: led to ${c} wins`).join("\n")}`;
       }
     }
 
-    const systemPrompt = `You are a sales conversation intelligence engine with an OBJECTION RADAR and DISCOVERY FRAMEWORK analyzer.
+    const existingFriendProfile = activeThreadType === "friend"
+      && leadEntry?.prospect_profile
+      && typeof leadEntry.prospect_profile === "object"
+      ? leadEntry.prospect_profile as Record<string, unknown>
+      : {};
+    const friendMemoryContext = activeThreadType === "friend"
+      ? buildFriendLearningContext(existingFriendProfile, [])
+      : "Friend prospect memory is not used in Expert mode.";
+    const prospectEvidenceLedger = buildProspectEvidenceLedger(cleanMessages);
+
+    const systemPrompt = `You are the canonical five-stage Friend conversation intelligence engine with an objection radar. Analyze evidence; do not write a reply.
 
 You are given:
 1. WORKSPACE_PROFILE — the user's niche, product, and positioning
@@ -209,7 +245,7 @@ Analyze the conversation and return a JSON object ONLY. No explanation.
 Return this EXACT structure:
 {
   "warmth_score": <number 0-100>,
-  "stage": <"friend" | "warming" | "referral">,
+  "stage": <"intent" | "logical_certainty" | "emotional_certainty" | "pitch" | "handoff">,
   "prospect_psychology": <string — 1 sentence describing their emotional state and what they REALLY mean>,
   "pain_expressed": <boolean>,
   "pain_summary": <string — specific pain expressed, or null>,
@@ -232,13 +268,30 @@ Return this EXACT structure:
   "resistance_words_detected": [<strings — words/phrases that signal resistance>],
   "conversion_triggers": [<strings — specific things that could push them to convert>],
   "detectedTone": <string>,
-  "prospectType": <string>
+  "prospectType": <string>,
+  "segment": <string>, "experience_level": <string>, "sales_status": <string>,
+  "mentor_status": <string>, "current_strategy": <string>,
+  "interests": [], "desires": [], "pain_points": [], "objections": [],
+  "motivation": <string>, "intent": <string>, "tangible_goal": <string>,
+  "why_goal_matters": <string>, "past_experiences": [],
+  "problem_gap": <string>, "problem_status": <"active"|"past_resolved"|"unclear"|"none">,
+  "root_cause": <string>, "consequences": <string>, "need_for_change_reason": <string>,
+  "inaction_pattern": <string>, "detailed_future_outcome": <string>,
+  "doubt_cause": <string>, "certainty_gap": <string>,
+  "reply_act": <string>, "question_needed": <boolean>, "knowledge_need": <string>,
+  "readiness": <string>, "contact_status": <"active"|"not_now"|"do_not_contact"|"not_a_fit">,
+  "next_best_action": <string>, "learning_confidence": <number 0-100>, "evidence": []
 }
 
-STAGE RULES:
-- "friend": warmth 0–40. Pure connection. Use SPIN Situation + Problem questions.
-- "warming": warmth 41–74. Trust building. Use SPIN Implication + emotional deepening.
-- "referral": warmth 75–100 AND pain_expressed is true. Use SPIN Need-Payoff + soft handoff.
+FIVE-STAGE EVIDENCE RULES (these override any legacy warmth labels below):
+- Intent requires tangible goal, why it matters, and previous attempts/actual experience.
+- Logical Certainty requires an active unresolved problem, its root cause, consequences, and the prospect's own need for change.
+- Emotional Certainty requires the inaction pattern and a detailed personally meaningful future outcome.
+- Pitch requires completed prior evidence plus permission or explicit interest in help.
+- Handoff requires explicit acceptance of the expert introduction.
+- Warmth and message count never advance a stage. Preserve prior evidenced facts unless newer evidence corrects them.
+- Confidence about direction is not proof of leads, conversions, or consistent sales.
+- A clear boundary means stop, not objection handling.
 
 WARMTH SCORING:
 +5-15 per genuine personal detail shared
@@ -275,9 +328,18 @@ ${workspaceProfile}
 
 SALES_BRAIN_PRINCIPLES:
 ${principlesContext.substring(0, 4000)}
+
+ORIGINAL_SOURCE_PASSAGES:
+${sourcePassagesContext.substring(0, 7000)}
 ${leadHistoryContext}
 ${conversationPatternsContext}
 ${winningContext}
+
+CURRENT_PROSPECT_MEMORY:
+${friendMemoryContext.substring(0, 5000)}
+
+PROSPECT_EVIDENCE_LEDGER (every unique inbound turn, chronological):
+${prospectEvidenceLedger}
 
 CONVERSATION_HISTORY:
 ${conversationHistory}`;
@@ -339,17 +401,20 @@ ${conversationHistory}`;
       };
     }
 
-    const prospectOnlyHistory = (messages || [])
+    const prospectOnlyHistory = cleanMessages
       .filter((message: any) => message.direction === "inbound")
       .map((message: any) => String(message.content || ""))
       .join("\n");
-    const latestProspectMessage = [...(messages || [])]
+    const latestProspectMessage = [...cleanMessages]
       .reverse()
       .find((message: any) => message.direction === "inbound")?.content || "";
     analysis = applyDeterministicSalesSignals(analysis, latestProspectMessage, prospectOnlyHistory);
     analysis = applyDeterministicCommercialRealityCheck(analysis, latestProspectMessage, prospectOnlyHistory);
+    if (activeThreadType === "friend") {
+      analysis = { ...analysis, ...buildFriendProspectProfile(analysis, existingFriendProfile) };
+    }
     analysis = applyEarliestMissingFriendCheckpoint(analysis);
-    const certaintyStage = deriveEvidenceGatedFriendStage(analysis, (messages || []).length);
+    const certaintyStage = deriveEvidenceGatedFriendStage(analysis, cleanMessages.length);
     analysis.stage = friendStageToDatabase(certaintyStage.stage);
     analysis.stage_evidence = certaintyStage.evidence;
     analysis.stage_missing = certaintyStage.missing;
@@ -362,6 +427,32 @@ ${conversationHistory}`;
       analysis.spin_stage = "problem";
       analysis.discovery_question_type = "commercial result verification";
       analysis.brain_principle_reason = "Preserve trust while testing the unverified result with one concrete, non-confrontational question.";
+    }
+
+    if (activeThreadType === "friend") {
+      await supabase.from("prospects").update({ conversation_stage: analysis.stage }).eq("id", prospectId).eq("user_id", user.id);
+      if (leadEntry) {
+        await supabase.from("lead_registry").update({
+          prospect_profile: buildFriendProspectProfile(analysis, existingFriendProfile),
+          contact_status: analysis.contact_status || leadEntry.contact_status || "active",
+          last_observed_at: new Date().toISOString(),
+        }).eq("id", leadEntry.id);
+      } else {
+        await supabase.from("lead_registry").insert({
+          user_id: user.id,
+          workspace_id: prospect.workspace_id,
+          prospect_id: prospectId,
+          name: prospect.name,
+          persona_type: analysis.prospectType || "unknown",
+          psychological_state: analysis.prospect_psychology || "unknown",
+          subtext_analysis: analysis.stage_reason || null,
+          past_advice: [],
+          upload_matches: [],
+          prospect_profile: buildFriendProspectProfile(analysis, {}),
+          contact_status: analysis.contact_status || "active",
+          last_observed_at: new Date().toISOString(),
+        });
+      }
     }
 
     return new Response(JSON.stringify(analysis), {

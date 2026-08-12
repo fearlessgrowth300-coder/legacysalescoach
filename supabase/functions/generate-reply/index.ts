@@ -2,6 +2,11 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
+import {
+  buildProspectEvidenceLedger,
+  deduplicateConversationTurns,
+  formatConversationHistory,
+} from "../_shared/conversation-history.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
@@ -202,7 +207,7 @@ serve(async (req) => {
         .limit(20),
     ]);
 
-    const history = allHistory || [];
+    const history = deduplicateConversationTurns(allHistory || []);
     const speakerMessages = history.filter((m: any) => m.direction === "inbound" || m.direction === "outbound");
     const recentMessages = history.slice(-10);
     if (screenshotPath) {
@@ -541,6 +546,7 @@ BOUNDARIES: "Don't contact me", "leave me alone", or an equivalent explicit refu
 WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.
 VISUAL EVIDENCE: When a screenshot is supplied, use visible speaker alignment, reactions, quoted replies, timestamps, read/seen/delivered status, unanswered-message state, and attachments. If OCR conflicts with the image, trust the image and mention the conflict in signals_detected. Treat salesperson notes as context, never as the prospect's words.`;
 
+    const prospectEvidenceLedger = buildProspectEvidenceLedger(history);
     const analysisUserPrompt = `WORKSPACE_PROFILE:
 ${workspaceProfile}
 
@@ -562,8 +568,11 @@ ${learnedInsightsText.substring(0, 2000)}
 FRIEND_LEARNING_MEMORY:
 ${friendLearningContext.substring(0, 5000)}
 
+PROSPECT_EVIDENCE_LEDGER (every unique inbound turn, chronological):
+${prospectEvidenceLedger}
+
 CONVERSATION_HISTORY:
-${conversationHistory}
+${formatConversationHistory(history)}
 
 AUTHORITATIVE LATEST PROSPECT MESSAGE:
 ${message || "No inbound prospect message was found."}
