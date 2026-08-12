@@ -4,6 +4,14 @@ import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
+import {
+  buildFriendQualityValidatorPrompt,
+  buildFriendStageDirective,
+  deriveEvidenceGatedFriendStage,
+  deterministicFriendQualityIssues,
+  friendStageToDatabase,
+  selectRelevantConversationPassages,
+} from "../_shared/friend-conversation-engine.ts";
 
 
 const corsHeaders = {
@@ -443,6 +451,9 @@ serve(async (req) => {
     const approvedStories = friendPersonaApproved && Array.isArray(workspace?.approved_stories)
       ? workspace.approved_stories.slice(0, 12)
       : [];
+    const approvedConversationExamples = friendPersonaApproved
+      ? String(approvedFriendPersona.conversation_examples || "").trim()
+      : "";
     const approvedProofText = friendPersonaApproved && (approvedProofAssets || []).length > 0
       ? (approvedProofAssets || []).map((proof: any) =>
           `• ${proof.title}${proof.result_value ? `: ${proof.result_value}` : ""}${proof.result_date ? ` (${proof.result_date})` : ""}${proof.description ? ` — ${proof.description}` : ""}`
@@ -478,8 +489,9 @@ serve(async (req) => {
       workspace.positioning ? `Positioning: ${workspace.positioning}` : "",
       workspace.profile_analysis ? `Profile: ${workspace.profile_analysis}` : "",
       workspace.products_detected ? `Products: ${workspace.products_detected}` : "",
-      workspace.custom_framework ? `Custom Framework:\n${workspace.custom_framework.substring(0, 8000)}` : "",
-      workspace.parsed_framework ? `Structured Framework:\n${JSON.stringify(workspace.parsed_framework).substring(0, 5000)}` : "",
+      workspace.custom_framework ? `Custom Framework:\n${workspace.custom_framework}` : "",
+      workspace.parsed_framework ? `Structured Framework:\n${JSON.stringify(workspace.parsed_framework)}` : "",
+      approvedConversationExamples ? `Full Approved Reference Conversation:\n${approvedConversationExamples}` : "",
       friendPersonaApproved && workspace.friend_backstory ? `Friend Backstory: ${workspace.friend_backstory}` : "",
       friendPersonaApproved && workspace.transformation ? `Transformation: ${workspace.transformation}` : "",
       friendPersonaApproved && workspace.expert_description ? `Expert Description: ${workspace.expert_description}` : "",
@@ -510,13 +522,13 @@ serve(async (req) => {
 
     const analysisPrompt = `You are a sales conversation intelligence engine with an OBJECTION RADAR and multi-framework analyzer. Analyze and return JSON ONLY.
 
-Return the existing sales fields plus these REQUIRED structured learning fields: "segment" (beginner|first_sale_stuck|mentor_no_results|independent|tried_before|already_successful|not_ready|other), "experience_level", "sales_status", "mentor_status", "current_strategy", "interests" (array), "desires" (array), "pain_points" (array), "objections" (array), "motivation", "intent" (what they are trying to protect, prove, avoid or achieve), "tangible_goal" (the concrete result they want), "problem_gap" (distance between current and desired state), "doubt_cause" (why they hesitate), "certainty_gap" (what must become logically clear), "reply_act" (relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop), "question_needed" (boolean), "knowledge_need" (the exact principle or evidence needed, or "none"), "readiness" (not_ready|exploring|problem_aware|wants_help|accepted_referral), "contact_status" (active|not_now|do_not_contact|not_a_fit), "next_best_action", "learning_confidence" (0-100), and "evidence" (short array of conversation facts supporting the profile).
+Return the existing sales fields plus these REQUIRED structured learning fields: "segment" (beginner|first_sale_stuck|mentor_no_results|independent|tried_before|already_successful|not_ready|other), "experience_level", "sales_status", "mentor_status", "current_strategy", "interests" (array), "desires" (array), "pain_points" (array), "objections" (array), "motivation", "intent" (what they are trying to protect, prove, avoid or achieve), "tangible_goal" (the concrete result they want), "problem_gap" (distance between current and desired state), "problem_status" (active|past_resolved|unclear|none), "doubt_cause" (why they hesitate), "certainty_gap" (what must become logically clear), "reply_act" (relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop), "question_needed" (boolean), "knowledge_need" (the exact principle or evidence needed, or "none"), "readiness" (not_ready|exploring|problem_aware|wants_help|accepted_referral), "contact_status" (active|not_now|do_not_contact|not_a_fit), "next_best_action", "learning_confidence" (0-100), and "evidence" (short array of conversation facts supporting the profile).
 
-Existing sales fields: { "warmth_score": <0-100>, "stage": <"friend"|"warming"|"referral">, "prospect_psychology": <string — what they REALLY mean>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <"empathy_mirror"|"story_drop"|"curiosity_gap"|"referral"|"re_engage"|"spin_situation"|"spin_problem"|"spin_implication"|"spin_need_payoff"|"five_whys"|"pain_dream_gap"|"micro_commitment"|"objection_navigate"|"respect_boundary">, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <"TIME"|"MONEY"|"TRUST"|"CERTAINTY"|"PRIORITY"|"FEAR"|"TIMING"|"NEED_MORE_CLARITY"|null>, "objection_response_type": <"CLARIFY"|"REASSURE"|"REFRAME"|"DEEPEN"|"ISOLATE"|"HAND_OFF"|"RESPECT_NO"|null>, "spin_stage": <"situation"|"problem"|"implication"|"need_payoff">, "offer_fit": <"high"|"uncertain"|"low">, "referral_readiness": <"not_ready"|"ask_permission"|"ready_for_handoff">, "next_objective": <single concrete objective for the next message>, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
+Existing sales fields: { "warmth_score": <0-100>, "stage": <"opener"|"rapport"|"pain"|"offer"|"close">, "prospect_psychology": <string — what they REALLY mean>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <"empathy_mirror"|"story_drop"|"curiosity_gap"|"referral"|"re_engage"|"spin_situation"|"spin_problem"|"spin_implication"|"spin_need_payoff"|"five_whys"|"pain_dream_gap"|"micro_commitment"|"objection_navigate"|"respect_boundary">, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <"TIME"|"MONEY"|"TRUST"|"CERTAINTY"|"PRIORITY"|"FEAR"|"TIMING"|"NEED_MORE_CLARITY"|null>, "objection_response_type": <"CLARIFY"|"REASSURE"|"REFRAME"|"DEEPEN"|"ISOLATE"|"HAND_OFF"|"RESPECT_NO"|null>, "spin_stage": <"situation"|"problem"|"implication"|"need_payoff">, "offer_fit": <"high"|"uncertain"|"low">, "referral_readiness": <"not_ready"|"ask_permission"|"ready_for_handoff">, "next_objective": <single concrete objective for the next message>, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
 
 OBJECTION RADAR: Scan EVERY message for objection language. Classify: TIME, MONEY, TRUST, CERTAINTY, PRIORITY, FEAR, TIMING, NEED_MORE_CLARITY. Recommend response type: CLARIFY, REASSURE, REFRAME, DEEPEN, ISOLATE, HAND_OFF.
 SPIN DETECTION: <4 exchanges="situation", personal but no pain="problem", pain not amplified="implication", pain+wants change="need_payoff".
-STAGE RULES: "friend" 0-35, "warming" 36-64, "referral" 65+ AND (pain_expressed=true OR the prospect explicitly asks for help, price, details, a link, a call, or how the user achieved the result).
+STAGE RULES OVERRIDE THE LEGACY stage enum above: return opener|rapport|pain|offer|close. opener earns a reply. rapport establishes the prospect's OWN motivation, result status, and current strategy. pain requires an explicit ACTIVE unresolved problem/gap in their own situation, not their audience's problem and not a resolved past problem. offer requires an active problem, a desired result, and explicit interest in help or permission. close requires acceptance of the expert introduction/handoff or a direct practical decision question. Warmth and message count never prove a stage.
 REFERRAL READINESS: not_ready until a relevant problem/desire is clear; ask_permission when fit looks plausible and the prospect wants help; ready_for_handoff only after permission or an explicit request for the expert/link. Never use warmth alone as proof of fit.
 LEARNING: Build structured fields only from explicit evidence. "Made one sale", "working with a mentor", "tried before", and "doing it alone" are different states. Preserve useful known facts from CURRENT PROSPECT MEMORY unless newer evidence corrects them.
 REPLY ACT: Choose what a real peer should do next. A question is optional. Prefer relating, sharing an approved experience, answering, observing or validating when discovery is not needed. Set question_needed=true only when one answer is necessary to understand the person or advance the conversation naturally.
@@ -588,22 +600,19 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
       analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything", segment: "other", experience_level: "unknown", sales_status: "unknown", mentor_status: "unknown", current_strategy: "unknown", interests: [], desires: [], pain_points: [], objections: [], motivation: "unknown", intent: "unknown", tangible_goal: "unknown", problem_gap: "unknown", doubt_cause: "unknown", certainty_gap: "unknown", reply_act: "respond naturally", question_needed: false, knowledge_need: "none", readiness: "not_ready", contact_status: "active", next_best_action: "continue discovery", learning_confidence: 0, evidence: [] };
     }
 
-    // Conversation stages are progressive. A short reply later in a warm
-    // conversation must not reset an offer-ready prospect to first contact.
-    const dbStageRank: Record<string, number> = { first_contact: 0, continuing: 1, rapport: 1, pain: 2, offer: 3, close: 4 };
-    const analysisStageRank: Record<string, number> = { friend: 0, warming: 1, referral: 3 };
-    const existingStageRank = dbStageRank[prospect.conversation_stage] ?? 0;
-    const analyzedStageRank = analysisStageRank[analysisJson.stage] ?? 0;
+    // Both Friend reply paths use one evidence-gated five-stage journey. A
+    // warm tone or a long thread can never advance a prospect by itself.
     const explicitContactBoundary = analysisJson.contact_status === "do_not_contact";
     if (explicitContactBoundary) {
-      analysisJson.stage = "friend";
       analysisJson.referral_readiness = "not_ready";
       analysisJson.recommended_move = "respect_boundary";
     } else if (analysisJson.contact_status === "not_a_fit") {
-      analysisJson.stage = "friend";
       analysisJson.referral_readiness = "not_ready";
-    } else if (existingStageRank >= 3 && analyzedStageRank < 3) analysisJson.stage = "referral";
-    else if (existingStageRank >= 1 && analyzedStageRank < 1) analysisJson.stage = "warming";
+    }
+    const friendStageResult = deriveEvidenceGatedFriendStage(analysisJson, speakerMessages.length);
+    analysisJson.stage = friendStageResult.stage;
+    analysisJson.stage_evidence = friendStageResult.evidence;
+    analysisJson.stage_missing = friendStageResult.missing;
 
     // ===== FRIEND PASS 2: DECISION-AWARE KNOWLEDGE RETRIEVAL =====
     // The first retrieval gives the analyzer broad context. After the analyzer
@@ -676,6 +685,17 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
       }
     }
 
+    const friendStageDirective = activeThreadType === "friend"
+      ? buildFriendStageDirective(friendStageResult)
+      : "Expert mode does not use the Friend journey.";
+    const relevantReferenceMoments = activeThreadType === "friend"
+      ? selectRelevantConversationPassages(
+          approvedConversationExamples,
+          appliedRetrievalQuery,
+          friendStageResult.stage,
+        )
+      : "Expert mode does not use Friend reference conversations.";
+
     // ===== STEP 2: GENERATE STAGE-AWARE REPLIES WITH MULTI-FRAMEWORK =====
     const styleFingerprint = buildStyleFingerprint(workspace?.style_vector);
 
@@ -730,7 +750,7 @@ Use SPIN only as a silent diagnostic. question_needed=${Boolean(analysisJson.que
 
     const modeInstruction = activeThreadType === "expert"
       ? `MODE: EXPERT. Respond as the trusted expert/consultant. Diagnose precisely, give useful clarity, handle the objection directly, and recommend the clearest next step. Do not pretend to be a peer who personally lived every detail.`
-      : `MODE: FRIEND. Respond as a warm peer using only the workspace's approved identity, real story and offer truth. Do not pitch early. When stage=referral, first ask permission, then make a concrete handoff using LINKED_EXPERT_CONTEXT and the approved referral URL. Never invent an expert, destination, proof, price, purchase or personal result.`;
+      : `MODE: FRIEND. Respond as a warm peer using only the workspace's approved identity, real story and offer truth. Do not pitch early. At stage=offer, ask permission before explaining what helped. At stage=close, make the concrete approved handoff using LINKED_EXPERT_CONTEXT and the approved referral URL. Never invent an expert, destination, proof, price, purchase or personal result.`;
 
     const replySystemPrompt = `You are an evidence-grounded DM reply generator for social media sales conversations. Use the user's approved identity, offer truth, verified result evidence and uploaded sales knowledge. Choose the smallest effective technique for the current moment. Never pressure a poor-fit prospect and never present an inference as a fact.
 
@@ -831,6 +851,8 @@ ${screenshotContext || "No screenshot supplied."}
 ANALYSIS:
 ${JSON.stringify(analysisJson)}
 
+${friendStageDirective}
+
 CONVERSATION_HISTORY:
 ${conversationHistory}
 
@@ -845,6 +867,9 @@ ${replyChunksText.substring(0, 6500)}
 
 DECISION_AWARE_RETRIEVAL_QUERY:
 ${appliedRetrievalQuery.substring(0, 3600)}
+
+RELEVANT_APPROVED_REFERENCE_MOMENTS_FOR_THIS_EXACT_STAGE:
+${relevantReferenceMoments}
 
 WORKSPACE_LEARNED_INSIGHTS:
 ${learnedInsightsText.substring(0, 2500)}
@@ -886,6 +911,50 @@ ${winningPatternsText.substring(0, 2000)}`;
       } catch {
         replyJson = { variants: [{ variant: "primary", message: replyRaw, move_used: "fallback", principle_applied: "none", why_this_works: "AI response", warmth_prediction: analysisJson.warmth_score }] };
       }
+    }
+
+    // Friend replies must pass a second, low-temperature conversion-quality
+    // review before they can reach the UI. The validator repairs drift while
+    // preserving the locked stage, objective, approved truth and metadata.
+    if (activeThreadType === "friend") {
+      const originalVariants = Array.isArray(replyJson.variants) ? replyJson.variants : [];
+      if (originalVariants.length === 0) throw new Error("Reply generator returned no Friend variants");
+      const deterministicIssues = originalVariants.flatMap((variant: any, index: number) =>
+        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage)
+          .map((issue) => `variant ${index + 1}: ${issue}`)
+      );
+      const qualityResponse = await userChat(chat, {
+        model: chat.models.reasoning,
+        messages: [
+          { role: "system", content: buildFriendQualityValidatorPrompt("variants") },
+          {
+            role: "user",
+            content: `${friendStageDirective}\n\nLOCKED ANALYSIS:\n${JSON.stringify(analysisJson)}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nRETRIEVED KNOWLEDGE:\n${replyPrinciplesText.substring(0, 4500)}\n${replyChunksText.substring(0, 4500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT VARIANTS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalVariants)}`,
+          },
+        ],
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+      });
+      if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
+      const qualityData = await qualityResponse.json();
+      const qualityRaw = qualityData.choices?.[0]?.message?.content || "{}";
+      const qualityMatch = qualityRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
+      const qualityJson = JSON.parse((qualityMatch ? qualityMatch[1] : qualityRaw).trim());
+      const repairedVariants = Array.isArray(qualityJson.variants) ? qualityJson.variants : [];
+      if (repairedVariants.length !== originalVariants.length) throw new Error("Friend quality validator returned an incomplete variant set");
+      const remainingIssues = repairedVariants.flatMap((variant: any, index: number) =>
+        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage)
+          .map((issue) => `variant ${index + 1}: ${issue}`)
+      );
+      if (remainingIssues.length > 0) throw new Error(`Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`);
+      replyJson.variants = repairedVariants.map((variant: any, index: number) => ({
+        ...originalVariants[index],
+        ...variant,
+      }));
+      replyJson.qualityValidation = {
+        passed: true,
+        repaired: JSON.stringify(repairedVariants) !== JSON.stringify(originalVariants),
+      };
     }
 
     const structuredFriendProfile = activeThreadType === "friend"
@@ -931,9 +1000,11 @@ ${winningPatternsText.substring(0, 2000)}`;
       }).then(() => {});
     }
 
-    // Auto-advance conversation stage based on analysis
-    const stageToDbStage: Record<string, string> = { friend: "first_contact", warming: "rapport", referral: "offer" };
-    const newDbStage = stageToDbStage[analysisJson.stage] || prospect.conversation_stage;
+    // Persist the same canonical stage the UI displays. This is evidence-gated,
+    // not warmth- or message-count-driven.
+    const newDbStage = activeThreadType === "friend"
+      ? friendStageToDatabase(friendStageResult.stage)
+      : prospect.conversation_stage;
     if (newDbStage !== prospect.conversation_stage) {
       supabase.from("prospects").update({ conversation_stage: newDbStage }).eq("id", prospectId).then(() => {});
     }
@@ -1028,6 +1099,8 @@ ${winningPatternsText.substring(0, 2000)}`;
       conversationStage: newDbStage,
       prospectType: detectedProspectType,
       prospectLearning: structuredFriendProfile,
+      friendJourney: activeThreadType === "friend" ? friendStageResult : null,
+      qualityValidation: replyJson.qualityValidation || null,
       learningResult,
       brainRetrieval: {
         chunksRetrieved: replyTopChunks.length,

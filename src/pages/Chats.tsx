@@ -316,6 +316,7 @@ export default function Chats() {
   useEffect(() => {
     if (!selectedProspectId || !selectedProspect) return;
     setCurrentThreadType(selectedProspect.reply_mode === "expert" ? "expert" : "friend");
+    setConversationStage(selectedProspect.conversation_stage || "first_contact");
   }, [selectedProspectId, selectedProspect]);
 
   // Clear transient suggestions immediately when changing chats or thread modes,
@@ -324,6 +325,8 @@ export default function Chats() {
     setSuggestions([]);
     setPushyWarning(null);
     setFeedbackMap({});
+    setConversationAnalysis(null);
+    setProspectType(null);
   }, [selectedProspectId, currentThreadType]);
 
   // Repair missing profile photos lazily when the conversation is opened. Broken
@@ -597,6 +600,7 @@ export default function Chats() {
 
       if (!suggestError && suggestData?.suggestions) {
         setFirstMessageSuggestions(suggestData.suggestions);
+        if (suggestData.conversationStage) setConversationStage(suggestData.conversationStage);
       }
 
       setUploadStep("done");
@@ -684,6 +688,7 @@ export default function Chats() {
 
       if (!suggestError && suggestData?.suggestions) {
         setFirstMessageSuggestions(suggestData.suggestions);
+        if (suggestData.conversationStage) setConversationStage(suggestData.conversationStage);
       }
 
       setUploadStep("done");
@@ -1868,7 +1873,7 @@ export default function Chats() {
                 )}
 
                 {/* Referral warning banner */}
-                {conversationAnalysis?.stage === "referral" && conversationAnalysis?.pain_expressed && (
+                {(conversationAnalysis?.stage === "offer" || conversationAnalysis?.stage === "close") && conversationAnalysis?.pain_expressed && (
                   <ReferralWarningBanner warmthScore={conversationAnalysis.warmth_score} />
                 )}
 

@@ -6,6 +6,14 @@ import { generateEmbedding } from "../_shared/embeddings.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
+import {
+  buildFriendQualityValidatorPrompt,
+  buildFriendStageDirective,
+  deriveEvidenceGatedFriendStage,
+  deterministicFriendQualityIssues,
+  friendStageToDatabase,
+  selectRelevantConversationPassages,
+} from "../_shared/friend-conversation-engine.ts";
 
 
 function getCorsHeaders(req: Request) {
@@ -236,7 +244,7 @@ function buildFriendModeInstructions(workspace: any, brainChunks?: string, perso
   const keyThemes = embeddedPersona.key_themes || niche;
   const instagramBio = personaApproved ? String(storedPersona.instagram_bio || "").trim() : "";
   const behaviorGuidelines = personaApproved ? String(storedPersona.behavior_guidelines || "").trim() : "";
-  const conversationExamples = personaApproved ? String(storedPersona.conversation_examples || "").trim().substring(0, 14000) : "";
+  const conversationExamples = personaApproved ? String(storedPersona.conversation_examples || "").trim() : "";
   const strategyName = personaApproved ? String(storedPersona.strategy_name || "").trim() : "";
   const strategyWebsite = personaApproved ? String(storedPersona.strategy_website || "").trim() : "";
   const strategyDescription = personaApproved ? String(storedPersona.strategy_description || "").trim() : "";
@@ -298,7 +306,7 @@ This framework is a strategic guide. Its truth, voice and safety limits must be 
 ${buildFrameworkConstraints(parsedFramework)}
 `;
     if (customFramework.trim()) {
-      frameworkSection += `\nORIGINAL FRAMEWORK TEXT (for additional context):\n${customFramework.substring(0, 3000)}\n`;
+      frameworkSection += `\nORIGINAL FRAMEWORK TEXT (for additional context):\n${customFramework}\n`;
     }
     frameworkSection += `CRITICAL: Preserve its approved facts and boundaries. Let the current conversation and reply_act decide whether to relate, share, answer, observe, probe or transition.\n===== END CUSTOM FRAMEWORK =====\n`;
   } else if (customFramework.trim()) {
@@ -378,7 +386,7 @@ ${instagramBio || "No approved Instagram bio."}
 APPROVED PEER BEHAVIOR:
 ${behaviorGuidelines || "Be a warm, genuine peer. Adapt to the current reply and never run a fixed interrogation script."}
 
-APPROVED REAL CONVERSATION EXAMPLES (voice and flow reference, never copy prospect facts across chats):
+FULL APPROVED REAL CONVERSATION EXAMPLES (all characters; voice and flow reference, never copy prospect facts across chats):
 ${conversationExamples || "No approved conversation examples."}
 
 APPROVED STRATEGY THE PERSONA USED:
@@ -448,7 +456,7 @@ ${profileAnalysis ? `Profile Analysis: ${profileAnalysis}` : ""}
 ${productsDetected ? `Products/Services: ${productsDetected}` : ""}
 Niche: ${niche}
 
-CRITICAL RULE: You do NOT sell. You do NOT pitch. You do NOT push.
+CRITICAL RULE: You do not hard-sell, pressure, or disguise a pitch as friendship. You DO help a qualified prospect move from genuine peer connection to clear problem awareness, desire for help, permission, and an approved expert handoff. Every active reply must create trust, reveal one necessary truth, answer a concern, or complete the next consent-based step.
 ${frameworkSection}
 ${styleInstructions}
 ${brainGroundingInstructions}
@@ -754,6 +762,14 @@ serve(async (req) => {
         }
       }
     }
+    const approvedPersonaForPrompt = workspaceForPrompt?.friend_persona_status !== "draft"
+      && workspaceForPrompt?.friend_persona
+      && typeof workspaceForPrompt.friend_persona === "object"
+      ? workspaceForPrompt.friend_persona as Record<string, any>
+      : {};
+    const approvedConversationExamples = activeThreadType === "friend"
+      ? String(approvedPersonaForPrompt.conversation_examples || "").trim()
+      : "";
 
     // Get ALL conversation history for summarization
     const { data: allHistory } = await supabase
@@ -1076,9 +1092,9 @@ serve(async (req) => {
             role: "system",
             content: `Analyze a peer-to-peer Friend conversation before Knowledge Base retrieval. Return JSON only. Do not write the reply.
 
-Return: {"intent":"what they are trying to protect, prove, avoid or achieve","tangible_goal":"concrete desired result or unknown","experience_level":"evidence-based level","sales_status":"explicit result status or unknown","mentor_status":"explicit support status or unknown","current_strategy":"explicit approach or unknown","problem_gap":"distance between current and desired state","pain_points":[],"objections":[],"doubt_cause":"why they hesitate","certainty_gap":"what must become logically clear","motivation":"why it matters","readiness":"not_ready|exploring|problem_aware|wants_help|accepted_referral","stage":"opener|common_ground|motivation|current_strategy|problem|desired_result|objection|permission|expert_introduction|decision","reply_act":"relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop","question_needed":false,"knowledge_need":"the exact principle/evidence needed, or none","contact_status":"active|not_now|do_not_contact|not_a_fit","next_best_action":"one natural peer action","learning_confidence":0,"evidence":[]}
+Return: {"intent":"what they are trying to protect, prove, avoid or achieve","tangible_goal":"concrete desired result or unknown","experience_level":"evidence-based level","sales_status":"explicit result status or unknown","mentor_status":"explicit support status or unknown","current_strategy":"explicit approach or unknown","problem_gap":"distance between current and desired state","problem_status":"active|past_resolved|unclear|none","pain_points":[],"objections":[],"doubt_cause":"why they hesitate","certainty_gap":"what must become logically clear","motivation":"why it matters","readiness":"not_ready|exploring|problem_aware|wants_help|accepted_referral","stage":"opener|rapport|pain|offer|close","reply_act":"relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop","question_needed":false,"knowledge_need":"the exact principle/evidence needed, or none","contact_status":"active|not_now|do_not_contact|not_a_fit","next_best_action":"one natural peer action","learning_confidence":0,"evidence":[]}
 
-Choose a question only when one missing answer is genuinely necessary. A real friend often relates, shares, answers, validates or observes without asking anything. An explicit request to stop means reply_act=stop and contact_status=do_not_contact. Never treat a boundary as an objection. Use only conversation evidence and preserved CURRENT PROSPECT MEMORY.`
+Choose a question only when one missing answer is genuinely necessary. A real friend often relates, shares, answers, validates or observes without asking anything. The problem must belong to this prospect, not merely their audience, and problem_status must distinguish an active gap from a resolved historical struggle. An explicit request to stop means reply_act=stop and contact_status=do_not_contact. Never treat a boundary as an objection. Use only conversation evidence and preserved CURRENT PROSPECT MEMORY.`
           },
           {
             role: "user",
@@ -1105,6 +1121,17 @@ Choose a question only when one missing answer is genuinely necessary. A real fr
     const decisionSearchQuery = activeThreadType === "friend"
       ? buildFriendDecisionSearchQuery(friendDecisionAnalysis, message, existingFriendProfile)
       : brainQuery;
+    const precomputedFriendStage = deriveEvidenceGatedFriendStage(friendDecisionAnalysis, speakerMessages.length);
+    const friendStageDirective = activeThreadType === "friend"
+      ? buildFriendStageDirective(precomputedFriendStage)
+      : "Expert mode does not use the Friend journey.";
+    const relevantReferenceMoments = activeThreadType === "friend"
+      ? selectRelevantConversationPassages(
+          approvedConversationExamples,
+          decisionSearchQuery,
+          precomputedFriendStage.stage,
+        )
+      : "Expert mode does not use Friend reference conversations.";
     let decisionCoreChunks = dedupedCoreChunks;
     let decisionPrinciples = dedupedPrinciples;
     if (activeThreadType === "friend") {
@@ -1287,6 +1314,10 @@ Choose a question only when one missing answer is genuinely necessary. A real fr
       brainChunksFormatted += `\n\n[FRIEND DECISION ANALYSIS — locked for this generation]\nUse its reply_act and question_needed for all three variants. Do not replace the act merely to ask a question or display a framework.\n${JSON.stringify(friendDecisionAnalysis).substring(0, 4000)}\n[DECISION-AWARE RETRIEVAL QUERY]\n${decisionSearchQuery.substring(0, 3200)}`;
     }
 
+    if (activeThreadType === "friend") {
+      brainChunksFormatted += `\n\n${friendStageDirective}\n\n[RELEVANT APPROVED REFERENCE MOMENTS FOR THIS EXACT STAGE]\n${relevantReferenceMoments}`;
+    }
+
     // Add Global Knowledge Map
     if (globalKnowledgeMap) {
       brainChunksFormatted += `\n\n===== GLOBAL KNOWLEDGE MAP (ALL FILES) =====\n${globalKnowledgeMap}\n===== END MAP =====\n`;
@@ -1431,7 +1462,7 @@ The "whyThisWorks" should explain what you changed and why it's better.`;
     const friendJsonFormat = `
 === FRIEND CONVERSATION ANALYSIS (run silently before writing) ===
 Read the complete conversation, newest message, profile/screenshot evidence, approved workspace truth, and the precomputed FRIEND DECISION ANALYSIS. Treat the precomputed reply_act and question_needed as locked unless they are absent. Determine:
-1. The prospect's current stage: opener, common_ground, motivation, current_strategy, problem, desired_result, objection, permission, expert_introduction, or decision.
+1. The prospect's evidence-gated current stage: opener, rapport, pain, offer, or close.
 2. Their stated pain, motivation, desired result, objection, trust/readiness, and what is still unknown. Do not infer facts without evidence.
 3. Questions already answered and promises or details already shared, so nothing is repeated.
 4. The single best next objective. The objective may be empathy, a direct answer, clarification, discovery, permission, referral, or respectfully stopping.
@@ -1475,6 +1506,7 @@ Return valid JSON with this exact compatible shape:
     "intent": "what they are trying to protect, prove, avoid or achieve",
     "tangible_goal": "concrete desired result or unknown",
     "problem_gap": "distance between current and desired state",
+    "problem_status": "active|past_resolved|unclear|none",
     "doubt_cause": "why they hesitate or unknown",
     "certainty_gap": "what must become logically clear or unknown",
     "reply_act": "relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop",
@@ -1667,6 +1699,53 @@ ${jsonFormat}
       ];
     }
 
+    const finalFriendStageResult = deriveEvidenceGatedFriendStage(
+      combinedFriendLearning || parsed,
+      speakerMessages.length,
+    );
+    if (activeThreadType === "friend") {
+      parsed.questioningPattern = finalFriendStageResult.stage;
+      const finalStageDirective = buildFriendStageDirective(finalFriendStageResult);
+      const originalSuggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
+      if (originalSuggestions.length === 0) throw new Error("Reply generator returned no Friend suggestions");
+      const deterministicIssues = originalSuggestions.flatMap((suggestion: any, index: number) =>
+        deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage)
+          .map((issue) => `suggestion ${index + 1}: ${issue}`)
+      );
+      const qualityResponse = await userChat(chat, {
+        model: chat.models.reasoning,
+        messages: [
+          { role: "system", content: buildFriendQualityValidatorPrompt("suggestions") },
+          {
+            role: "user",
+            content: `${finalStageDirective}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nRETRIEVED KNOWLEDGE:\n${brainChunksFormatted.substring(0, 9000)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
+          },
+        ],
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+      });
+      if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
+      const qualityData = await qualityResponse.json();
+      const qualityRaw = qualityData.choices?.[0]?.message?.content || "{}";
+      const qualityMatch = qualityRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
+      const qualityJson = JSON.parse((qualityMatch ? qualityMatch[1] : qualityRaw).trim());
+      const repairedSuggestions = Array.isArray(qualityJson.suggestions) ? qualityJson.suggestions : [];
+      if (repairedSuggestions.length !== originalSuggestions.length) throw new Error("Friend quality validator returned an incomplete suggestion set");
+      const remainingIssues = repairedSuggestions.flatMap((suggestion: any, index: number) =>
+        deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage)
+          .map((issue) => `suggestion ${index + 1}: ${issue}`)
+      );
+      if (remainingIssues.length > 0) throw new Error(`Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`);
+      parsed.suggestions = repairedSuggestions.map((suggestion: any, index: number) => ({
+        ...originalSuggestions[index],
+        ...suggestion,
+      }));
+      parsed.qualityValidation = {
+        passed: true,
+        repaired: JSON.stringify(repairedSuggestions) !== JSON.stringify(originalSuggestions),
+      };
+    }
+
     // ===== SAVE TONALITY & PATTERN DATA =====
     if (parsed.detectedTone) {
       const latestInbound = (history || [])
@@ -1748,9 +1827,14 @@ ${jsonFormat}
     const stageRank: Record<string, number> = { first_contact: 0, continuing: 1, rapport: 1, pain_discovery: 2, pain: 2, offer: 3, closing: 4, close: 4 };
     const currentStageRank = stageRank[prospect.conversation_stage] ?? 0;
     const proposedStageRank = newStage ? (stageRank[newStage] ?? 0) : currentStageRank;
-    const effectiveStage = newStage && proposedStageRank >= currentStageRank && msgCount >= minRequired
+    const legacyEffectiveStage = newStage && proposedStageRank >= currentStageRank && msgCount >= minRequired
       ? newStage
       : prospect.conversation_stage;
+    const effectiveStage = activeThreadType === "friend" && mode !== "refine"
+      ? friendStageToDatabase(finalFriendStageResult.stage)
+      : activeThreadType === "friend"
+        ? prospect.conversation_stage
+        : legacyEffectiveStage;
     if (effectiveStage && prospect.conversation_stage !== effectiveStage) {
       supabase.from("prospects").update({ conversation_stage: effectiveStage }).eq("id", prospectId).then(() => {});
     }
@@ -1892,6 +1976,7 @@ ${jsonFormat}
     }
     parsed.learningResult = learningResult;
     parsed.prospectLearning = structuredFriendProfile;
+    parsed.friendJourney = activeThreadType === "friend" ? finalFriendStageResult : null;
     parsed.brainRetrieval = {
       chunksRetrieved: topChunks.length,
       uniqueSources: new Set([...topChunks.map((c: any) => c.source_id)].filter(Boolean)).size,

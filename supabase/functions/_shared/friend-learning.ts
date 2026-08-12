@@ -14,6 +14,7 @@ export type FriendProspectProfile = {
   intent: string;
   tangible_goal: string;
   problem_gap: string;
+  problem_status: string;
   doubt_cause: string;
   certainty_gap: string;
   reply_act: string;
@@ -98,6 +99,7 @@ export function buildFriendProspectProfile(
     intent: choose("intent", "unknown", 300),
     tangible_goal: choose("tangible_goal", "unknown", 300),
     problem_gap: choose("problem_gap", "unknown", 400),
+    problem_status: choose("problem_status", "unclear", 80),
     doubt_cause: choose("doubt_cause", "unknown", 300),
     certainty_gap: choose("certainty_gap", "unknown", 300),
     reply_act: choose("reply_act", "respond naturally", 100),
@@ -131,6 +133,7 @@ export function buildFriendLearningContext(
     `Intent: ${cleanText(p.intent)}`,
     `Tangible goal: ${cleanText(p.tangible_goal)}`,
     `Problem/gap: ${cleanText(p.problem_gap)}`,
+    `Problem status: ${cleanText(p.problem_status, "unclear")}`,
     `Doubt cause: ${cleanText(p.doubt_cause)}`,
     `Certainty gap: ${cleanText(p.certainty_gap)}`,
     `Recommended reply act: ${cleanText(p.reply_act, "respond naturally")}`,
@@ -187,6 +190,7 @@ export function buildFriendDecisionSearchQuery(
     `Mentor or support status: ${value("mentor_status")}`,
     `Current strategy: ${value("current_strategy")}`,
     `Problem and gap: ${value("problem_gap", list("pain_points"))}`,
+    `Problem status: ${value("problem_status", "unclear")}`,
     `Doubt cause: ${value("doubt_cause")}`,
     `Missing logical certainty: ${value("certainty_gap")}`,
     `Objections: ${list("objections")}`,

@@ -71,6 +71,8 @@ async function syncApprovedFriendPersona(supabase: any, userId: string, workspac
     persona.voice_notes ? `Voice: ${persona.voice_notes}` : "",
     persona.instagram_bio ? `Instagram bio: ${persona.instagram_bio}` : "",
     persona.behavior_guidelines ? `Friend behavior: ${persona.behavior_guidelines}` : "",
+    // The search-index summary stays bounded for embedding compatibility. The
+    // live reply generators read the complete approved reference conversation.
     persona.conversation_examples ? `Approved conversation style examples: ${String(persona.conversation_examples).substring(0, 12000)}` : "",
     persona.strategy_name ? `Strategy used: ${persona.strategy_name}` : "",
     persona.strategy_description ? `Strategy experience: ${persona.strategy_description}` : "",
@@ -242,7 +244,7 @@ serve(async (req) => {
 Workspace name: ${workspace.name}
 Workspace type: ${workspace.workspace_type || "friend"}
 Niche description: ${workspace.niche_description || "Not provided"}
-${workspace.custom_framework ? `Custom Framework: ${workspace.custom_framework.substring(0, 1000)}` : ""}
+${workspace.custom_framework ? `Custom Framework: ${workspace.custom_framework}` : ""}
 ${workspace.target_audience ? `Target Audience: ${workspace.target_audience}` : ""}
 ${workspace.business_model ? `Business Model: ${workspace.business_model}` : ""}
 

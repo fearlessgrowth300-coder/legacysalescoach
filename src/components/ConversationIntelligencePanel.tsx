@@ -14,7 +14,7 @@ import {
 
 export interface ConversationAnalysis {
   warmth_score: number;
-  stage: "friend" | "warming" | "referral";
+  stage: "opener" | "rapport" | "pain" | "offer" | "close";
   prospect_psychology: string;
   pain_expressed: boolean;
   pain_summary: string | null;
@@ -55,9 +55,11 @@ const moveLabels: Record<string, string> = {
 };
 
 const stageColors: Record<string, string> = {
-  friend: "bg-blue-500/15 text-blue-700 border-blue-500/30 dark:text-blue-400",
-  warming: "bg-amber-500/15 text-amber-700 border-amber-500/30 dark:text-amber-400",
-  referral: "bg-emerald-500/15 text-emerald-700 border-emerald-500/30 dark:text-emerald-400",
+  opener: "bg-blue-500/15 text-blue-700 border-blue-500/30 dark:text-blue-400",
+  rapport: "bg-cyan-500/15 text-cyan-700 border-cyan-500/30 dark:text-cyan-400",
+  pain: "bg-amber-500/15 text-amber-700 border-amber-500/30 dark:text-amber-400",
+  offer: "bg-violet-500/15 text-violet-700 border-violet-500/30 dark:text-violet-400",
+  close: "bg-emerald-500/15 text-emerald-700 border-emerald-500/30 dark:text-emerald-400",
 };
 
 const warmthColor = (score: number) => {
