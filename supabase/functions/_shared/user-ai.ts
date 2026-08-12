@@ -13,6 +13,11 @@
 import { decryptStoredApiKey } from "./api-key-utils.ts";
 import { coerceEmbeddingDimensions } from "./embedding-vector.ts";
 import { toAnthropicContent } from "./anthropic-content.ts";
+import {
+  GEMINI_CHAT_MODELS,
+  GEMINI_EMBEDDING_MODEL,
+  shouldOmitGeminiSamplingParameters,
+} from "./gemini-models.ts";
 
 export type UserAiProvider = "openai" | "gemini" | "anthropic" | "lovable";
 
@@ -129,8 +134,8 @@ export async function resolveUserChatTarget(
       provider: "gemini",
       url: `${GEMINI_BASE}/chat/completions`,
       headers: { Authorization: `Bearer ${found.key}`, "Content-Type": "application/json" },
-      models: { fast: "gemini-2.5-flash-lite", balanced: "gemini-2.5-flash", reasoning: "gemini-2.5-flash", vision: "gemini-2.5-flash" },
-      visionFallbackModels: ["gemini-2.5-pro"],
+      models: { ...GEMINI_CHAT_MODELS },
+      visionFallbackModels: [GEMINI_CHAT_MODELS.vision],
       isAnthropic: false,
     };
   }
@@ -178,7 +183,7 @@ export async function resolveUserEmbedTarget(
       provider: "gemini",
       url: `${GEMINI_BASE}/embeddings`,
       headers: { Authorization: `Bearer ${found.key}`, "Content-Type": "application/json" },
-      model: "text-embedding-004",
+      model: GEMINI_EMBEDDING_MODEL,
       dimensions: 768,
     };
   }
@@ -211,8 +216,10 @@ export async function userChat(
     const body: any = {
       model: opts.model,
       messages: opts.messages,
-      temperature: opts.temperature ?? 0.3,
     };
+    if (!shouldOmitGeminiSamplingParameters(target.provider, opts.model)) {
+      body.temperature = opts.temperature ?? 0.3;
+    }
     if (opts.max_tokens) body.max_tokens = opts.max_tokens;
     if (opts.response_format) body.response_format = opts.response_format;
     if (opts.tools) body.tools = opts.tools;

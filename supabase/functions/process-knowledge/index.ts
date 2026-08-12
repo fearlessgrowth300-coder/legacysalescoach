@@ -2,6 +2,11 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { describeApiKey, getLatestUserApiKey, getAllUserApiKeys } from "../_shared/api-key-utils.ts";
 import { resolveAiProvider, aiEmbed, type AiProvider } from "../_shared/ai-provider.ts";
+import { shouldOmitGeminiSamplingParameters } from "../_shared/gemini-models.ts";
+
+function compatibleTemperature(ai: AiProvider, model: string, value: number): number | undefined {
+  return shouldOmitGeminiSamplingParameters(ai.name, model) ? undefined : value;
+}
 
 // Build the chat endpoint/headers/model for the resolved AI provider.
 // OpenAI, Gemini, and the Lovable AI Gateway all expose OpenAI-compatible chat
@@ -61,7 +66,7 @@ RULES:
           },
           { role: "user", content: rawChunk },
         ],
-        temperature: 0.1,
+        temperature: compatibleTemperature(ai, _t.model, 0.1),
       }),
       signal: AbortSignal.timeout(60000),
     });
@@ -200,7 +205,7 @@ Return a single JSON object with this exact shape: { "principles": [ ...principl
             content: `Extract ALL learnings from this material titled "${sourceName}"${chunkLabel}:\n\n${content}`,
           },
         ],
-        temperature: 0.3,
+        temperature: compatibleTemperature(ai, _t.model, 0.3),
         // Keep output bounded so one difficult PDF chapter cannot outlive the
         // Edge background-task wall clock and leave the book stuck in extracting.
         max_tokens: options.maxTokens ?? 8000,
@@ -444,7 +449,7 @@ Rules:
             content: `FIRST PAGES OF THE BOOK:\n${firstPages.substring(0, 12000)}\n\nDETECTED CHAPTER HEADINGS (in order):\n${chapterTitles.join("\n") || "(none detected — infer from content)"}`,
           },
         ],
-        temperature: 0.2,
+        temperature: compatibleTemperature(ai, _t.model, 0.2),
       }),
       signal: AbortSignal.timeout(60000),
     });
@@ -513,7 +518,7 @@ RULES:
 - Return ONLY the JSON object.` },
           { role: "user", content: `Book: ${sourceName}\nChapter: ${chapterTitle}\nPart: ${chunkIndex + 1}/${totalChunks}\n\n${content}` },
         ],
-        temperature: 0.2,
+        temperature: compatibleTemperature(ai, _t.model, 0.2),
         max_tokens: 5500,
       }),
       signal: AbortSignal.timeout(28000),
@@ -615,7 +620,7 @@ async function summarizeChapter(
           { role: "system", content: "You write tight 1-2 sentence chapter takeaways for a salesperson. Plain text, no markdown, max 220 chars." },
           { role: "user", content: `Chapter: ${chapterTitle}\nPrinciples extracted:\n${list}\n\nWrite the takeaway:` },
         ],
-        temperature: 0.4,
+        temperature: compatibleTemperature(ai, _t.model, 0.4),
       }),
     });
     if (!r.ok) return "";
@@ -660,7 +665,7 @@ Rules:
           },
           { role: "user", content: list.substring(0, 14000) },
         ],
-        temperature: 0.2,
+        temperature: compatibleTemperature(ai, _t.model, 0.2),
       }),
       signal: AbortSignal.timeout(60000),
     });
