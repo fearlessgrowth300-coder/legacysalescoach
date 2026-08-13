@@ -8,9 +8,9 @@ export type ActiveAi = {
 };
 
 export const PROVIDER_MODEL: Record<ActiveAi["provider"], { label: string; model: string }> = {
-  lovable: { label: "Lovable AI", model: "google/gemini-3.5-flash" },
+  lovable: { label: "Lovable AI", model: "google/gemini-3.1-flash-lite" },
   openai: { label: "OpenAI", model: "gpt-4o" },
-  gemini: { label: "Gemini", model: "gemini-3.5-flash" },
+  gemini: { label: "Gemini", model: "gemini-3-flash-preview" },
   anthropic: { label: "Anthropic", model: "claude-opus-4-8" },
 };
 
