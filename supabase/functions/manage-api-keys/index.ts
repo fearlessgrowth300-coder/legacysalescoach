@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { GEMINI_CHAT_MODELS } from "../_shared/gemini-models.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -41,6 +42,71 @@ async function decryptValue(stored: string): Promise<string> {
   const key = await deriveKey();
   const plainBuffer = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
   return new TextDecoder().decode(plainBuffer);
+}
+
+const AI_SERVICES = ["openai", "gemini", "anthropic"] as const;
+
+function maskValue(value: string): string {
+  return value.substring(0, 8) + "..." + value.substring(Math.max(0, value.length - 4));
+}
+
+function providerModel(service: string): string {
+  if (service === "gemini") return GEMINI_CHAT_MODELS.balanced;
+  if (service === "openai") return "gpt-4o-mini";
+  if (service === "anthropic") return "claude-haiku-4-5-20251001";
+  return "";
+}
+
+async function readProviderError(response: Response): Promise<string> {
+  const raw = await response.text().catch(() => "");
+  if (!raw) return `Provider returned HTTP ${response.status}`;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.error?.message || parsed?.message || parsed?.error || raw.slice(0, 300);
+  } catch {
+    return raw.slice(0, 300);
+  }
+}
+
+async function validateAiProviderKey(service: string, key: string): Promise<void> {
+  let response: Response;
+  if (service === "gemini") {
+    // Exercise the same OpenAI-compatible endpoint and model used by the app.
+    // A models-list request can succeed even when the selected model cannot.
+    response = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: GEMINI_CHAT_MODELS.balanced,
+        messages: [{ role: "user", content: "Reply OK" }],
+        max_tokens: 2,
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+  } else if (service === "openai") {
+    response = await fetch("https://api.openai.com/v1/models/gpt-4o-mini", {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(15000),
+    });
+  } else if (service === "anthropic") {
+    response = await fetch("https://api.anthropic.com/v1/models?limit=1", {
+      headers: {
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+  } else {
+    return;
+  }
+
+  if (!response.ok) {
+    const detail = await readProviderError(response);
+    throw new Error(`${service === "gemini" ? "Gemini" : service} key validation failed (${response.status}): ${detail}`);
+  }
 }
 
 serve(async (req) => {
@@ -95,6 +161,31 @@ serve(async (req) => {
       });
     }
 
+    if (action === "active_ai") {
+      const { data, error } = await supabase
+        .from("user_api_keys")
+        .select("id, api_key, service, updated_at")
+        .eq("user_id", user.id)
+        .in("service", [...AI_SERVICES])
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data?.api_key) {
+        return new Response(JSON.stringify({ exists: false }), {
+          headers: { ...headers, "Content-Type": "application/json" },
+        });
+      }
+      const decrypted = await decryptValue(data.api_key);
+      return new Response(JSON.stringify({
+        exists: true,
+        provider: data.service,
+        masked: maskValue(decrypted),
+        updatedAt: data.updated_at,
+        model: providerModel(data.service),
+      }), { headers: { ...headers, "Content-Type": "application/json" } });
+    }
+
     // Input validation
     if (!service || typeof service !== "string" || service.length > 50) {
       return new Response(JSON.stringify({ error: "Invalid service name" }), {
@@ -119,7 +210,11 @@ serve(async (req) => {
         });
       }
 
-      const encryptedKey = await encryptValue(apiKey.trim());
+      const cleanKey = apiKey.trim();
+      if (AI_SERVICES.includes(service as typeof AI_SERVICES[number])) {
+        await validateAiProviderKey(service, cleanKey);
+      }
+      const encryptedKey = await encryptValue(cleanKey);
 
       if (multiKeyServices.has(service)) {
         // Insert a NEW row so multiple keys can coexist and be rotated through.
@@ -153,14 +248,54 @@ serve(async (req) => {
         });
         if (error) throw error;
       } else {
-        // AI provider keys: keep single-key-per-service semantics.
-        const { error } = await supabase
+        // Avoid depending on which unique constraint version exists in a given
+        // Cloud project. Update an existing provider row by id, or insert it.
+        const { data: existing, error: lookupError } = await supabase
           .from("user_api_keys")
-          .upsert(
-            { user_id: user.id, service, api_key: encryptedKey, label: "default" },
-            { onConflict: "user_id,service,label" }
-          );
-        if (error) throw error;
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("service", service)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (lookupError) throw lookupError;
+
+        const write = existing?.id
+          ? await supabase.from("user_api_keys").update({ api_key: encryptedKey, label: "default" }).eq("id", existing.id).eq("user_id", user.id)
+          : await supabase.from("user_api_keys").insert({ user_id: user.id, service, api_key: encryptedKey, label: "default" });
+        if (write.error) throw write.error;
+
+        // One AI provider is active at a time. Remove stale provider rows only
+        // after the replacement key was validated and written successfully.
+        const { error: cleanupError } = await supabase
+          .from("user_api_keys")
+          .delete()
+          .eq("user_id", user.id)
+          .in("service", [...AI_SERVICES])
+          .neq("service", service);
+        if (cleanupError) throw cleanupError;
+
+        const { data: persisted, error: verifyError } = await supabase
+          .from("user_api_keys")
+          .select("api_key, updated_at")
+          .eq("user_id", user.id)
+          .eq("service", service)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (verifyError) throw verifyError;
+        if (!persisted?.api_key || await decryptValue(persisted.api_key) !== cleanKey) {
+          throw new Error("The AI key could not be verified after saving. Please try again.");
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          provider: service,
+          masked: maskValue(cleanKey),
+          updatedAt: persisted.updated_at,
+          model: providerModel(service),
+          verified: true,
+        }), { headers: { ...headers, "Content-Type": "application/json" } });
       }
 
       return new Response(JSON.stringify({ success: true }), {

@@ -66,7 +66,7 @@ export async function resolveAiProvider(supabase: any, userId: string | null): P
       name: "lovable",
       chatUrl: "https://ai.gateway.lovable.dev/v1/chat/completions",
       key: lovableKey,
-      model: (t) => t === "reasoning" ? "google/gemini-2.5-flash" : t === "fast" ? "google/gemini-2.5-flash-lite" : "google/gemini-2.5-flash",
+      model: (t) => t === "fast" ? "google/gemini-3.1-flash-lite" : "google/gemini-3.5-flash",
       isAnthropic: false,
       embed: {
         url: "https://ai.gateway.lovable.dev/v1/embeddings",

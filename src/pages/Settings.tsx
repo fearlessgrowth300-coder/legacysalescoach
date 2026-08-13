@@ -12,7 +12,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { PROVIDER_MODEL, type ActiveAi } from "@/hooks/useActiveAiModel";
 
 const AI_PROVIDERS = [
-  { value: "gemini", label: "Google Gemini (free tier — recommended)", help: "Get a free key at aistudio.google.com/apikey", placeholder: "AIza..." },
+  { value: "gemini", label: "Google Gemini (free tier — recommended)", help: "Get a free key at aistudio.google.com/apikey", placeholder: "Paste your Gemini API key" },
   { value: "openai", label: "OpenAI (ChatGPT)", help: "Get a key at platform.openai.com/api-keys", placeholder: "sk-..." },
   { value: "anthropic", label: "Anthropic (Claude)", help: "Get a key at console.anthropic.com", placeholder: "sk-ant-..." },
 ] as const;
@@ -29,21 +29,30 @@ export default function Settings() {
   const [aiProvider, setAiProvider] = useState<string>("gemini");
   const [aiKey, setAiKey] = useState("");
   const [aiSaving, setAiSaving] = useState(false);
-  const [activeAi, setActiveAi] = useState<{ provider: string; masked: string } | null>(null);
+  const [activeAi, setActiveAi] = useState<{ provider: string; masked: string; model?: string } | null>(null);
+  const [aiStatusLoading, setAiStatusLoading] = useState(true);
 
   useEffect(() => {
     if (!user) return;
     (async () => {
-      let latest: { provider: string; masked: string; updatedAt: string } | null = null;
-      for (const p of AI_PROVIDERS) {
-        const { data } = await supabase.functions.invoke("manage-api-keys", {
-          body: { action: "check", service: p.value },
+      setAiStatusLoading(true);
+      try {
+        const { data, error } = await supabase.functions.invoke("manage-api-keys", {
+          body: { action: "active_ai" },
         });
-        if (data?.exists && (!latest || (data.updatedAt || "") > latest.updatedAt)) {
-          latest = { provider: p.value, masked: data.masked, updatedAt: data.updatedAt || "" };
+        if (error) throw error;
+        if (data?.exists) {
+          setActiveAi({ provider: data.provider, masked: data.masked, model: data.model });
+          setAiProvider(data.provider);
+        } else {
+          setActiveAi(null);
         }
+      } catch (error) {
+        console.error("Failed to load active AI provider:", error);
+        setActiveAi(null);
+      } finally {
+        setAiStatusLoading(false);
       }
-      if (latest) { setActiveAi({ provider: latest.provider, masked: latest.masked }); setAiProvider(latest.provider); }
     })();
   }, [user]);
 
@@ -54,12 +63,21 @@ export default function Settings() {
       const { data, error } = await supabase.functions.invoke("manage-api-keys", {
         body: { action: "save", service: aiProvider, apiKey: aiKey.trim() },
       });
-      if (error) throw error;
+      if (error) {
+        let detail = "";
+        try {
+          const payload = await error.context?.json?.();
+          detail = payload?.error || "";
+        } catch {
+          // Keep the invocation error when no JSON response is available.
+        }
+        throw new Error(detail || error.message || "Failed to save AI key");
+      }
       if (data?.error) throw new Error(data.error);
-      const k = aiKey.trim();
-      setActiveAi({ provider: aiProvider, masked: k.substring(0, 8) + "..." + k.substring(k.length - 4) });
+      if (!data?.success || !data?.verified) throw new Error("The provider did not verify the saved key");
+      setActiveAi({ provider: data.provider, masked: data.masked, model: data.model });
       setAiKey("");
-      toast.success("AI key saved! The app will use your own AI for processing.");
+      toast.success("AI key verified and saved. The app is now using your provider.");
     } catch (e: any) {
       toast.error(e.message || "Failed to save AI key");
     } finally {
@@ -70,7 +88,9 @@ export default function Settings() {
   const handleRemoveAiKey = async () => {
     setAiSaving(true);
     try {
-      await supabase.functions.invoke("manage-api-keys", { body: { action: "switch_to_lovable" } });
+      const { data, error } = await supabase.functions.invoke("manage-api-keys", { body: { action: "switch_to_lovable" } });
+      if (error) throw error;
+      if (!data?.success) throw new Error(data?.error || "The saved AI provider could not be removed");
       setActiveAi(null);
       toast.success("AI key removed — back to the built-in AI.");
     } catch (e: any) {
@@ -160,12 +180,14 @@ export default function Settings() {
             <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2">
               <div className="text-sm">
                 <span className="text-muted-foreground">Currently using: </span>
-                {activeAi ? (
+                {aiStatusLoading ? (
+                  <span className="font-medium">Checking saved provider...</span>
+                ) : activeAi ? (
                   <>
                     <span className="font-medium">{AI_PROVIDERS.find((p) => p.value === activeAi.provider)?.label.split(" (")[0]}</span>
                     <code className="ml-2 bg-muted px-2 py-0.5 rounded text-xs">{activeAi.masked}</code>
                     <code className="ml-2 bg-primary/10 text-primary px-2 py-0.5 rounded text-xs font-medium">
-                      {PROVIDER_MODEL[activeAi.provider as ActiveAi["provider"]]?.model}
+                      {activeAi.model || PROVIDER_MODEL[activeAi.provider as ActiveAi["provider"]]?.model}
                     </code>
                   </>
                 ) : (
