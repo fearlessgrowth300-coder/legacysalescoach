@@ -29,6 +29,40 @@ export function chunkText(content: string, chunkSize = 10000, overlap = 0): stri
   return chunks;
 }
 
+export interface InsightWindowBatch {
+  windows: string[];
+  cursor: number;
+  nextCursor: number;
+  totalWindows: number;
+  done: boolean;
+}
+
+/**
+ * Split a long preserved source into a small, resumable extraction batch.
+ * Edge functions process one batch per invocation and chain the next cursor,
+ * which prevents long videos from exhausting one background-task lifetime.
+ */
+export function planInsightWindowBatch(
+  content: string,
+  cursor = 0,
+  options: { chunkSize?: number; overlap?: number; batchSize?: number } = {},
+): InsightWindowBatch {
+  const chunkSize = Math.max(4000, options.chunkSize ?? 18000);
+  const overlap = Math.max(0, Math.min(options.overlap ?? 1400, Math.floor(chunkSize * 0.3)));
+  const batchSize = Math.max(1, Math.min(options.batchSize ?? 2, 4));
+  const allWindows = chunkText(content, chunkSize, overlap);
+  const safeCursor = Math.max(0, Math.min(Math.floor(cursor || 0), allWindows.length));
+  const windows = allWindows.slice(safeCursor, safeCursor + batchSize);
+  const nextCursor = safeCursor + windows.length;
+  return {
+    windows,
+    cursor: safeCursor,
+    nextCursor,
+    totalWindows: allWindows.length,
+    done: nextCursor >= allWindows.length,
+  };
+}
+
 export interface SourcePassage {
   content: string;
   index: number;

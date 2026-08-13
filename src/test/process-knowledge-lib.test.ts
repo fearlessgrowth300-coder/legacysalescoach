@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSourcePassages, chunkText, dedupePrinciples, detectChapters, formatTranscriptSegments, mapVariantToSuggestion, prepareBookSections } from "../../supabase/functions/process-knowledge/lib";
+import { buildSourcePassages, chunkText, dedupePrinciples, detectChapters, formatTranscriptSegments, mapVariantToSuggestion, planInsightWindowBatch, prepareBookSections } from "../../supabase/functions/process-knowledge/lib";
 
 describe("chunkText (true 10k chunking)", () => {
   it("returns the whole string when shorter than chunk size", () => {
@@ -31,6 +31,32 @@ describe("chunkText (true 10k chunking)", () => {
     const chunks = chunkText(a + b, 10000);
     // First chunk should end at the sentence boundary, not mid-A
     expect(chunks[0].endsWith(".")).toBe(true);
+  });
+});
+
+describe("resumable insight window batches", () => {
+  const longSource = "A useful sales lesson ends here. ".repeat(5000);
+
+  it("limits each edge invocation to a small batch and advances the cursor", () => {
+    const first = planInsightWindowBatch(longSource, 0, { chunkSize: 12000, overlap: 800, batchSize: 2 });
+    expect(first.windows).toHaveLength(2);
+    expect(first.cursor).toBe(0);
+    expect(first.nextCursor).toBe(2);
+    expect(first.totalWindows).toBeGreaterThan(2);
+    expect(first.done).toBe(false);
+
+    const second = planInsightWindowBatch(longSource, first.nextCursor, { chunkSize: 12000, overlap: 800, batchSize: 2 });
+    expect(second.cursor).toBe(2);
+    expect(second.nextCursor).toBe(4);
+    expect(second.windows[0]).toBeTruthy();
+  });
+
+  it("marks the final batch done without running beyond the source", () => {
+    const initial = planInsightWindowBatch(longSource, 0, { chunkSize: 12000, overlap: 800, batchSize: 2 });
+    const final = planInsightWindowBatch(longSource, initial.totalWindows - 1, { chunkSize: 12000, overlap: 800, batchSize: 2 });
+    expect(final.windows).toHaveLength(1);
+    expect(final.nextCursor).toBe(initial.totalWindows);
+    expect(final.done).toBe(true);
   });
 });
 
