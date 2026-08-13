@@ -1449,7 +1449,9 @@ RULES:
 - NO business talk, NO pitching, NO "I can help you"
 - Sound like a REAL person who genuinely found something interesting
 - Each message must create an emotional pull to reply
-- Use their actual post content, bio details, or niche specifics
+- POST-FIRST GROUNDING: If a target post, reel caption, or Recent Posts section is available, EVERY opener must reference a specific idea from one of those posts. Prefer natural wording such as "I saw your post about..." and ask about the thought or experience behind it.
+- Do not use a generic bio summary when usable post content exists. Use the bio only when no meaningful post caption was returned.
+- Never claim to have seen a topic that is not present in the supplied profile/post evidence.
 - The "whyThisWorks" must explain the psychological trigger being used
 
 TYPE LABELS:

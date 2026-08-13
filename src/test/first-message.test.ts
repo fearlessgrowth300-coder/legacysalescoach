@@ -24,6 +24,17 @@ describe("profile-grounded first messages", () => {
     expect(suggestions.every((suggestion) => !/concrete result|working toward most|main result/i.test(suggestion.text))).toBe(true);
   });
 
+  it("uses a recent post before the bio and names the post in the opener", () => {
+    const withPost = {
+      ...prospect,
+      target_video_caption: "Instagram post/reel\nWhy I stopped waiting for confidence before building my own thing",
+    };
+    expect(extractFirstMessageProfileEvidence(withPost, "")).toContain("stopped waiting for confidence");
+    const suggestions = buildProfileGroundedFirstMessages(withPost, "");
+    expect(suggestions.every((suggestion) => /\bpost\b/i.test(suggestion.text))).toBe(true);
+    expect(suggestions.every((suggestion) => /confidence/i.test(suggestion.text))).toBe(true);
+  });
+
   it("rejects the certainty-funnel fallback as an Instagram opener", () => {
     expect(isProfileGroundedFirstMessage(
       "I hear you, and that makes sense. What concrete result are you working toward most right now?",
@@ -31,4 +42,3 @@ describe("profile-grounded first messages", () => {
     )).toBe(false);
   });
 });
-

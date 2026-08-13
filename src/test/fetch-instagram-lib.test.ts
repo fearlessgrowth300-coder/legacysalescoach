@@ -4,6 +4,7 @@ import {
   isInstagramPostUrl,
   normalizeInstagramProfile,
   pickInstagramProfilePicture,
+  pickInstagramTargetPost,
 } from "../../supabase/functions/fetch-instagram/lib";
 
 describe("Instagram prospect enrichment", () => {
@@ -31,7 +32,7 @@ describe("Instagram prospect enrichment", () => {
       biography: "Build a life you do not need to unplug from",
       profilePictureUrl: "https://cdn.example/alexandra.jpg",
       latestPosts: Array.from({ length: 7 }, (_, index) => ({
-        caption: `Post ${index + 1}`,
+        caption: `Post ${index + 1} explains a specific lesson from building this business`,
         likesCount: index + 10,
         commentsCount: index + 1,
         url: `https://instagram.com/p/${index + 1}`,
@@ -42,6 +43,16 @@ describe("Instagram prospect enrichment", () => {
     expect(normalized.biography).toContain("unplug");
     expect(normalized.profilePicUrl).toBe("https://cdn.example/alexandra.jpg");
     expect(normalized.recentPosts).toHaveLength(5);
-    expect(normalized.recentPosts[0].caption).toBe("Post 1");
+    expect(normalized.recentPosts[0].caption).toContain("Post 1 explains");
+    expect(normalized.targetPost.caption).toContain("Post 1 explains");
+  });
+
+  it("chooses a substantive recent post for a profile-based opener", () => {
+    const selected = pickInstagramTargetPost([
+      { caption: "", likes: 9000 },
+      { caption: "Why I stopped waiting for confidence before building my business", likes: 120, comments: 14, url: "post-2" },
+      { caption: "A much older post about mindset and consistency", likes: 500, comments: 50, url: "post-3" },
+    ]);
+    expect(selected?.url).toBe("post-2");
   });
 });

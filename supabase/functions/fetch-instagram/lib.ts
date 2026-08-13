@@ -23,7 +23,37 @@ export function pickInstagramProfilePicture(value: any): string {
     "";
 }
 
+export function pickInstagramTargetPost(posts: any[]): any | null {
+  const candidates = (Array.isArray(posts) ? posts : [])
+    .map((post, index) => ({
+      ...post,
+      caption: String(post?.caption || post?.text || "").replace(/\s+/g, " ").trim(),
+      _index: index,
+    }))
+    .filter((post) => post.caption.length >= 12);
+  if (candidates.length === 0) return null;
+
+  // Prefer a recent post with enough substance to support a natural opener;
+  // engagement breaks ties without allowing an old viral post to dominate.
+  return candidates.sort((a, b) => {
+    const score = (post: any) =>
+      Math.max(0, 500 - post._index * 80) +
+      Math.min(post.caption.length, 500) +
+      Math.log10(1 + Number(post.likes || post.likesCount || 0)) * 30 +
+      Math.log10(1 + Number(post.comments || post.commentsCount || 0)) * 40;
+    return score(b) - score(a);
+  }).map(({ _index, ...post }) => post)[0];
+}
+
 export function normalizeInstagramProfile(profile: any, fallbackUsername: string) {
+  const recentPosts = (profile?.latestPosts || profile?.recentPosts || []).slice(0, 5).map((post: any) => ({
+    caption: (post?.caption || post?.text || "").substring(0, 1200),
+    likes: post?.likesCount || post?.likes || 0,
+    comments: post?.commentsCount || post?.comments || 0,
+    views: post?.videoViewCount || post?.videoPlayCount || post?.views || 0,
+    type: post?.type || "unknown",
+    url: post?.url || post?.inputUrl || "",
+  }));
   return {
     username: profile?.username || fallbackUsername,
     fullName: profile?.fullName || profile?.full_name || "",
@@ -36,13 +66,8 @@ export function normalizeInstagramProfile(profile: any, fallbackUsername: string
     businessCategory: profile?.businessCategoryName || profile?.businessCategory || "",
     externalUrl: profile?.externalUrl || profile?.external_url || "",
     profilePicUrl: pickInstagramProfilePicture(profile),
-    recentPosts: (profile?.latestPosts || profile?.recentPosts || []).slice(0, 5).map((post: any) => ({
-      caption: (post?.caption || post?.text || "").substring(0, 500),
-      likes: post?.likesCount || post?.likes || 0,
-      comments: post?.commentsCount || post?.comments || 0,
-      type: post?.type || "unknown",
-      url: post?.url || post?.inputUrl || "",
-    })),
+    recentPosts,
+    targetPost: pickInstagramTargetPost(recentPosts),
   };
 }
 
