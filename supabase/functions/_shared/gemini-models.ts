@@ -18,8 +18,11 @@ export function shouldOmitGeminiSamplingParameters(
   provider: string,
   model: string,
 ): boolean {
-  if (provider !== "gemini") return false;
-  const match = /^gemini-(\d+)(?:\.(\d+))?/.exec(model);
+  const normalizedModel = provider === "lovable"
+    ? model.replace(/^google\//, "")
+    : model;
+  if (provider !== "gemini" && provider !== "lovable") return false;
+  const match = /^gemini-(\d+)(?:\.(\d+))?/.exec(normalizedModel);
   if (!match) return false;
   const major = Number(match[1]);
   const minor = Number(match[2] || 0);

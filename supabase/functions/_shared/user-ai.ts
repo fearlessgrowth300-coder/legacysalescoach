@@ -60,15 +60,14 @@ function lovableChatTarget(): UserChatTarget | null {
       "Content-Type": "application/json",
     },
     models: {
-      // Use Gemini 2.5 — it returns actual `content` instead of reasoning-only
-      // responses. The 3.5 reasoning models return `content: null` for short
-      // prompts which broke chat-suggest and TikTok opener generation.
-      fast: "google/gemini-2.5-flash-lite",
-      balanced: "google/gemini-2.5-flash",
-      reasoning: "google/gemini-2.5-flash",
-      vision: "google/gemini-2.5-flash",
+      // Lovable Gateway model IDs are provider-prefixed. Sampling controls are
+      // omitted for Gemini 3.5+ by shouldOmitGeminiSamplingParameters.
+      fast: "google/gemini-3.1-flash-lite",
+      balanced: "google/gemini-3.5-flash",
+      reasoning: "google/gemini-3.5-flash",
+      vision: "google/gemini-3.5-flash",
     },
-    visionFallbackModels: ["google/gemini-2.5-pro"],
+    visionFallbackModels: ["google/gemini-3.5-flash"],
     isAnthropic: false,
   };
 }
