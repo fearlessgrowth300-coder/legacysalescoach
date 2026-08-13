@@ -18,5 +18,22 @@ describe("saved first-message recovery", () => {
     expect(needsFirstMessageRepair(saved)).toBe(false);
     expect(parseSavedFirstMessages(saved)).toHaveLength(1);
   });
-});
 
+  it("replaces a bio-only opener when recent post evidence is available", () => {
+    const saved = JSON.stringify([{
+      text: "Hey Hayley, your bio about helping moms create income caught my attention. What got you into that?",
+      frameworkUsed: "Specific Observation",
+    }]);
+    expect(needsFirstMessageRepair(saved, "Why I stopped waiting for confidence before building my business"))
+      .toBe(true);
+  });
+
+  it("keeps an opener grounded in the selected recent post", () => {
+    const saved = JSON.stringify([{
+      text: "Hey Hayley, I saw your post about not waiting for confidence before building your business. What made you share that?",
+      frameworkUsed: "Specific Post Observation",
+    }]);
+    expect(needsFirstMessageRepair(saved, "Why I stopped waiting for confidence before building my business"))
+      .toBe(false);
+  });
+});

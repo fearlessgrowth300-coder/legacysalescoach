@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { fetchInstagramProfile } from "@/lib/fetch-instagram";
+import { fetchInstagramProfile, pickInstagramTargetPost } from "@/lib/fetch-instagram";
 import { needsFirstMessageRepair, parseSavedFirstMessages } from "@/lib/first-message";
 import { needsAvatarRefresh } from "@/lib/prospect-avatar";
 import { AiRequestTimeoutError, withAiRequestTimeout } from "@/lib/ai-request-timeout";
@@ -373,7 +373,9 @@ export default function Chats() {
     if (messagesFetched && selectedProspect && messages?.length === 0) {
       const savedFirst = (selectedProspect as any).suggested_first_message;
       if (savedFirst) {
-        if (needsFirstMessageRepair(savedFirst)) {
+        const postEvidence = String((selectedProspect as any).target_video_caption || "");
+        const needsPostEnrichment = Boolean((selectedProspect as any).instagram_url && !postEvidence);
+        if (needsPostEnrichment || needsFirstMessageRepair(savedFirst, postEvidence)) {
           // Old deployments saved ongoing certainty-funnel fallbacks as cold
           // openers. Do not restore them; the auto-generation effect below will
           // replace and persist a profile-grounded first message.
@@ -396,30 +398,59 @@ export default function Chats() {
     if (autoFirstMessageAttempted.current[selectedProspectId]) return;
 
     const prospect = selectedProspect as any;
-    if (prospect.suggested_first_message && !needsFirstMessageRepair(prospect.suggested_first_message)) return;
+    const savedPostEvidence = String(prospect.target_video_caption || "");
+    if (prospect.suggested_first_message &&
+        !needsFirstMessageRepair(prospect.suggested_first_message, savedPostEvidence) &&
+        (!prospect.instagram_url || savedPostEvidence)) return;
     if (!prospect.instagram_url && !prospect.tiktok_url && !prospect.detected_interests) return;
 
     autoFirstMessageAttempted.current[selectedProspectId] = true;
     setIsGeneratingFirst(true);
 
-    const profileMessage = [
-      prospect.platform ? `Platform: ${prospect.platform}` : "",
-      prospect.name ? `Name: ${prospect.name}` : "",
-      prospect.detected_interests ? `Bio/interests: ${prospect.detected_interests}` : "",
-      prospect.instagram_url ? `Instagram URL: ${prospect.instagram_url}` : "",
-      prospect.tiktok_url ? `TikTok URL: ${prospect.tiktok_url}` : "",
-      prospect.target_video_caption ? `Target video/post: ${prospect.target_video_caption}` : "",
-      prospect.suggested_comment ? `Comment already used: ${prospect.suggested_comment}` : "",
-    ].filter(Boolean).join("\n");
+    void (async () => {
+      const enrichedProspect = { ...prospect };
+      if (prospect.instagram_url && !prospect.target_video_caption) {
+        try {
+          const igData = await fetchInstagramProfile(prospect.instagram_url);
+          const targetPost = igData.targetPost || pickInstagramTargetPost(igData.recentPosts);
+          if (targetPost) {
+            enrichedProspect.target_video_caption = `Instagram post/reel\n${targetPost.caption}`;
+            enrichedProspect.target_video_url = targetPost.url || null;
+          }
+          enrichedProspect.detected_interests = [igData.businessCategory, igData.biography?.substring(0, 200)]
+            .filter(Boolean).join(" | ") || prospect.detected_interests;
+          enrichedProspect.profile_pic_url = igData.profilePicUrl || prospect.profile_pic_url;
+          enrichedProspect.instagram_username = igData.username || prospect.instagram_username;
+          await supabase.from("prospects").update({
+            detected_interests: enrichedProspect.detected_interests || null,
+            profile_pic_url: enrichedProspect.profile_pic_url || null,
+            instagram_username: enrichedProspect.instagram_username || null,
+            target_video_url: enrichedProspect.target_video_url || null,
+            target_video_caption: enrichedProspect.target_video_caption || null,
+          } as any).eq("id", selectedProspectId);
+        } catch (error) {
+          console.warn("Could not refresh Instagram posts for first-message repair:", error);
+        }
+      }
 
-    invokeConversationAi("chat-suggest", {
-      body: {
-        prospectId: selectedProspectId,
-        message: profileMessage,
-        threadType: currentThreadType,
-        mode: "first_message",
-      },
-    }).then(({ data, error }) => {
+      const profileMessage = [
+        enrichedProspect.platform ? `Platform: ${enrichedProspect.platform}` : "",
+        enrichedProspect.name ? `Name: ${enrichedProspect.name}` : "",
+        enrichedProspect.detected_interests ? `Bio/interests: ${enrichedProspect.detected_interests}` : "",
+        enrichedProspect.instagram_url ? `Instagram URL: ${enrichedProspect.instagram_url}` : "",
+        enrichedProspect.tiktok_url ? `TikTok URL: ${enrichedProspect.tiktok_url}` : "",
+        enrichedProspect.target_video_caption ? `Target video/post: ${enrichedProspect.target_video_caption}` : "",
+        enrichedProspect.suggested_comment ? `Comment already used: ${enrichedProspect.suggested_comment}` : "",
+      ].filter(Boolean).join("\n");
+
+      const { data, error } = await invokeConversationAi("chat-suggest", {
+        body: {
+          prospectId: selectedProspectId,
+          message: profileMessage,
+          threadType: currentThreadType,
+          mode: "first_message",
+        },
+      });
       if (error) throw error;
       if (data?.suggestions?.length) {
         setSuggestions(data.suggestions);
@@ -427,7 +458,7 @@ export default function Chats() {
         queryClient.invalidateQueries({ queryKey: ["selected-prospect", selectedProspectId] });
         queryClient.invalidateQueries({ queryKey: ["prospects"] });
       }
-    }).catch((error) => {
+    })().catch((error) => {
       console.error("Auto first-message recovery failed:", error);
     }).finally(() => {
       setIsGeneratingFirst(false);
@@ -583,7 +614,7 @@ export default function Chats() {
         try {
           const igData = await fetchInstagramProfile(newProspectIg);
           if (igData && !igData.error) {
-            const targetPost = (igData as any).targetPost;
+            const targetPost = igData.targetPost || pickInstagramTargetPost(igData.recentPosts);
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
             await supabase.from("prospects").update({
               detected_interests: interests || null,
@@ -677,7 +708,7 @@ export default function Chats() {
         try {
           const igData = await fetchInstagramProfile(newProspectIg);
           if (igData && !igData.error) {
-            const targetPost = (igData as any).targetPost;
+            const targetPost = igData.targetPost || pickInstagramTargetPost(igData.recentPosts);
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
             await supabase.from("prospects").update({
               detected_interests: interests || null,
@@ -790,7 +821,7 @@ export default function Chats() {
         try {
           const igData = await fetchInstagramProfile(newProspectIg);
           if (igData && !igData.error) {
-            const targetPost = (igData as any).targetPost;
+            const targetPost = igData.targetPost || pickInstagramTargetPost(igData.recentPosts);
             const interests = [igData.businessCategory, igData.biography?.substring(0, 200)].filter(Boolean).join(" | ");
             await supabase.from("prospects").update({
               detected_interests: interests || null,
@@ -980,7 +1011,7 @@ export default function Chats() {
       try {
         const igData = await fetchInstagramProfile(instagramUrl);
         if (igData && !igData.error) {
-          const targetPost = (igData as any).targetPost;
+          const targetPost = igData.targetPost || pickInstagramTargetPost(igData.recentPosts);
           enrichedMessage = `${enrichedMessage}\n\n--- INSTAGRAM AUTO-SCRAPED ---\n${igData.summary || ""}`;
           toast.success(`✅ Analyzed @${igData.username || "Instagram"}`, { duration: 4000 });
 

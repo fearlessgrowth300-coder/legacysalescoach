@@ -21,6 +21,27 @@ export interface InstagramProfileResult {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export function pickInstagramTargetPost(posts: any[] = []): any | null {
+  const candidates = posts
+    .map((post, index) => ({
+      ...post,
+      caption: String(post?.caption || post?.text || "").replace(/\s+/g, " ").trim(),
+      _index: index,
+    }))
+    .filter((post) => post.caption.length >= 12);
+  if (candidates.length === 0) return null;
+
+  const score = (post: any) =>
+    Math.max(0, 500 - post._index * 80) +
+    Math.min(post.caption.length, 500) +
+    Math.log10(1 + Number(post.likes || post.likesCount || 0)) * 30 +
+    Math.log10(1 + Number(post.comments || post.commentsCount || 0)) * 40;
+
+  const selected = [...candidates].sort((a, b) => score(b) - score(a))[0];
+  const { _index, ...post } = selected;
+  return post;
+}
+
 /**
  * Invokes the fetch-instagram function and transparently polls the asynchronous
  * Apify run so the browser never holds a single request open for minutes.
