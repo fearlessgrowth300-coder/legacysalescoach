@@ -349,7 +349,7 @@ function parsePrinciplesJson(raw: string): any[] {
   return objects;
 }
 
-import { buildSourcePassages, chunkText, dedupePrinciples, formatTranscriptSegments, prepareBookSections, type DetectedChapter } from "./lib.ts";
+import { buildSourcePassages, chunkText, dedupePrinciples, formatTranscriptSegments, planInsightWindowBatch, prepareBookSections, type DetectedChapter } from "./lib.ts";
 
 async function extractStructuredLearnings(content: string, sourceName: string, ai: AiProvider): Promise<any[]> {
   // Cleaning every transcript chunk before extraction doubled the number of AI
@@ -937,7 +937,7 @@ serve(async (req) => {
   let failureItemId: string | null = null;
   let failureClient: any = null;
   try {
-    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex, continueBook, refreshPrinciplesOnly, userId: bodyUserId } = await req.json();
+    const { itemId, url, type, filePath, manualTranscript, retryChapterIndex, continueBook, continueInsights, refreshPrinciplesOnly, userId: bodyUserId } = await req.json();
     failureItemId = typeof itemId === "string" ? itemId : null;
 
     const authHeader = req.headers.get("Authorization");
@@ -1044,7 +1044,7 @@ serve(async (req) => {
     // Mark only fresh jobs as processing. Continuation/retry calls must not touch
     // updated_at before they inspect book_brief, otherwise overlapping resumes can
     // hide a legitimately active section and overwrite each other.
-    if (!continueBook && typeof retryChapterIndex !== "number") {
+    if (!continueBook && !continueInsights && typeof retryChapterIndex !== "number") {
       await supabase.from("knowledge_base_items").update({ status: "processing" }).eq("id", itemId);
     }
 
@@ -1103,7 +1103,7 @@ serve(async (req) => {
     // background jobs. A long transcript can use most of one Edge invocation
     // just to create source passages; chaining a fresh invocation prevents the
     // insight pass from being killed after the source was already indexed.
-    const scheduleStructuredInsights = async (): Promise<boolean> => {
+    const scheduleStructuredInsights = async (continuation = false): Promise<boolean> => {
       try {
         const fnUrl = `${supabaseUrl}/functions/v1/process-knowledge`;
         const response = await fetch(fnUrl, {
@@ -1116,6 +1116,7 @@ serve(async (req) => {
             itemId,
             type: item.type,
             refreshPrinciplesOnly: true,
+            continueInsights: continuation,
             userId: user.id,
           }),
           signal: AbortSignal.timeout(8000),
@@ -1125,7 +1126,7 @@ serve(async (req) => {
           console.error("Structured insight job was not accepted:", response.status, responseBody.substring(0, 300));
           return false;
         }
-        console.log(`Structured insight job accepted for ${itemId}`);
+        console.log(`${continuation ? "Continued" : "Started"} structured insight job for ${itemId}`);
         return true;
       } catch (error) {
         console.error("Could not schedule structured insight job:", error);
@@ -1614,24 +1615,105 @@ serve(async (req) => {
     if (!refreshPrinciplesOnly) {
       const scheduled = await scheduleStructuredInsights();
       if (!scheduled) {
-        await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+        await supabase.from("knowledge_base_items").update({
+          status: "error",
+          book_brief: {
+            ...(item.book_brief && typeof item.book_brief === "object" ? item.book_brief : {}),
+            insight_extraction: {
+              version: 1,
+              status: "failed",
+              error: "Full source was indexed, but structured insight extraction could not be scheduled.",
+              updated_at: new Date().toISOString(),
+            },
+          },
+        }).eq("id", itemId);
       }
       return;
     }
 
-    let learnings: any[] = [];
-    try {
-      learnings = await extractStructuredLearnings(contentToProcess, sourceName, ai);
-    } catch (learningError) {
-      console.warn(`Source indexed, but principle refresh failed for ${itemId}:`, learningError);
-      await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+    // Analyze long preserved sources in small resumable batches. Previously all
+    // windows ran inside one background task, so long videos could hit the cloud
+    // wall-clock limit after returning 202 and silently fall back to "ready" with
+    // zero principles. Progress lives in book_brief JSON to avoid a migration.
+    const previousBrief = item.book_brief && typeof item.book_brief === "object" ? item.book_brief : {};
+    const previousProgress = previousBrief?.insight_extraction && typeof previousBrief.insight_extraction === "object"
+      ? previousBrief.insight_extraction
+      : {};
+    const requestedCursor = continueInsights ? Number(previousProgress.next_cursor || 0) : 0;
+    const batch = planInsightWindowBatch(contentToProcess, requestedCursor, {
+      chunkSize: 18000,
+      overlap: 1400,
+      // One AI window per invocation keeps free-tier Gemini users below burst
+      // limits and gives every continuation a fresh edge-function time budget.
+      batchSize: 1,
+    });
+    const startedAt = continueInsights && previousProgress.started_at
+      ? previousProgress.started_at
+      : new Date().toISOString();
+
+    if (batch.windows.length === 0) {
+      const storedCount = Number(previousProgress.stored_count || 0);
+      await supabase.from("knowledge_base_items").update({
+        status: storedCount > 0 ? "ready" : "error",
+        book_brief: {
+          ...previousBrief,
+          insight_extraction: {
+            ...previousProgress,
+            status: storedCount > 0 ? "done" : "failed",
+            error: storedCount > 0 ? null : "No source windows were available for insight extraction.",
+            completed_at: new Date().toISOString(),
+          },
+        },
+      }).eq("id", itemId);
       return;
     }
-    console.log(`Pass 2 complete: ${learnings.length} principles extracted`);
+
+    const activeProgress = {
+      version: 1,
+      status: "extracting",
+      cursor: batch.cursor,
+      next_cursor: batch.cursor,
+      total_windows: batch.totalWindows,
+      stored_count: continueInsights ? Number(previousProgress.stored_count || 0) : 0,
+      started_at: startedAt,
+      updated_at: new Date().toISOString(),
+      error: null,
+    };
+    await supabase.from("knowledge_base_items").update({
+      status: "extracting",
+      book_brief: { ...previousBrief, insight_extraction: activeProgress },
+    }).eq("id", itemId);
+
+    const batchResults = await Promise.all(batch.windows.map((window, offset) =>
+      extractStructuredLearningsChunk(
+        window,
+        sourceName,
+        ai,
+        batch.cursor + offset,
+        batch.totalWindows,
+        { timeoutMs: 50000, maxTokens: 4500, maxPrinciples: 6 },
+      )
+    ));
+    const learnings = dedupePrinciples(batchResults.flat());
+    console.log(
+      `Insight batch ${batch.cursor + 1}-${batch.nextCursor}/${batch.totalWindows}: ${learnings.length} principles extracted`,
+    );
 
     if (learnings.length === 0) {
-      console.warn(`Source indexed for ${itemId}; no additional principles were returned`);
-      await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+      const message = `AI returned no structured insights for source windows ${batch.cursor + 1}-${batch.nextCursor}.`;
+      console.error(`${message} Item ${itemId} was left retryable instead of silently marked ready.`);
+      await supabase.from("knowledge_base_items").update({
+        status: "error",
+        book_brief: {
+          ...previousBrief,
+          insight_extraction: {
+            ...activeProgress,
+            status: "failed",
+            error: message,
+            updated_at: new Date().toISOString(),
+          },
+        },
+      }).eq("id", itemId);
       return;
     }
 
@@ -1667,12 +1749,62 @@ serve(async (req) => {
         return;
       }
       console.warn(`Source indexed, but principle persistence stopped for ${itemId}:`, persistErr);
-      await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+      await supabase.from("knowledge_base_items").update({
+        status: "error",
+        book_brief: {
+          ...previousBrief,
+          insight_extraction: {
+            ...activeProgress,
+            status: "failed",
+            error: persistErr?.message || "Extracted principles could not be saved.",
+            updated_at: new Date().toISOString(),
+          },
+        },
+      }).eq("id", itemId);
       return;
     }
 
-    console.log(`Stored ${storedLearnings.length} weapon-grade principles (deduped) + matching chunks`);
-    await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+    const storedCount = Number(activeProgress.stored_count || 0) + storedLearnings.length;
+    const nextProgress = {
+      ...activeProgress,
+      status: batch.done ? "done" : "extracting",
+      cursor: batch.cursor,
+      next_cursor: batch.nextCursor,
+      stored_count: storedCount,
+      updated_at: new Date().toISOString(),
+      completed_at: batch.done ? new Date().toISOString() : null,
+      error: null,
+    };
+    console.log(`Stored ${storedLearnings.length} principles in this batch (${storedCount} total this run)`);
+
+    if (batch.done) {
+      await supabase.from("knowledge_base_items").update({
+        status: "ready",
+        book_brief: { ...previousBrief, insight_extraction: nextProgress },
+      }).eq("id", itemId);
+      console.log(`Structured insight extraction completed for ${itemId}.`);
+      return;
+    }
+
+    await supabase.from("knowledge_base_items").update({
+      status: "extracting",
+      book_brief: { ...previousBrief, insight_extraction: nextProgress },
+    }).eq("id", itemId);
+    const continued = await scheduleStructuredInsights(true);
+    if (!continued) {
+      await supabase.from("knowledge_base_items").update({
+        status: "error",
+        book_brief: {
+          ...previousBrief,
+          insight_extraction: {
+            ...nextProgress,
+            status: "failed",
+            error: "The next insight extraction batch could not be scheduled.",
+            updated_at: new Date().toISOString(),
+          },
+        },
+      }).eq("id", itemId);
+    }
     };
 
     // Dispatch the long-running work to the background and respond immediately.
@@ -1689,7 +1821,24 @@ serve(async (req) => {
         const sourceIndexComplete = Number(current?.source_index_version || 0) >= SOURCE_INDEX_VERSION
           && Number(current?.source_chunk_count || 0) > 0
           && Boolean(current?.indexed_at);
-        if (sourceIndexComplete) {
+        if (sourceIndexComplete && refreshPrinciplesOnly) {
+          const existingBrief = current?.book_brief && typeof current.book_brief === "object" ? current.book_brief : {};
+          const existingProgress = existingBrief?.insight_extraction && typeof existingBrief.insight_extraction === "object"
+            ? existingBrief.insight_extraction
+            : {};
+          await supabase.from("knowledge_base_items").update({
+            status: "error",
+            book_brief: {
+              ...existingBrief,
+              insight_extraction: {
+                ...existingProgress,
+                status: "failed",
+                error: error instanceof Error ? error.message : "Structured insight extraction stopped unexpectedly.",
+                updated_at: new Date().toISOString(),
+              },
+            },
+          }).eq("id", itemId);
+        } else if (sourceIndexComplete) {
           await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
         } else if (current?.status === "extracting" && chapters.length > 0) {
           const recovered = chapters.map((c: any) =>

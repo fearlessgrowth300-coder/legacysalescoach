@@ -487,10 +487,14 @@ export default function KnowledgeBase() {
         const updatedAt = item.updated_at ? new Date(item.updated_at).getTime() : now;
         const stale = now - updatedAt > 120_000;
         const countForItem = counts[item.id] || { learnings: 0, chunks: 0, sourcePassages: 0 };
+        const insightProgress = (item as any).book_brief?.insight_extraction;
+        const hasInsightContinuation = item.type !== "pdf"
+          && Number((item as any).source_index_version || 0) >= FULL_SOURCE_INDEX_VERSION
+          && Number(insightProgress?.next_cursor || 0) < Number(insightProgress?.total_windows || 0);
 
         // If an edge background task saved principles/chunks but died before
         // flipping the item to ready, do not leave the card spinning forever.
-        if (item.type !== "pdf" && stale && countForItem.learnings > 0 && countForItem.sourcePassages > 0) {
+        if (item.type !== "pdf" && !hasInsightContinuation && stale && countForItem.learnings > 0 && countForItem.sourcePassages > 0) {
           const lastMark = markReadyRef.current[item.id] || 0;
           if (now - lastMark > 90_000) {
             markReadyRef.current[item.id] = now;
@@ -542,6 +546,13 @@ export default function KnowledgeBase() {
               type: "pdf",
               filePath: item.file_path,
               continueBook: hasOpenChapter,
+            }
+          : hasInsightContinuation
+          ? {
+              itemId: item.id,
+              type: item.type,
+              refreshPrinciplesOnly: true,
+              continueInsights: true,
             }
           : {
               itemId: item.id,
@@ -1454,6 +1465,16 @@ export default function KnowledgeBase() {
             const itemChunks = getChunksForItem(item.id);
             const thumbnail = getItemThumbnail(item);
             const itemIsUpgraded = hasFullSourceIndex(item);
+            const insightProgress = (item as any).book_brief?.insight_extraction;
+            const insightTotalWindows = Number(insightProgress?.total_windows || 0);
+            const insightCompletedWindows = Number(insightProgress?.next_cursor || 0);
+            const insightProgressPercent = insightTotalWindows > 0
+              ? Math.min(100, Math.round((insightCompletedWindows / insightTotalWindows) * 100))
+              : undefined;
+            const canResumeInsightExtraction = item.type !== "pdf"
+              && itemIsUpgraded
+              && insightTotalWindows > 0
+              && insightCompletedWindows < insightTotalWindows;
             return (
               <Card key={item.id}>
                 <CardContent className="p-3 sm:py-4 sm:p-6">
@@ -1497,7 +1518,9 @@ export default function KnowledgeBase() {
                         <Loader2 className="h-3 w-3 animate-spin text-primary" />
                         <p className="text-xs font-medium text-muted-foreground">
                           {item.status === "mapping" ? "Mapping the book…" :
-                           item.status === "extracting" ? "Extracting principles section by section…" :
+                           item.status === "extracting" && insightTotalWindows > 0
+                             ? `Extracting insight batch ${Math.min(insightCompletedWindows + 1, insightTotalWindows)} of ${insightTotalWindows}…`
+                           : item.status === "extracting" ? "Extracting principles section by section…" :
                            retryProgress[item.id]
                              ? "Indexing the complete source…"
                              : "Processing content — extracting knowledge..."}
@@ -1518,13 +1541,18 @@ export default function KnowledgeBase() {
                           )}
                         </div>
                       )}
-                      <Progress value={undefined} className="h-1.5 animate-pulse" />
+                      <Progress
+                        value={insightProgressPercent}
+                        className={insightProgressPercent === undefined ? "h-1.5 animate-pulse" : "h-1.5"}
+                      />
                       {/* Recovery button: shows after 60s with no item update */}
                       {(item as any).updated_at && ((Date.now() - new Date((item as any).updated_at).getTime()) > 60_000) && (
                         <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2">
                           <p className="text-xs text-muted-foreground">
                             {item.type === "pdf"
                               ? "This book seems stuck. Resume to continue processing."
+                              : canResumeInsightExtraction
+                                ? "Insight extraction paused. Resume from the last completed batch."
                               : (processingCounts[item.id]?.learnings || 0) > 0 && (processingCounts[item.id]?.sourcePassages || 0) > 0
                                 ? "Extraction finished but the status did not update. Mark it ready."
                                 : "This item seems stuck. Restart extraction."}
@@ -1535,7 +1563,18 @@ export default function KnowledgeBase() {
                             className="h-7 px-2 text-xs"
                             onClick={async () => {
                               try {
-                                if (item.type !== "pdf" && (processingCounts[item.id]?.learnings || 0) > 0 && (processingCounts[item.id]?.sourcePassages || 0) > 0) {
+                                if (canResumeInsightExtraction) {
+                                  const { data, error } = await supabase.functions.invoke("process-knowledge", {
+                                    body: {
+                                      itemId: item.id,
+                                      type: item.type,
+                                      refreshPrinciplesOnly: true,
+                                      continueInsights: true,
+                                    },
+                                  });
+                                  if (error || data?.error) throw new Error(data?.error || error?.message || "Resume failed");
+                                  toast.success("Resuming insight extraction from the last completed batch…");
+                                } else if (item.type !== "pdf" && (processingCounts[item.id]?.learnings || 0) > 0 && (processingCounts[item.id]?.sourcePassages || 0) > 0) {
                                   const { error } = await supabase.from("knowledge_base_items").update({
                                     status: "ready",
                                     source_index_version: FULL_SOURCE_INDEX_VERSION,
@@ -1560,7 +1599,11 @@ export default function KnowledgeBase() {
                             }}
                           >
                             <RefreshCw className="h-3 w-3 mr-1" />
-                            {item.type !== "pdf" && (processingCounts[item.id]?.learnings || 0) > 0 && (processingCounts[item.id]?.sourcePassages || 0) > 0 ? "Mark Ready" : item.type === "pdf" ? "Resume" : "Restart"}
+                            {canResumeInsightExtraction
+                              ? "Resume"
+                              : item.type !== "pdf" && (processingCounts[item.id]?.learnings || 0) > 0 && (processingCounts[item.id]?.sourcePassages || 0) > 0
+                                ? "Mark Ready"
+                                : item.type === "pdf" ? "Resume" : "Restart"}
                           </Button>
                         </div>
                       )}
@@ -1697,15 +1740,17 @@ export default function KnowledgeBase() {
                   )}
                   {item.status === "error" && (
                     <div className="mt-3 pt-3 border-t flex items-center justify-between">
-                      <p className="text-xs text-destructive">Failed to process. Try again or use a different URL.</p>
+                      <p className="text-xs text-destructive">
+                        {insightProgress?.error || "Failed to process. Try again or use a different URL."}
+                      </p>
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => retryItem.mutate(item)}
-                        disabled={retryItem.isPending}
+                        onClick={() => itemIsUpgraded ? extractInsights.mutate(item) : retryItem.mutate(item)}
+                        disabled={retryItem.isPending || extractInsights.isPending}
                         className="shrink-0 ml-2"
                       >
-                        {retryItem.isPending ? (
+                        {(retryItem.isPending || extractInsights.isPending) ? (
                           <Loader2 className="h-3 w-3 mr-1 animate-spin" />
                         ) : (
                           <RefreshCw className="h-3 w-3 mr-1" />
