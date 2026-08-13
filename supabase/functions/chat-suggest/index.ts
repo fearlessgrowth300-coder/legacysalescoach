@@ -11,6 +11,11 @@ import {
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
+  buildProfileGroundedFirstMessages,
+  extractFirstMessageProfileEvidence,
+  isProfileGroundedFirstMessage,
+} from "../_shared/first-message.ts";
+import {
   applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
   applyEarliestMissingFriendCheckpoint,
@@ -1722,6 +1727,62 @@ ${jsonFormat}
       if (activeThreadType !== "friend") throw replyError;
       replyGenerationFailure = replyError instanceof Error ? replyError.message : "Friend reply generation failed";
       console.warn("[chat-suggest] Friend generation will use deterministic fallback", replyGenerationFailure);
+    }
+
+    // A brand-new Instagram/TikTok contact has not entered the certainty
+    // funnel yet. The old flow ran these openers through the ongoing-chat stage
+    // validator, which saw an empty history and replaced every personalized DM
+    // with the generic "what result are you working toward?" fallbacks. Keep
+    // first contact isolated: require profile grounding, repair only invalid
+    // opener variants, persist them, and wait for the prospect's first reply
+    // before stage/checkpoint analysis begins.
+    if (activeThreadType === "friend" && mode === "first_message") {
+      const evidence = extractFirstMessageProfileEvidence(prospect, message);
+      const fallbacks = buildProfileGroundedFirstMessages(prospect, message);
+      const generated = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
+      let fallbackApplied = Boolean(replyGenerationFailure) || generated.length < 3;
+      const firstMessageSuggestions = fallbacks.map((fallback, index) => {
+        const candidate = generated[index];
+        if (!candidate || !isProfileGroundedFirstMessage(candidate.text, evidence)) {
+          fallbackApplied = true;
+          return fallback;
+        }
+        return {
+          ...fallback,
+          ...candidate,
+          id: index + 1,
+          type: index === 0 ? "primary" : index === 1 ? "alternative" : "softer",
+        };
+      });
+
+      parsed.suggestions = firstMessageSuggestions;
+      parsed.questioningPattern = "intent";
+      parsed.conversationStage = prospect.conversation_stage || "first_contact";
+      parsed.friendJourney = null;
+      parsed.prospectLearning = null;
+      parsed.qualityValidation = {
+        passed: true,
+        repaired: fallbackApplied,
+        fallbackApplied,
+        fallbackReason: fallbackApplied
+          ? (replyGenerationFailure || "One or more generated openers were not grounded in the analyzed profile.")
+          : null,
+      };
+      parsed.brainRetrieval = {
+        chunksRetrieved: topChunks.length,
+        uniqueSources: new Set([...topChunks.map((chunk: any) => chunk.source_id)].filter(Boolean)).size,
+        sources: Array.from(sourceTypes),
+        insightsRetrieved: brainInsights?.length || 0,
+        retrievalPhase: "profile_grounded_first_contact",
+      };
+
+      await supabase.from("prospects").update({
+        suggested_first_message: JSON.stringify(firstMessageSuggestions),
+      }).eq("id", prospectId).eq("user_id", user.id);
+
+      return new Response(JSON.stringify(parsed), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const combinedFriendLearning = activeThreadType === "friend"

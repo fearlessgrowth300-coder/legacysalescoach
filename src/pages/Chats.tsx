@@ -10,6 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { fetchInstagramProfile } from "@/lib/fetch-instagram";
+import { needsFirstMessageRepair, parseSavedFirstMessages } from "@/lib/first-message";
 import { needsAvatarRefresh } from "@/lib/prospect-avatar";
 import { AiRequestTimeoutError, withAiRequestTimeout } from "@/lib/ai-request-timeout";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -372,15 +373,17 @@ export default function Chats() {
     if (messagesFetched && selectedProspect && messages?.length === 0) {
       const savedFirst = (selectedProspect as any).suggested_first_message;
       if (savedFirst) {
-        try {
-          const parsed = JSON.parse(savedFirst);
-          if (Array.isArray(parsed) && parsed.length > 0) {
+        if (needsFirstMessageRepair(savedFirst)) {
+          // Old deployments saved ongoing certainty-funnel fallbacks as cold
+          // openers. Do not restore them; the auto-generation effect below will
+          // replace and persist a profile-grounded first message.
+          void supabase.from("prospects")
+            .update({ suggested_first_message: null } as any)
+            .eq("id", selectedProspect.id);
+        } else {
+          const parsed = parseSavedFirstMessages(savedFirst);
+          if (parsed.length > 0) {
             setSuggestions(parsed);
-            return;
-          }
-        } catch {
-          if (savedFirst.trim()) {
-            setSuggestions([{ id: 1, type: "first_dm", text: savedFirst }]);
             return;
           }
         }
@@ -393,7 +396,7 @@ export default function Chats() {
     if (autoFirstMessageAttempted.current[selectedProspectId]) return;
 
     const prospect = selectedProspect as any;
-    if (prospect.suggested_first_message) return;
+    if (prospect.suggested_first_message && !needsFirstMessageRepair(prospect.suggested_first_message)) return;
     if (!prospect.instagram_url && !prospect.tiktok_url && !prospect.detected_interests) return;
 
     autoFirstMessageAttempted.current[selectedProspectId] = true;
