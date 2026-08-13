@@ -1099,6 +1099,40 @@ serve(async (req) => {
     const contentToProcess = content.substring(0, MAX_CONTENT_LENGTH);
     const sourceName = item.title || "Uploaded Content";
 
+    // Full-source preservation and structured insight extraction are separate
+    // background jobs. A long transcript can use most of one Edge invocation
+    // just to create source passages; chaining a fresh invocation prevents the
+    // insight pass from being killed after the source was already indexed.
+    const scheduleStructuredInsights = async (): Promise<boolean> => {
+      try {
+        const fnUrl = `${supabaseUrl}/functions/v1/process-knowledge`;
+        const response = await fetch(fnUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${supabaseKey}`,
+          },
+          body: JSON.stringify({
+            itemId,
+            type: item.type,
+            refreshPrinciplesOnly: true,
+            userId: user.id,
+          }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!response.ok) {
+          const responseBody = await response.text().catch(() => "");
+          console.error("Structured insight job was not accepted:", response.status, responseBody.substring(0, 300));
+          return false;
+        }
+        console.log(`Structured insight job accepted for ${itemId}`);
+        return true;
+      } catch (error) {
+        console.error("Could not schedule structured insight job:", error);
+        return false;
+      }
+    };
+
     // A fresh processing run must never retain a previous success marker.
     // Completion is written back only after markSourceIndexReady verifies that
     // preserved source passages actually exist.
@@ -1572,6 +1606,18 @@ serve(async (req) => {
     // turn a successfully indexed video back into a failed item.
     await markSourceIndexReady(supabase, user.id, itemId);
     console.log(`Full-source upgrade complete with ${sourcePassageCount} passages for ${itemId}`);
+
+    // A fresh URL/short-document job ends after durable source preservation
+    // and immediately starts extraction in a new invocation. The dedicated
+    // refresh job continues below and marks the item ready when insights have
+    // actually been stored.
+    if (!refreshPrinciplesOnly) {
+      const scheduled = await scheduleStructuredInsights();
+      if (!scheduled) {
+        await supabase.from("knowledge_base_items").update({ status: "ready" }).eq("id", itemId);
+      }
+      return;
+    }
 
     let learnings: any[] = [];
     try {

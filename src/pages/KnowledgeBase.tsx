@@ -20,7 +20,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { BrainInsightCard } from "@/components/BrainInsightCard";
 import { BookBriefCard } from "@/components/BookBriefCard";
-import { FULL_SOURCE_INDEX_VERSION, hasFullSourceIndex } from "@/lib/knowledge-source-index";
+import { FULL_SOURCE_INDEX_VERSION, hasFullSourceIndex, shouldAutoExtractInsights } from "@/lib/knowledge-source-index";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
@@ -65,6 +65,7 @@ export default function KnowledgeBase() {
   const autoRecoveryAttemptsRef = useRef<Record<string, number>>({});
   const markReadyRef = useRef<Record<string, number>>({});
   const completedIndexRepairRef = useRef<Set<string>>(new Set());
+  const autoInsightRecoveryRef = useRef<Set<string>>(new Set());
 
   // URL preview state
   const [urlStep, setUrlStep] = useState<"input" | "preview" | "confirm">("input");
@@ -143,6 +144,40 @@ export default function KnowledgeBase() {
     },
     enabled: !!user && !!items && items.length > 0,
   });
+
+  // Recover a recent upload whose durable source passages completed but whose
+  // structured extraction was interrupted. Future uploads are chained by the
+  // backend; this also repairs items created just before that deployment.
+  useEffect(() => {
+    if (!items || !itemSummaries) return;
+    // Items are sorted newest-first. Only recover the newest card so opening
+    // the page never starts a surprise bulk reprocessing job for old sources.
+    const candidates = items
+      .slice(0, 1)
+      .filter((item: any) => shouldAutoExtractInsights(item, itemSummaries[item.id]?.learnings || 0))
+      .filter((item: any) => !autoInsightRecoveryRef.current.has(item.id));
+
+    for (const item of candidates) {
+      autoInsightRecoveryRef.current.add(item.id);
+      toast.info(`Finishing insight extraction for ${item.title || "your new source"}…`);
+      void supabase.functions.invoke("process-knowledge", {
+        body: { itemId: item.id, type: item.type, refreshPrinciplesOnly: true },
+      }).then(({ data, error }) => {
+        if (error || data?.error) throw new Error(data?.error || error?.message || "Insight extraction failed");
+        if (Number(data?.pipelineVersion || 0) < 4 || data?.jobType !== "structured_insights") {
+          throw new Error("The deployed knowledge processor does not support automatic insight extraction yet.");
+        }
+        toast.success(`Automatic insight extraction started for ${item.title || "your source"}.`);
+      }).catch((error) => {
+        console.error("Automatic insight recovery failed", error);
+        toast.error(`${item.title || "Knowledge source"} was indexed, but automatic insight extraction could not start.`);
+      }).finally(() => {
+        queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+        queryClient.invalidateQueries({ queryKey: ["kb-item-summaries"] });
+        queryClient.invalidateQueries({ queryKey: ["brain-total"] });
+      });
+    }
+  }, [items, itemSummaries, queryClient]);
 
   // Reset URL dialog state
   const resetUrlDialog = () => {
