@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { fetchInstagramProfile } from "@/lib/fetch-instagram";
 import { needsAvatarRefresh } from "@/lib/prospect-avatar";
+import { AiRequestTimeoutError, withAiRequestTimeout } from "@/lib/ai-request-timeout";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { useNavigate, useParams } from "react-router-dom";
@@ -59,6 +60,11 @@ type ProcessedScreenshot = {
 };
 
 const SCREENSHOT_TRANSCRIPT_MARKER = "--- SCREENSHOT TRANSCRIPT ---";
+
+const invokeConversationAi = (
+  functionName: "generate-reply" | "chat-suggest",
+  options: { body: Record<string, unknown> },
+) => withAiRequestTimeout(supabase.functions.invoke(functionName, options));
 
 const friendStageDisplayLabel = (value?: string | null) => {
   const stage = String(value || "").toLowerCase().replace(/[\s_-]+/g, "");
@@ -403,7 +409,7 @@ export default function Chats() {
       prospect.suggested_comment ? `Comment already used: ${prospect.suggested_comment}` : "",
     ].filter(Boolean).join("\n");
 
-    supabase.functions.invoke("chat-suggest", {
+    invokeConversationAi("chat-suggest", {
       body: {
         prospectId: selectedProspectId,
         message: profileMessage,
@@ -610,7 +616,7 @@ export default function Chats() {
       await saveScreenshotConversation(prospect.id, processedScreenshots, screenshotContextNote);
 
       // 5. Ask AI for next reply suggestion based on full conversation
-      const { data: suggestData, error: suggestError } = await supabase.functions.invoke("chat-suggest", {
+      const { data: suggestData, error: suggestError } = await invokeConversationAi("chat-suggest", {
         body: {
           prospectId: prospect.id,
           message: fullConversation,
@@ -698,7 +704,7 @@ export default function Chats() {
 
       await saveScreenshotConversation(prospect.id, processedScreenshots, screenshotContextNote);
 
-      const { data: suggestData, error: suggestError } = await supabase.functions.invoke("chat-suggest", {
+      const { data: suggestData, error: suggestError } = await invokeConversationAi("chat-suggest", {
         body: {
           prospectId: prospect.id,
           message: fullConversation || "The prospect has ghosted me. They saw my last message but didn't reply.",
@@ -737,7 +743,7 @@ export default function Chats() {
     setIsRefining(true);
 
     try {
-      const { data, error } = await supabase.functions.invoke("chat-suggest", {
+      const { data, error } = await invokeConversationAi("chat-suggest", {
         body: {
           prospectId: selectedProspectId,
           message: `MY DRAFT MESSAGE TO REFINE:\n${messageInput}`,
@@ -802,7 +808,7 @@ export default function Chats() {
         }
 
         try {
-          let suggestResponse = await supabase.functions.invoke("chat-suggest", {
+          let suggestResponse = await invokeConversationAi("chat-suggest", {
             body: {
               prospectId: data.id,
               message: profileSummary,
@@ -812,7 +818,7 @@ export default function Chats() {
           });
           if (suggestResponse.error && /401|Unauthorized/i.test(String(suggestResponse.error?.message || ""))) {
             await supabase.auth.refreshSession();
-            suggestResponse = await supabase.functions.invoke("chat-suggest", {
+            suggestResponse = await invokeConversationAi("chat-suggest", {
               body: {
                 prospectId: data.id,
                 message: profileSummary,
@@ -1008,7 +1014,7 @@ export default function Chats() {
 
     try {
       const invokeGenerate = async () => {
-        const res = await supabase.functions.invoke("generate-reply", {
+        const res = await invokeConversationAi("generate-reply", {
           body: {
             prospectId: selectedProspectId,
             message: enrichedMessage,
@@ -1019,7 +1025,7 @@ export default function Chats() {
         });
         if (res.error && /401|Unauthorized/i.test(String(res.error?.message || ""))) {
           await supabase.auth.refreshSession();
-          return await supabase.functions.invoke("generate-reply", {
+          return await invokeConversationAi("generate-reply", {
             body: {
               prospectId: selectedProspectId,
               message: enrichedMessage,
@@ -1051,7 +1057,7 @@ export default function Chats() {
       }
     } catch (e: any) {
       console.error("AI suggestion error:", e);
-      toast.error("Failed to get suggestions");
+      toast.error(e instanceof AiRequestTimeoutError ? e.message : "Failed to get suggestions");
     }
 
     setMessageInput("");
@@ -1165,10 +1171,10 @@ export default function Chats() {
     try {
       const lastInbound = messages?.filter(m => m.direction === "inbound").pop();
       const body = { prospectId: selectedProspectId, message: lastInbound?.content || "", threadType: currentThreadType, styleModifier: style };
-      let { data, error } = await supabase.functions.invoke("generate-reply", { body });
+      let { data, error } = await invokeConversationAi("generate-reply", { body });
       if (error && /401|Unauthorized/i.test(String(error?.message || ""))) {
         await supabase.auth.refreshSession();
-        ({ data, error } = await supabase.functions.invoke("generate-reply", { body }));
+        ({ data, error } = await invokeConversationAi("generate-reply", { body }));
       }
       if (error) throw error;
 
@@ -1184,7 +1190,7 @@ export default function Chats() {
         toast.info(`🔍 Pulled from brain: ${br.chunksRetrieved} chunks | Sources: ${sourceList}`, { duration: 4000 });
       }
     } catch (e: any) {
-      toast.error("Failed to generate reply");
+      toast.error(e instanceof AiRequestTimeoutError ? e.message : "Failed to generate reply");
     }
     setIsAnalyzing(false);
     setIsAnalyzingIntel(false);

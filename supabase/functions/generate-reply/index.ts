@@ -587,32 +587,27 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
         ]
       : analysisUserPrompt;
 
-    const analysisResponse = await userChat(chat, {
-      model: screenshotSignedUrl && !chat.isAnthropic ? chat.models.vision : chat.models.balanced,
-      messages: [
-        { role: "system", content: analysisPrompt },
-        { role: "user", content: analysisUserContent },
-      ],
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-    });
-
-
-    if (!analysisResponse.ok) {
-      const st = analysisResponse.status;
-      if (st === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded" }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      if (st === 402) return new Response(JSON.stringify({ error: "Credits exhausted" }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      throw new Error(`Analysis AI error: ${st}`);
-    }
-
-    const analysisData = await analysisResponse.json();
-    const analysisRaw = analysisData.choices?.[0]?.message?.content || "{}";
-    let analysisJson: any;
+    let analysisJson: any = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Deterministic fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything", segment: "other", experience_level: "unknown", sales_status: "unknown", mentor_status: "unknown", current_strategy: "unknown", interests: [], desires: [], pain_points: [], objections: [], motivation: "unknown", intent: "unknown", tangible_goal: "unknown", problem_gap: "unknown", doubt_cause: "unknown", certainty_gap: "unknown", reply_act: "respond naturally", question_needed: false, knowledge_need: "none", readiness: "not_ready", contact_status: "active", next_best_action: "continue discovery", learning_confidence: 0, evidence: [] };
     try {
+      const analysisResponse = await userChat(chat, {
+        model: screenshotSignedUrl && !chat.isAnthropic ? chat.models.vision : chat.models.fast,
+        messages: [
+          { role: "system", content: analysisPrompt },
+          { role: "user", content: analysisUserContent },
+        ],
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        timeout_ms: 15000,
+      });
+      if (!analysisResponse.ok) throw new Error(`Analysis AI error: ${analysisResponse.status}`);
+      const analysisData = await analysisResponse.json();
+      const analysisRaw = analysisData.choices?.[0]?.message?.content || "";
+      if (!analysisRaw.trim()) throw new Error("Analysis AI returned no usable content");
       const match = analysisRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
       analysisJson = JSON.parse((match ? match[1] : analysisRaw).trim());
-    } catch {
-      analysisJson = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything", segment: "other", experience_level: "unknown", sales_status: "unknown", mentor_status: "unknown", current_strategy: "unknown", interests: [], desires: [], pain_points: [], objections: [], motivation: "unknown", intent: "unknown", tangible_goal: "unknown", problem_gap: "unknown", doubt_cause: "unknown", certainty_gap: "unknown", reply_act: "respond naturally", question_needed: false, knowledge_need: "none", readiness: "not_ready", contact_status: "active", next_best_action: "continue discovery", learning_confidence: 0, evidence: [] };
+    } catch (analysisError) {
+      if (activeThreadType !== "friend") throw analysisError;
+      console.warn("[generate-reply] Friend analysis used deterministic fallback", analysisError);
     }
 
     if (activeThreadType === "friend") {
@@ -917,37 +912,37 @@ ${friendLearningContext.substring(0, 5000)}
 VERIFIED_WINNING_PATTERNS:
 ${winningPatternsText.substring(0, 2000)}`;
 
-    const replyResponse = await userChat(chat, {
-      model: chat.models.reasoning,
-      messages: [
-        { role: "system", content: replySystemPrompt },
-        { role: "user", content: replyUserPrompt },
-      ],
-      temperature: 0.8,
-    });
-
-
-    if (!replyResponse.ok) {
-      const st = replyResponse.status;
-      if (st === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded" }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      if (st === 402) return new Response(JSON.stringify({ error: "Credits exhausted" }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      throw new Error(`Reply AI error: ${st}`);
-    }
-
-    const replyData = await replyResponse.json();
-    const replyRaw = replyData.choices?.[0]?.message?.content || "{}";
-    let replyJson: any;
+    let replyJson: any = { variants: [] };
+    let replyGenerationFailure = "";
     try {
+      const replyResponse = await userChat(chat, {
+        model: chat.models.balanced,
+        messages: [
+          { role: "system", content: replySystemPrompt },
+          { role: "user", content: replyUserPrompt },
+        ],
+        temperature: 0.7,
+        timeout_ms: 22000,
+      });
+      if (!replyResponse.ok) throw new Error(`Reply AI error: ${replyResponse.status}`);
+      const replyData = await replyResponse.json();
+      const replyRaw = replyData.choices?.[0]?.message?.content || "";
+      if (!replyRaw.trim()) throw new Error("Reply AI returned no usable content");
       const match = replyRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
-      replyJson = JSON.parse((match ? match[1] : replyRaw).trim());
-    } catch {
-      // Fallback: try extracting JSON object
-      const objMatch = replyRaw.match(/\{[\s\S]*\}/);
+      const candidate = (match ? match[1] : replyRaw).trim();
       try {
-        replyJson = JSON.parse(objMatch ? objMatch[0] : "{}");
+        replyJson = JSON.parse(candidate);
       } catch {
-        replyJson = { variants: [{ variant: "primary", message: replyRaw, move_used: "fallback", principle_applied: "none", why_this_works: "AI response", warmth_prediction: analysisJson.warmth_score }] };
+        const objMatch = candidate.match(/\{[\s\S]*\}/);
+        replyJson = JSON.parse(objMatch ? objMatch[0] : "{}");
       }
+      if (!Array.isArray(replyJson.variants) || replyJson.variants.length === 0) {
+        throw new Error("Reply generator returned no Friend variants");
+      }
+    } catch (replyError) {
+      if (activeThreadType !== "friend") throw replyError;
+      replyGenerationFailure = replyError instanceof Error ? replyError.message : "Friend reply generation failed";
+      console.warn("[generate-reply] Friend generation will use deterministic fallback", replyGenerationFailure);
     }
 
     // Friend replies must pass a second, low-temperature conversion-quality
@@ -960,11 +955,12 @@ ${winningPatternsText.substring(0, 2000)}`;
           .map((issue) => `variant ${index + 1}: ${issue}`)
       );
       let repairedVariants: any[] = [];
-      let validationFailure = "";
+      let validationFailure = replyGenerationFailure;
       try {
+        if (validationFailure) throw new Error(validationFailure);
         if (originalVariants.length === 0) throw new Error("Reply generator returned no Friend variants");
         const qualityResponse = await userChat(chat, {
-          model: chat.models.reasoning,
+          model: chat.models.fast,
           messages: [
             { role: "system", content: buildFriendQualityValidatorPrompt("variants") },
             {
@@ -974,6 +970,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           ],
           temperature: 0.2,
           response_format: { type: "json_object" },
+          timeout_ms: 12000,
         });
         if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
         const qualityData = await qualityResponse.json();

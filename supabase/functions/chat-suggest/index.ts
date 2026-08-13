@@ -1104,36 +1104,38 @@ serve(async (req) => {
         `${m.direction === "outbound" ? "FRIEND" : m.direction === "context" ? "NOTE" : "PROSPECT"}: ${m.content}`
       ).join("\n");
       const evidenceLedger = buildProspectEvidenceLedger(history);
-      const decisionResponse = await userChat(chat, {
-        model: chat.models.balanced,
-        messages: [
-          {
-            role: "system",
-            content: `Analyze a peer-to-peer Friend conversation before Knowledge Base retrieval. Return JSON only. Do not write the reply.
+      try {
+        const decisionResponse = await userChat(chat, {
+          model: chat.models.fast,
+          messages: [
+            {
+              role: "system",
+              content: `Analyze a peer-to-peer Friend conversation before Knowledge Base retrieval. Return JSON only. Do not write the reply.
 
 Return: {"intent":"what they are trying to protect, prove, avoid or achieve","tangible_goal":"concrete desired result or unknown","why_goal_matters":"why it matters","past_experiences":[],"experience_level":"evidence-based level","sales_status":"explicit result status or unknown","mentor_status":"explicit support status or unknown","current_strategy":"explicit approach or unknown","problem_gap":"distance between current and desired state","problem_status":"active|past_resolved|unclear|none","root_cause":"their explanation and likely root cause","consequences":"what leaving it unresolved costs","need_for_change_reason":"their own recognition that change is needed","inaction_pattern":"why they have not solved it","detailed_future_outcome":"specific lived outcome if solved","pain_points":[],"objections":[],"doubt_cause":"why they hesitate","certainty_gap":"what must become logically clear","motivation":"why it matters","readiness":"not_ready|exploring|problem_aware|wants_help|accepted_referral","stage":"intent|logical_certainty|emotional_certainty|pitch|handoff","reply_act":"relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop","question_needed":false,"knowledge_need":"the exact principle/evidence needed, or none","contact_status":"active|not_now|do_not_contact|not_a_fit","next_best_action":"one natural peer action","learning_confidence":0,"evidence":[]}
 
 Choose a question only when one missing answer is genuinely necessary. Follow Intent -> Logical Certainty -> Emotional Certainty -> Pitch -> Handoff and preserve prior answers. Do not pitch from a surface goal. A real friend often relates, shares, answers, validates or observes without asking anything. The problem must belong to this prospect, not merely their audience. An explicit first-person lack of sales, inconsistent sales, or desire for more sales is an active sales gap: identify traffic, offer, messaging, conversion, follow-up, or consistency, then retrieve accordingly. At pitch, recap the prospect's complete context and ask permission. At handoff, give the approved destination only after acceptance. A clear stop means reply_act=stop and contact_status=do_not_contact. Never treat a boundary as an objection.`
-          },
-          {
-            role: "user",
-            content: `CURRENT PROSPECT MEMORY:\n${friendLearningContext.substring(0, 4000)}\n\nPROSPECT EVIDENCE LEDGER (every unique inbound turn):\n${evidenceLedger}\n\nCONVERSATION HEAD + LATEST:\n${keepHeadAndLatest(decisionHistory, 7000, 1200)}\n\nLATEST INPUT:\n${message}\n\nSCREENSHOT CONTEXT:\n${screenshotContext || "none"}`,
-          },
-        ],
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-      });
-      if (decisionResponse.ok) {
-        try {
+            },
+            {
+              role: "user",
+              content: `CURRENT PROSPECT MEMORY:\n${friendLearningContext.substring(0, 4000)}\n\nPROSPECT EVIDENCE LEDGER (every unique inbound turn):\n${evidenceLedger}\n\nCONVERSATION HEAD + LATEST:\n${keepHeadAndLatest(decisionHistory, 7000, 1200)}\n\nLATEST INPUT:\n${message}\n\nSCREENSHOT CONTEXT:\n${screenshotContext || "none"}`,
+            },
+          ],
+          temperature: 0.2,
+          response_format: { type: "json_object" },
+          timeout_ms: 15000,
+        });
+        if (decisionResponse.ok) {
           const decisionData = await decisionResponse.json();
-          const rawDecision = decisionData.choices?.[0]?.message?.content || "{}";
+          const rawDecision = decisionData.choices?.[0]?.message?.content || "";
+          if (!rawDecision.trim()) throw new Error("Friend decision analyzer returned no usable content");
           const match = rawDecision.match(/```(?:json)?\s*([\s\S]*?)```/);
           friendDecisionAnalysis = JSON.parse((match ? match[1] : rawDecision).trim());
-        } catch (error) {
-          console.warn("[chat-suggest] could not parse Friend decision analysis", error);
+        } else {
+          console.warn("[chat-suggest] Friend decision analysis failed", decisionResponse.status);
         }
-      } else {
-        console.warn("[chat-suggest] Friend decision analysis failed", decisionResponse.status);
+      } catch (error) {
+        console.warn("[chat-suggest] Friend decision analysis used deterministic memory", error);
       }
     }
 
@@ -1689,49 +1691,37 @@ ${jsonFormat}
 
 === END INSTRUCTION BOUNDARY ===`;
 
-    const response = await userChat(chat, {
-      model: chat.models.reasoning,
-      messages: [
-        { role: "system", content: fullSystemPrompt },
-        { role: "user", content: message }
-      ],
-      temperature: 0.8,
-      response_format: { type: "json_object" },
-    });
-
-
-    if (!response.ok) {
-      const status = response.status;
-      if (status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again shortly." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (status === 402) {
-        return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      throw new Error(`AI gateway error: ${status}`);
-    }
-
-    const aiResponse = await response.json();
-    const content = aiResponse.choices?.[0]?.message?.content || "";
-
-    // Parse JSON from response
-    let parsed;
+    let parsed: any = {
+      suggestions: [],
+      pushyWarning: null,
+      detectedTone: "neutral",
+      questioningPattern: "general",
+    };
+    let replyGenerationFailure = "";
     try {
+      const response = await userChat(chat, {
+        model: chat.models.balanced,
+        messages: [
+          { role: "system", content: fullSystemPrompt },
+          { role: "user", content: message }
+        ],
+        temperature: 0.7,
+        response_format: { type: "json_object" },
+        timeout_ms: 22000,
+      });
+      if (!response.ok) throw new Error(`AI gateway error: ${response.status}`);
+      const aiResponse = await response.json();
+      const content = aiResponse.choices?.[0]?.message?.content || "";
+      if (!content.trim()) throw new Error("Reply AI returned no usable content");
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
-    } catch {
-      parsed = {
-        suggestions: [
-          { id: 1, type: "primary", text: content, whyThisWorks: "AI-generated response" }
-        ],
-        pushyWarning: null,
-        detectedTone: "neutral",
-        questioningPattern: "general",
-      };
+      if (!Array.isArray(parsed.suggestions) || parsed.suggestions.length === 0) {
+        throw new Error("Reply generator returned no Friend suggestions");
+      }
+    } catch (replyError) {
+      if (activeThreadType !== "friend") throw replyError;
+      replyGenerationFailure = replyError instanceof Error ? replyError.message : "Friend reply generation failed";
+      console.warn("[chat-suggest] Friend generation will use deterministic fallback", replyGenerationFailure);
     }
 
     const combinedFriendLearning = activeThreadType === "friend"
@@ -1767,11 +1757,12 @@ ${jsonFormat}
           .map((issue) => `suggestion ${index + 1}: ${issue}`)
       );
       let repairedSuggestions: any[] = [];
-      let validationFailure = "";
+      let validationFailure = replyGenerationFailure;
       try {
+        if (validationFailure) throw new Error(validationFailure);
         if (originalSuggestions.length === 0) throw new Error("Reply generator returned no Friend suggestions");
         const qualityResponse = await userChat(chat, {
-          model: chat.models.reasoning,
+          model: chat.models.fast,
           messages: [
             { role: "system", content: buildFriendQualityValidatorPrompt("suggestions") },
             {
@@ -1781,6 +1772,7 @@ ${jsonFormat}
           ],
           temperature: 0.2,
           response_format: { type: "json_object" },
+          timeout_ms: 12000,
         });
         if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
         const qualityData = await qualityResponse.json();

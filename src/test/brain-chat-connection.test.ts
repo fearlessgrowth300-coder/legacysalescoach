@@ -64,7 +64,7 @@ describe("AI Chat connection helpers", () => {
   });
 
   it("shows the same generation models used by the backend", () => {
-    expect(PROVIDER_MODEL.lovable.model).toBe("google/gemini-3.5-flash");
+    expect(PROVIDER_MODEL.lovable.model).toBe("google/gemini-3.1-flash-lite");
     expect(PROVIDER_MODEL.openai.model).toBe("gpt-4o");
     expect(PROVIDER_MODEL.gemini.model).toBe(GEMINI_CHAT_MODELS.balanced);
     expect(PROVIDER_MODEL.anthropic.model).toBe("claude-opus-4-8");
@@ -73,13 +73,13 @@ describe("AI Chat connection helpers", () => {
   it("routes direct Gemini calls through current chat and embedding models", () => {
     expect(GEMINI_CHAT_MODELS).toEqual({
       fast: "gemini-3.1-flash-lite",
-      balanced: "gemini-3.5-flash",
-      reasoning: "gemini-3.5-flash",
-      vision: "gemini-3.5-flash",
+      balanced: "gemini-3-flash-preview",
+      reasoning: "gemini-3-flash-preview",
+      vision: "gemini-3-flash-preview",
     });
     expect(GEMINI_EMBEDDING_MODEL).toBe("gemini-embedding-2");
     expect(shouldOmitGeminiSamplingParameters("gemini", GEMINI_CHAT_MODELS.fast)).toBe(false);
-    expect(shouldOmitGeminiSamplingParameters("gemini", GEMINI_CHAT_MODELS.balanced)).toBe(true);
+    expect(shouldOmitGeminiSamplingParameters("gemini", GEMINI_CHAT_MODELS.balanced)).toBe(false);
     expect(shouldOmitGeminiSamplingParameters("gemini", "gemini-2.5-flash")).toBe(false);
     expect(shouldOmitGeminiSamplingParameters("lovable", "google/gemini-3.5-flash")).toBe(true);
     expect(shouldOmitGeminiSamplingParameters("lovable", "google/gemini-3.1-flash-lite")).toBe(false);

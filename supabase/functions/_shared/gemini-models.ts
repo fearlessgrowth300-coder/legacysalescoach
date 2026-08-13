@@ -2,12 +2,13 @@
 // Keep these separate from Lovable Gateway model IDs: the gateway has its own
 // model catalogue and uses provider-prefixed names.
 export const GEMINI_CHAT_MODELS = {
-  // These models are available to AI Studio free-tier projects. Gemini 3.6
-  // Flash is GA but returns 404 for projects without access to that paid model.
+  // Keep classification cheap, but use the preview model for generation. The
+  // 3.5 model can consume a small completion budget on internal reasoning and
+  // return an empty content field even though the HTTP request succeeded.
   fast: "gemini-3.1-flash-lite",
-  balanced: "gemini-3.5-flash",
-  reasoning: "gemini-3.5-flash",
-  vision: "gemini-3.5-flash",
+  balanced: "gemini-3-flash-preview",
+  reasoning: "gemini-3-flash-preview",
+  vision: "gemini-3-flash-preview",
 } as const;
 
 export const GEMINI_EMBEDDING_MODEL = "gemini-embedding-2";

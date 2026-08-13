@@ -60,14 +60,14 @@ function lovableChatTarget(): UserChatTarget | null {
       "Content-Type": "application/json",
     },
     models: {
-      // Lovable Gateway model IDs are provider-prefixed. Sampling controls are
-      // omitted for Gemini 3.5+ by shouldOmitGeminiSamplingParameters.
+      // The built-in gateway uses the lightweight model for predictable
+      // latency. Direct Gemini keys use the richer preview model below.
       fast: "google/gemini-3.1-flash-lite",
-      balanced: "google/gemini-3.5-flash",
-      reasoning: "google/gemini-3.5-flash",
-      vision: "google/gemini-3.5-flash",
+      balanced: "google/gemini-3.1-flash-lite",
+      reasoning: "google/gemini-3.1-flash-lite",
+      vision: "google/gemini-3.1-flash-lite",
     },
-    visionFallbackModels: ["google/gemini-3.5-flash"],
+    visionFallbackModels: ["google/gemini-3.1-flash-lite"],
     isAnthropic: false,
   };
 }

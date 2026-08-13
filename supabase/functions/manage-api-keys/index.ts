@@ -70,6 +70,7 @@ async function readProviderError(response: Response): Promise<string> {
 
 async function validateAiProviderKey(service: string, key: string): Promise<void> {
   let response: Response;
+  let requireCompletionContent = false;
   if (service === "gemini") {
     // Exercise the same OpenAI-compatible endpoint and model used by the app.
     // A models-list request can succeed even when the selected model cannot.
@@ -82,10 +83,11 @@ async function validateAiProviderKey(service: string, key: string): Promise<void
       body: JSON.stringify({
         model: GEMINI_CHAT_MODELS.balanced,
         messages: [{ role: "user", content: "Reply OK" }],
-        max_tokens: 2,
+        max_tokens: 16,
       }),
       signal: AbortSignal.timeout(20000),
     });
+    requireCompletionContent = true;
   } else if (service === "openai") {
     response = await fetch("https://api.openai.com/v1/models/gpt-4o-mini", {
       headers: { Authorization: `Bearer ${key}` },
@@ -106,6 +108,13 @@ async function validateAiProviderKey(service: string, key: string): Promise<void
   if (!response.ok) {
     const detail = await readProviderError(response);
     throw new Error(`${service === "gemini" ? "Gemini" : service} key validation failed (${response.status}): ${detail}`);
+  }
+  if (requireCompletionContent) {
+    const payload = await response.json().catch(() => null);
+    const content = payload?.choices?.[0]?.message?.content;
+    if (typeof content !== "string" || !content.trim()) {
+      throw new Error("Gemini key validation failed: the selected model returned no usable text");
+    }
   }
 }
 
