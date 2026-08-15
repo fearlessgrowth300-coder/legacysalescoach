@@ -13,11 +13,13 @@ import {
   applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
   applyEarliestMissingFriendCheckpoint,
+  buildFriendKnowledgeApplicationContract,
   buildDeterministicFriendFallbackMessages,
   buildFriendQualityValidatorPrompt,
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
   deterministicFriendQualityIssues,
+  formatFriendKnowledgeApplicationContract,
   friendStageToDatabase,
   selectRelevantConversationPassages,
 } from "../_shared/friend-conversation-engine.ts";
@@ -531,7 +533,7 @@ serve(async (req) => {
 
     const analysisPrompt = `You are a sales conversation intelligence engine with an OBJECTION RADAR and multi-framework analyzer. Analyze and return JSON ONLY.
 
-Return the existing sales fields plus these REQUIRED structured learning fields: "segment" (beginner|first_sale_stuck|mentor_no_results|independent|tried_before|already_successful|not_ready|other), "experience_level", "sales_status", "mentor_status", "current_strategy", "interests" (array), "desires" (array), "pain_points" (array), "objections" (array), "motivation", "intent" (what they are trying to protect, prove, avoid or achieve), "tangible_goal" (the concrete result they want), "problem_gap" (distance between current and desired state), "problem_status" (active|past_resolved|unclear|none), "doubt_cause" (why they hesitate), "certainty_gap" (what must become logically clear), "reply_act" (relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop), "question_needed" (boolean), "knowledge_need" (the exact principle or evidence needed, or "none"), "readiness" (not_ready|exploring|problem_aware|wants_help|accepted_referral), "contact_status" (active|not_now|do_not_contact|not_a_fit), "next_best_action", "learning_confidence" (0-100), and "evidence" (short array of conversation facts supporting the profile).
+Return the existing sales fields plus these REQUIRED structured learning fields: "segment" (beginner|first_sale_stuck|inconsistent_sales|mentor_no_results|independent|tried_before|already_successful|not_ready|other), "experience_level", "sales_status", "mentor_status", "current_strategy", "interests" (array), "desires" (array), "pain_points" (array), "objections" (array), "motivation", "intent" (what they are trying to protect, prove, avoid or achieve), "tangible_goal" (the concrete result they want), "problem_gap" (distance between current and desired state), "problem_status" (active|past_resolved|unclear|none), "doubt_cause" (why they hesitate), "certainty_gap" (what must become logically clear), "reply_act" (relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop), "question_needed" (boolean), "knowledge_need" (the exact principle or evidence needed, or "none"), "readiness" (not_ready|exploring|problem_aware|wants_help|accepted_referral), "contact_status" (active|not_now|do_not_contact|not_a_fit), "next_best_action", "learning_confidence" (0-100), and "evidence" (short array of conversation facts supporting the profile). New explicit facts always correct stale memory: a prospect saying sales are not consistent yet is inconsistent_sales, not already_successful or unknown; preserve any current Bootcamp, mentor, course, program, or team support they mention.
 Also REQUIRED for the certainty funnel: "why_goal_matters", "past_experiences" (array), "root_cause", "consequences", "need_for_change_reason", "inaction_pattern", and "detailed_future_outcome".
 
 Existing sales fields: { "warmth_score": <0-100>, "stage": <"intent"|"logical_certainty"|"emotional_certainty"|"pitch"|"handoff">, "prospect_psychology": <string>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <string>, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <string|null>, "objection_response_type": <string|null>, "spin_stage": <string>, "offer_fit": <string>, "referral_readiness": <string>, "next_objective": <string>, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
@@ -702,14 +704,14 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
         replyPrinciplesText = replyTopPrinciples.length
           ? replyTopPrinciples.map((p: any) => {
               const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : p.source_name;
-              return `â€¢ [${p.principle_name}] (Source: ${src}): ${p.what_i_learned}\n  Apply: ${p.how_to_apply}`;
+              return `• [${p.principle_name}] (Source: ${src}): ${p.what_i_learned}\n  Apply: ${p.how_to_apply}`;
             }).join("\n")
           : "No principle is required. Respond naturally from the current conversation and approved Friend identity.";
         replyChunksText = replyTopChunks.length
           ? replyTopChunks.map((c: any) => {
               const sourceTitle = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : c.source_type;
               const src = `${sourceTitle}${c.locator ? `, ${c.locator}` : ""}${c.chunk_kind === "source_passage" ? ", original source passage" : ""}`;
-              return `â€¢ (Source: ${src}) [${c.category || "general"}]: ${(c.content || "").substring(0, 700)}`;
+              return `• (Source: ${src}) [${c.category || "general"}]: ${(c.content || "").substring(0, 700)}`;
             }).join("\n")
           : "No knowledge passage is necessary for this reply.";
       }
@@ -718,6 +720,32 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
     const friendStageDirective = activeThreadType === "friend"
       ? buildFriendStageDirective(friendStageResult)
       : "Expert mode does not use the Friend journey.";
+    const lockedReplyPrinciple = activeThreadType === "friend" ? replyTopPrinciples[0] || null : null;
+    const lockedReplySource = lockedReplyPrinciple
+      ? (lockedReplyPrinciple.source_id && kbMap[lockedReplyPrinciple.source_id]
+        ? kbMap[lockedReplyPrinciple.source_id]
+        : lockedReplyPrinciple.source_name || lockedReplyPrinciple.source_type || "unknown")
+      : "";
+    const lockedReplyPassage = activeThreadType === "friend"
+      ? replyTopChunks.find((chunk: any) =>
+          chunk.chunk_kind === "source_passage"
+          && (!lockedReplyPrinciple?.source_id || chunk.source_id === lockedReplyPrinciple.source_id)
+        ) || replyTopChunks.find((chunk: any) => chunk.chunk_kind === "source_passage") || replyTopChunks[0]
+      : null;
+    const friendKnowledgeContract = activeThreadType === "friend"
+      ? buildFriendKnowledgeApplicationContract({
+          analysis: analysisJson,
+          checkpoint: friendStageResult.checkpoint,
+          stage: friendStageResult.stage,
+          latestProspectMessage: message,
+          principle: lockedReplyPrinciple,
+          sourceName: lockedReplySource,
+          supportingPassage: lockedReplyPassage?.content || "",
+        })
+      : null;
+    const friendKnowledgeContractText = friendKnowledgeContract
+      ? formatFriendKnowledgeApplicationContract(friendKnowledgeContract)
+      : "Expert mode does not use a Friend knowledge application contract.";
     const relevantReferenceMoments = activeThreadType === "friend"
       ? selectRelevantConversationPassages(
           approvedConversationExamples,
@@ -791,7 +819,8 @@ ${modeInstruction}
 Generate exactly 3 reply variants as JSON. Each must sound EXACTLY like the person in WORKSPACE_PROFILE and STYLE_FINGERPRINT. Never sound like AI.
 
 FRAMEWORK SELECTION:
-- Use one primary framework only when it helps the chosen reply_act.
+- When the locked knowledge contract says Required=true, its principle is the one primary framework and MUST materially shape every variant.
+- When the contract says Required=false, use one primary framework only when it helps the chosen reply_act.
 - Add a second technique only when it materially improves the reply.
 - Never stack frameworks merely to sound sophisticated.
 - A natural peer response may use no formal framework. One message has one objective and at most one optional question.
@@ -853,11 +882,12 @@ If a draft sounds like ChatGPT wrote it, rewrite it before returning.
 
 VARIANT RULES:
 - All variants perform the SAME reply_act and next objective selected by the analysis.
-- Variant 1 (primary): Best natural peer wording, using one retrieved principle only if useful.
+- Variant 1 (primary): Best natural peer wording, applying the locked principle whenever Required=true.
 - Variant 2 (alternative): Different human wording or relatable angle, not a forced discovery question.
-- Variant 3 (casual): Shortest natural version. It may contain no question and no framework.
+- Variant 3 (casual): Shortest natural version. It may omit a framework only when Required=false.
 
 KNOWLEDGE GROUNDING: When a variant uses a retrieved principle, cite its exact principle and source in metadata. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES; never invent.
+- When Required=true, every variant must include knowledge_application with the locked principle/source, the actual lesson applied, the strategic move, and message_evidence copied exactly from its own visible message. A label or citation without real application fails validation.
 - At logical_certainty, emotional_certainty, or pitch with an active sales gap, the primary variant MUST apply the single strongest retrieved sales principle internally and cite it in metadata. The visible message must still sound like a friend, never a lesson or framework recital.
 - When knowledge_need="none" or a simple human response is best, set cited_principle_name and cited_source_name to null. Do not force a framework into the visible message.
 - Prefer the most relevant source for each variant. Diversity is secondary to relevance and truth.
@@ -866,7 +896,7 @@ KNOWLEDGE GROUNDING: When a variant uses a retrieved principle, cite its exact p
 - Final check before returning JSON: every cited source must genuinely support the message and every personal or offer claim must exist in WORKSPACE_PROFILE.
 
 Return JSON only:
-{ "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "<reply_act>", "principle_applied": "<principle or natural peer response>", "cited_principle_name": "<exact retrieved principle or null>", "cited_source_name": "<exact retrieved source or null>", "why_this_works": "Why this peer act fits the exact message; mention the retrieved principle only if one was used", "warmth_prediction": <number>, "frameworks_used": [] }] }${styleModifierInstruction}`;
+{ "variants": [{ "variant": "primary"|"alternative"|"casual", "message": "...", "move_used": "<reply_act>", "principle_applied": "<principle or natural peer response>", "cited_principle_name": "<exact retrieved principle or null>", "cited_source_name": "<exact retrieved source or null>", "knowledge_application": { "principle_name": "<locked principle or null>", "source_name": "<locked source or null>", "lesson_applied": "actual retrieved lesson used", "strategic_move": "how the lesson changes this exact reply", "message_evidence": "exact phrase copied from message" }, "why_this_works": "Why this peer act fits the exact message; mention the retrieved principle only if one was used", "warmth_prediction": <number>, "frameworks_used": [] }] }${styleModifierInstruction}`;
 
     const replyUserPrompt = `WORKSPACE_PROFILE:
 ${workspaceProfile}
@@ -884,6 +914,8 @@ ANALYSIS:
 ${JSON.stringify(analysisJson)}
 
 ${friendStageDirective}
+
+${friendKnowledgeContractText}
 
 CONVERSATION_HISTORY:
 ${conversationHistory}
@@ -951,7 +983,7 @@ ${winningPatternsText.substring(0, 2000)}`;
     if (activeThreadType === "friend") {
       const originalVariants = Array.isArray(replyJson.variants) ? replyJson.variants : [];
       const deterministicIssues = originalVariants.flatMap((variant: any, index: number) =>
-        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson)
+        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
           .map((issue) => `variant ${index + 1}: ${issue}`)
       );
       let repairedVariants: any[] = [];
@@ -965,7 +997,7 @@ ${winningPatternsText.substring(0, 2000)}`;
             { role: "system", content: buildFriendQualityValidatorPrompt("variants") },
             {
               role: "user",
-              content: `${friendStageDirective}\n\nLOCKED ANALYSIS:\n${JSON.stringify(analysisJson)}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nRETRIEVED KNOWLEDGE:\n${replyPrinciplesText.substring(0, 4500)}\n${replyChunksText.substring(0, 4500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT VARIANTS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalVariants)}`,
+              content: `${friendStageDirective}\n\n${friendKnowledgeContractText}\n\nLOCKED ANALYSIS:\n${JSON.stringify(analysisJson)}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nRETRIEVED KNOWLEDGE:\n${replyPrinciplesText.substring(0, 4500)}\n${replyChunksText.substring(0, 4500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT VARIANTS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalVariants)}`,
             },
           ],
           temperature: 0.2,
@@ -980,7 +1012,7 @@ ${winningPatternsText.substring(0, 2000)}`;
         repairedVariants = Array.isArray(qualityJson.variants) ? qualityJson.variants : [];
         if (repairedVariants.length !== originalVariants.length) throw new Error("Friend quality validator returned an incomplete variant set");
         const remainingIssues = repairedVariants.flatMap((variant: any, index: number) =>
-          deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson)
+          deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
             .map((issue) => `variant ${index + 1}: ${issue}`)
         );
         if (remainingIssues.length > 0) validationFailure = `Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`;
@@ -996,6 +1028,8 @@ ${winningPatternsText.substring(0, 2000)}`;
           friendStageResult.checkpoint,
           analysisJson,
           message,
+          history,
+          friendKnowledgeContract,
         );
         repairedVariants = fallbackMessages.map((fallbackMessage, index) => ({
           ...(originalVariants[index] || {
@@ -1006,6 +1040,11 @@ ${winningPatternsText.substring(0, 2000)}`;
             warmth_prediction: analysisJson.warmth_score,
           }),
           message: fallbackMessage,
+          cited_principle_name: null,
+          cited_source_name: null,
+          knowledge_application: null,
+          principle_applied: "knowledge-aware deterministic fallback",
+          why_this_works: "Uses the verified prospect facts and earliest missing checkpoint without falsely claiming that an AI-selected source lesson was applied.",
         }));
         console.warn("generate-reply used deterministic Friend fallback:", validationFailure);
       }
@@ -1025,6 +1064,7 @@ ${winningPatternsText.substring(0, 2000)}`;
     const structuredFriendProfile = activeThreadType === "friend"
       ? buildFriendProspectProfile(analysisJson, existingFriendProfile)
       : null;
+    if (structuredFriendProfile) analysisJson.prospectType = structuredFriendProfile.segment;
     if (structuredFriendProfile?.contact_status === "do_not_contact") {
       replyJson.variants = [
         { variant: "primary", message: "I understand. I won't message you again.", move_used: "respect_boundary", principle_applied: "consent", why_this_works: "Respects the prospect's explicit boundary.", warmth_prediction: 0 },
@@ -1152,6 +1192,7 @@ ${winningPatternsText.substring(0, 2000)}`;
       warmthPrediction: v.warmth_prediction,
       citedPrincipleName: v.cited_principle_name || null,
       citedSourceName: v.cited_source_name || null,
+      knowledgeApplication: v.knowledge_application || v.knowledgeApplication || null,
     }));
 
     const sourceTypes = new Set<string>();
@@ -1166,6 +1207,14 @@ ${winningPatternsText.substring(0, 2000)}`;
       prospectLearning: structuredFriendProfile,
       friendJourney: activeThreadType === "friend" ? friendStageResult : null,
       qualityValidation: replyJson.qualityValidation || null,
+      knowledgeApplicationContract: friendKnowledgeContract ? {
+        requested: friendKnowledgeContract.requested,
+        required: friendKnowledgeContract.required,
+        available: friendKnowledgeContract.available,
+        checkpoint: friendKnowledgeContract.checkpoint,
+        principleName: friendKnowledgeContract.principleName || null,
+        sourceName: friendKnowledgeContract.sourceName || null,
+      } : null,
       learningResult,
       brainRetrieval: {
         chunksRetrieved: replyTopChunks.length,
