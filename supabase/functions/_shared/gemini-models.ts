@@ -11,6 +11,23 @@ export const GEMINI_CHAT_MODELS = {
   vision: "gemini-3-flash-preview",
 } as const;
 
+// Vision must not depend on a single preview model. Gemini 3 Flash can return
+// an empty content field after using a small completion budget for thinking,
+// and preview/free-tier availability can change independently of stable models.
+export const GEMINI_VISION_FALLBACK_MODELS = [
+  "gemini-3.1-flash-lite",
+  "gemini-2.5-flash",
+] as const;
+
+export function buildVisionModelChain(
+  primary: string,
+  fallbacks: readonly string[] = [],
+): string[] {
+  return [primary, ...fallbacks]
+    .map((model) => String(model || "").trim())
+    .filter((model, index, models) => Boolean(model) && models.indexOf(model) === index);
+}
+
 export const GEMINI_EMBEDDING_MODEL = "gemini-embedding-2";
 
 // Google deprecates temperature/top-p/top-k controls on Gemini 3.5+ models.

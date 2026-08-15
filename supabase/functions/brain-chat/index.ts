@@ -4,6 +4,7 @@ import {
   runPipelineFast, buildSessionContext, buildPrinciplesBlock, buildChunksBlock, buildEvidenceBlock,
 } from "../_shared/brain-pipeline.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { buildVisionModelChain } from "../_shared/gemini-models.ts";
 import { BRAIN_PERSONA } from "../_shared/persona.ts";
 import {
   buildBrainRetrievalMeta,
@@ -719,12 +720,12 @@ serve(async (req) => {
       // photo, IG/TikTok profile, chart, meme — not just text. The provider's
       // vision model both transcribes any text AND describes what's shown. ──
       let analysis = "";
+      const visionFailures: string[] = [];
       {
         try {
           const imageParts = lastUserImages.slice(0, 8).map((url) => ({ type: "image_url", image_url: { url } }));
           const visionPrompt = `You are a sales coach's eyes. Read the image(s) COMPLETELY and carefully — top to bottom, every message.${lastUserText ? ` The user also wrote: "${lastUserText}"` : ""}\n\nReturn plain text with these labeled sections:\nTRANSCRIPT: If it shows a conversation/DM/chat, transcribe the ENTIRE thread VERBATIM from the very FIRST message to the last — every line, in order, labeling who said what (Prospect vs You). Do NOT summarize or skip the earlier messages. Otherwise write "none".\nWHAT I SEE: Describe exactly what is in the image(s) — people, product, screen, profile/bio, captions, numbers, charts, context. Be concrete.\nSITUATION: 2-3 sentences on the full arc of the conversation (how it started, where it is now) and what the user needs help with right now.`;
-          const visionModels = [chat.models.vision, ...(chat.visionFallbackModels || [])]
-            .filter((model, index, list) => model && list.indexOf(model) === index);
+          const visionModels = buildVisionModelChain(chat.models.vision, chat.visionFallbackModels);
           for (const model of visionModels) {
             const vResp = await userChat(chat, {
               model,
@@ -740,12 +741,17 @@ serve(async (req) => {
               analysis = (vd.choices?.[0]?.message?.content || "").trim();
               console.log("[brain-chat] vision model success:", model, "chars:", analysis.length);
               if (analysis.length >= 5) break;
-              console.warn("[brain-chat] vision model empty:", model, vd.choices?.[0]?.finish_reason || "unknown_finish_reason");
+              const reason = `empty response (${vd.choices?.[0]?.finish_reason || "unknown finish reason"})`;
+              visionFailures.push(`${model}: ${reason}`);
+              console.warn("[brain-chat] vision model empty:", model, reason);
             } else {
-              console.warn("[brain-chat] vision call non-2xx:", model, vResp.status, await vResp.text().catch(() => ""));
+              const providerError = (await vResp.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
+              visionFailures.push(`${model}: HTTP ${vResp.status}${providerError ? ` ${providerError}` : ""}`);
+              console.warn("[brain-chat] vision call non-2xx:", model, vResp.status, providerError);
             }
           }
         } catch (e) {
+          visionFailures.push(`vision request: ${e instanceof Error ? e.message : String(e)}`.slice(0, 350));
           console.warn("[brain-chat] vision analysis failed:", e);
         }
       }
@@ -773,7 +779,11 @@ serve(async (req) => {
               headers: { Authorization: authHeader },
             });
             if (!error && data?.text) ocrTexts.push(String(data.text));
+            else if (error || data?.error) {
+              visionFailures.push(`OCR: ${String(error?.message || data?.error || "no text returned")}`.slice(0, 350));
+            }
           } catch (e) {
+            visionFailures.push(`OCR request: ${e instanceof Error ? e.message : String(e)}`.slice(0, 350));
             console.warn("[brain-chat] OCR failed for an image:", e);
           }
         }
@@ -808,10 +818,11 @@ serve(async (req) => {
 
       // Only bail when BOTH vision and OCR gave us nothing usable.
       if (conversationText.length < 5) {
-        const fixed = "I couldn't make out that image. Try a clearer photo, or just tell me in words what's going on and I'll pull the right plays from your brain.";
+        console.error("[brain-chat] all vision paths failed", visionFailures);
+        const fixed = "The image uploaded, but the vision models couldn't process it right now. Please retry once. If it still fails, check the AI provider in Settings.";
         const stream = new ReadableStream({
           start(controller) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: { selected_principles: [], framework_name: "", contradictions: [], empty_vault: false, debug: { image_failed: true } } })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: { selected_principles: [], framework_name: "", contradictions: [], empty_vault: false, debug: { image_failed: true, vision_models_tried: buildVisionModelChain(chat.models.vision, chat.visionFallbackModels), vision_failures: visionFailures } } })}\n\n`));
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: fixed } }] })}\n\n`));
             controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
             controller.close();

@@ -10,8 +10,10 @@ import {
 } from "../../supabase/functions/brain-chat/lib";
 import { PROVIDER_MODEL } from "@/hooks/useActiveAiModel";
 import {
+  buildVisionModelChain,
   GEMINI_CHAT_MODELS,
   GEMINI_EMBEDDING_MODEL,
+  GEMINI_VISION_FALLBACK_MODELS,
   shouldOmitGeminiSamplingParameters,
 } from "../../supabase/functions/_shared/gemini-models";
 import {
@@ -78,6 +80,18 @@ describe("AI Chat connection helpers", () => {
       vision: "gemini-3-flash-preview",
     });
     expect(GEMINI_EMBEDDING_MODEL).toBe("gemini-embedding-2");
+    expect(GEMINI_VISION_FALLBACK_MODELS).toEqual([
+      "gemini-3.1-flash-lite",
+      "gemini-2.5-flash",
+    ]);
+    expect(buildVisionModelChain(
+      GEMINI_CHAT_MODELS.vision,
+      [GEMINI_CHAT_MODELS.vision, ...GEMINI_VISION_FALLBACK_MODELS],
+    )).toEqual([
+      "gemini-3-flash-preview",
+      "gemini-3.1-flash-lite",
+      "gemini-2.5-flash",
+    ]);
     expect(shouldOmitGeminiSamplingParameters("gemini", GEMINI_CHAT_MODELS.fast)).toBe(false);
     expect(shouldOmitGeminiSamplingParameters("gemini", GEMINI_CHAT_MODELS.balanced)).toBe(false);
     expect(shouldOmitGeminiSamplingParameters("gemini", "gemini-2.5-flash")).toBe(false);
