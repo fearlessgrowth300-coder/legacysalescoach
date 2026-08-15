@@ -42,8 +42,35 @@ export type FriendCommercialRealitySignal = {
   commercialContext: boolean;
   confidenceClaim: boolean;
   verifiedCommercialResult: boolean;
+  commercialResultEstablished: boolean;
   outcomeUnknown: boolean;
   evidence: string[];
+};
+
+export type FriendConversationMessage = {
+  direction?: string | null;
+  content?: string | null;
+};
+
+export type FriendKnowledgeApplicationContract = {
+  requested: boolean;
+  required: boolean;
+  available: boolean;
+  checkpoint: FriendFunnelCheckpoint;
+  principleName: string;
+  sourceName: string;
+  lesson: string;
+  howToApply: string;
+  supportingPassage: string;
+  prospectFact: string;
+  strategicObjective: string;
+};
+
+type FriendKnowledgePrinciple = {
+  principle_name?: unknown;
+  source_name?: unknown;
+  what_i_learned?: unknown;
+  how_to_apply?: unknown;
 };
 
 const EMPTY_VALUES = new Set([
@@ -80,6 +107,101 @@ function firstMatch(text: string, patterns: RegExp[]): string {
   return "";
 }
 
+function cleanContractText(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, maxLength) : "";
+}
+
+function knowledgeObjective(checkpoint: FriendFunnelCheckpoint): string {
+  const objectives: Record<FriendFunnelCheckpoint, string> = {
+    tangible_goal: "Clarify the concrete result the prospect wants without turning the exchange into an interrogation.",
+    why_goal_matters: "Connect the stated goal to the prospect's personal reason for wanting it.",
+    past_experience: "Understand what the prospect has already tried and what actually happened.",
+    commercial_result: "Distinguish attention or directional progress from leads, conversions, and consistent sales.",
+    active_problem: "Help the prospect name the specific bottleneck between present activity and the desired result.",
+    root_cause: "Help the prospect examine why the bottleneck has remained unresolved instead of accepting a surface explanation.",
+    consequences: "Help the prospect articulate the practical cost of leaving the gap unresolved without manufacturing fear.",
+    need_for_change: "Help the prospect state in their own words why the present approach must change.",
+    inaction_pattern: "Reflect the thought or behavior pattern that has prevented action without shaming the prospect.",
+    detailed_future_outcome: "Help the prospect describe a specific, lived future outcome rather than a vague dream.",
+    permission_for_help: "Recap the evidenced gap and desired outcome, connect them to relevant approved help, and ask permission.",
+    handoff_acceptance: "Provide the approved expert or team destination only after the prospect accepts the introduction.",
+    complete: "Respond naturally and preserve the completed handoff or respectful ending.",
+  };
+  return objectives[checkpoint];
+}
+
+/**
+ * Locks one retrieved lesson to one evidenced prospect fact and one funnel
+ * objective. The generator and validator receive the same contract, preventing
+ * a model from citing a famous source in metadata while drafting an unrelated
+ * generic message.
+ */
+export function buildFriendKnowledgeApplicationContract(input: {
+  analysis?: Record<string, unknown> | null;
+  checkpoint: FriendFunnelCheckpoint;
+  stage: FriendStage;
+  latestProspectMessage?: string;
+  principle?: FriendKnowledgePrinciple | null;
+  sourceName?: string;
+  supportingPassage?: string;
+}): FriendKnowledgeApplicationContract {
+  const analysis = input.analysis || {};
+  const contactStatus = normalized(analysis.contact_status || "active").replace(/[ -]+/g, "_");
+  const replyAct = normalized(analysis.reply_act).replace(/[ -]+/g, "_");
+  const knowledgeNeed = normalized(analysis.knowledge_need);
+  const salesSignal = analysis.sales_signal && typeof analysis.sales_signal === "object"
+    ? analysis.sales_signal as Record<string, unknown>
+    : {};
+  const strategicAct = ["probe", "reframe", "transition", "ask_permission", "refer"].includes(replyAct);
+  const activeSalesGap = salesSignal.activeSalesGap === true
+    || includesAny(analysis.sales_status, ["no_sales", "first_sale", "inconsistent_sales", "wants_more_sales"]);
+  const requested = contactStatus !== "do_not_contact"
+    && contactStatus !== "not_a_fit"
+    && input.checkpoint !== "complete"
+    && (input.stage !== "intent" || activeSalesGap || strategicAct || (known(knowledgeNeed) && knowledgeNeed !== "none"));
+
+  const principleName = cleanContractText(input.principle?.principle_name, 220);
+  const sourceName = cleanContractText(input.sourceName || input.principle?.source_name, 260);
+  const lesson = cleanContractText(input.principle?.what_i_learned, 900);
+  const howToApply = cleanContractText(input.principle?.how_to_apply, 700);
+  const available = Boolean(known(principleName) && known(sourceName) && (known(lesson) || known(howToApply)));
+  const evidence = Array.isArray(analysis.evidence)
+    ? [...analysis.evidence].reverse().find((item) => known(item))
+    : "";
+  const prospectFact = cleanContractText(evidence || input.latestProspectMessage, 420);
+
+  return {
+    requested,
+    required: requested && available,
+    available,
+    checkpoint: input.checkpoint,
+    principleName,
+    sourceName,
+    lesson,
+    howToApply,
+    supportingPassage: cleanContractText(input.supportingPassage, 900),
+    prospectFact,
+    strategicObjective: knowledgeObjective(input.checkpoint),
+  };
+}
+
+export function formatFriendKnowledgeApplicationContract(contract: FriendKnowledgeApplicationContract): string {
+  return `[LOCKED KNOWLEDGE APPLICATION CONTRACT]
+Requested: ${contract.requested}
+Required: ${contract.required}
+Available: ${contract.available}
+Checkpoint: ${contract.checkpoint}
+Prospect fact to address: ${contract.prospectFact || "none"}
+Strategic objective: ${contract.strategicObjective}
+Locked principle: ${contract.principleName || "none"}
+Locked source: ${contract.sourceName || "none"}
+Actual lesson: ${contract.lesson || "none"}
+How the source says to apply it: ${contract.howToApply || "none"}
+Supporting original passage: ${contract.supportingPassage || "none"}
+
+If Required=true, do not swap, merely name, or decorate the reply with this principle. Use its actual lesson to perform the strategic objective on the stated prospect fact. The ready-to-send text must remain a short natural peer message. In the response metadata, copy one exact phrase from the ready-to-send message as message_evidence and explain how that phrase performs the lesson. If Required=false, do not force a framework.`;
+}
+
 export function detectFriendSalesSignal(latestProspectMessage: string, prospectHistory = ""): FriendSalesSignal {
   const latest = normalized(latestProspectMessage);
   const context = normalized(`${prospectHistory} ${latestProspectMessage}`);
@@ -107,6 +229,9 @@ export function detectFriendSalesSignal(latestProspectMessage: string, prospectH
   const inconsistent = firstMatch(context, [
     /\b(?:inconsistent|unpredictable|on and off)\s+sales?\b/i,
     /\bsales?\s+(?:are|have been)\s+(?:inconsistent|unpredictable|on and off)\b/i,
+    /\b(?:wouldn['’]t|would not|can['’]t|cannot|couldn['’]t|could not|don['’]t|do not)\s+(?:call|say|describe)\s+(?:the\s+|my\s+|our\s+)?sales?\s+(?:as\s+)?consistent\b/i,
+    /\bsales?\s+(?:aren['’]t|are not|isn['’]t|is not)\s+(?:yet\s+)?consistent\b/i,
+    /\bsales?\s+(?:are|is)\s+(?:only\s+)?starting\s+to\s+happen\b/i,
   ]);
 
   const bottleneckPatterns: Array<[FriendSalesSignal["bottleneck"], RegExp]> = [
@@ -169,13 +294,21 @@ export function detectFriendCommercialReality(
       /\b(?:i|we)\s+(?:make|get|close|generate|bring in)\s+(?:[$£€]\s*)?\d[\d,.]*(?:k|m)?\s*(?:a|per|each)?\s*(?:day|week|month|year)?\b/i,
     ]),
   ].filter(Boolean);
+  const negativeResultEvidence = firstMatch(context, [
+    /\b(?:wouldn['’]t|would not|can['’]t|cannot|couldn['’]t|could not|don['’]t|do not)\s+(?:call|say|describe)\s+(?:the\s+|my\s+|our\s+)?sales?\s+(?:as\s+)?consistent\b/i,
+    /\bsales?\s+(?:aren['’]t|are not|isn['’]t|is not)\s+(?:yet\s+)?consistent\b/i,
+    /\b(?:no|zero)\s+sales?\b/i,
+    /\b(?:i|we)\s+(?:haven['’]t|have not|can['’]t|cannot)\s+(?:made|get|getting|make|close|closed)\s+(?:a\s+|any\s+)?sales?\b/i,
+  ]);
   const verifiedCommercialResult = resultEvidence.length > 0;
+  const commercialResultEstablished = verifiedCommercialResult || Boolean(negativeResultEvidence);
   return {
     commercialContext,
     confidenceClaim,
     verifiedCommercialResult,
-    outcomeUnknown: commercialContext && confidenceClaim && !verifiedCommercialResult,
-    evidence: [confidenceEvidence, ...resultEvidence].filter(Boolean),
+    commercialResultEstablished,
+    outcomeUnknown: commercialContext && confidenceClaim && !commercialResultEstablished,
+    evidence: [confidenceEvidence, negativeResultEvidence, ...resultEvidence].filter(Boolean),
   };
 }
 
@@ -189,7 +322,7 @@ export function applyDeterministicCommercialRealityCheck(
   const salesStatus = normalized(result.sales_status).replace(/[ -]+/g, "_");
   const explicitGapStatus = ["no_sales", "first_sale", "inconsistent_sales", "wants_more_sales"].includes(salesStatus);
   const inferredSuccessWithoutEvidence = signal.commercialContext
-    && !signal.verifiedCommercialResult
+    && !signal.commercialResultEstablished
     && ["already_successful", "successful", "consistent_sales", "profitable", "doing_well"].includes(salesStatus);
   if ((!signal.outcomeUnknown && !inferredSuccessWithoutEvidence) || explicitGapStatus) {
     result.commercial_reality_signal = signal;
@@ -226,7 +359,26 @@ export function applyDeterministicSalesSignals(
   const signal = detectFriendSalesSignal(latestProspectMessage, prospectHistory);
   if (!signal.explicitSalesGoal) return result;
 
-  if (signal.resultState !== "unknown" && !known(result.sales_status)) result.sales_status = signal.resultState;
+  if (signal.resultState !== "unknown") {
+    // New explicit evidence must correct stale AI memory. In particular, a
+    // prospect saying sales are not consistent yet cannot remain labelled as
+    // already successful simply because an earlier profile was optimistic.
+    result.sales_status = signal.resultState;
+    result.result_verification_status = "verified_from_prospect";
+    result.segment = signal.resultState === "no_sales"
+      ? (known(result.mentor_status) ? "mentor_no_results" : "beginner")
+      : signal.resultState === "first_sale"
+        ? "first_sale_stuck"
+        : "inconsistent_sales";
+  }
+
+  const supportEvidence = firstMatch(normalized(`${latestProspectMessage} ${prospectHistory}`), [
+    /\b(?:joined|joining|enrolled in|working with|part of)\s+(?:the\s+|a\s+|an\s+)?(?:bootcamp|mentor|coach|coaching program|program|course|team)\b/i,
+  ]);
+  if (supportEvidence) {
+    result.mentor_status = `currently receiving support (${supportEvidence})`;
+    if (signal.resultState === "no_sales") result.segment = "mentor_no_results";
+  }
   if (!known(result.tangible_goal)) result.tangible_goal = signal.resultState === "wants_more_sales" ? "make more sales" : "make consistent sales";
   if (!known(result.motivation)) result.motivation = "improve sales results";
   result.evidence = Array.from(new Set([
@@ -490,17 +642,135 @@ Every ready-to-send message must pass all checks:
 10. At pitch/handoff, it asks permission before an introduction and gives a concrete approved handoff only after acceptance.
 11. When the prospect explicitly says sales are the problem, it must acknowledge that concrete gap and either diagnose the specific sales bottleneck or, if they already asked for help, make the permission-based transition. It must not fall back to generic rapport.
 12. It follows the certainty funnel in order: Intent (goal, why, past experience) -> Logical Certainty (obstacle, root cause, consequences, need for change) -> Emotional Certainty (inaction pattern, emotional mirror, detailed future) -> Pitch (full-context recap and permission) -> Handoff. It must not repeatedly ask discovery questions or lose earlier answers.
-13. Confidence, intentionality, "I know what works," and "I'm happy with my direction" are not verified sales outcomes. When result_verification_status=unverified, affirm the confidence and ask one respectful concrete question that distinguishes content/directional progress from leads, conversions, or consistent sales. Do not close the conversation or manufacture a problem.
+13. Confidence, intentionality, "I know what works," and "I'm happy with my direction" are not verified sales outcomes. When result_verification_status=unverified, affirm the confidence and ask one respectful concrete question that distinguishes content/directional progress from leads, conversions, or consistent sales. But "sales are not consistent yet," "I wouldn't call sales consistent," and equivalent negated statements already answer that question: record inconsistent_sales and move to the next unresolved checkpoint.
 14. Use earliest_missing_checkpoint as the locked next destination on every new message. Continue from that checkpoint after answering the newest message; never rely on the previously displayed UI stage, skip required evidence, or repeat a field already answered.
 15. Every qualified active prospect should eventually receive a permission-based pitch after the certainty checkpoints are complete. Never end with generic encouragement while a material checkpoint remains unknown. Explicit do-not-contact, not-a-fit, or refusal boundaries always override progression.
+16. When a LOCKED KNOWLEDGE APPLICATION CONTRACT says Required=true, use that exact principle's actual lesson on the stated prospect fact. Do not substitute a famous framework, merely cite the source, or attach a principle label to a generic question. knowledge_application.message_evidence must be copied exactly from the ready-to-send message and must be the phrase that performs the lesson.
 
 The three items must pursue the same next objective with different natural wording. Preserve metadata fields, but correct them when the message changed.`;
+}
+
+type FriendQuestionIntent = Exclude<FriendFunnelCheckpoint, "complete"> | "other";
+
+function friendQuestionIntent(value: unknown): FriendQuestionIntent {
+  const text = normalized(value);
+  if (!text.includes("?")) return "other";
+  if (/\b(?:connect|send|share|give).*(?:expert|team|contact|link|next step)|(?:expert|team|contact|link).*(?:connect|send|share|give)\b/i.test(text)) return "handoff_acceptance";
+  if (/\b(?:open to|would it help|would it be helpful|would you like).*(?:hear|share|explain|helped|approach|support)\b/i.test(text)) return "permission_for_help";
+  if (/\b(?:day[ -]?to[ -]?day|life|future|become different|make possible|let you do).*(?:solved|reliable|consistent|result|worked)|\bif (?:that|this).*(?:solved|worked|consistent)\b/i.test(text)) return "detailed_future_outcome";
+  if (/\b(?:stopped|stopping|gets in the way|hardest to change|not solved|haven['’]t solved|inaction|taken action)\b/i.test(text)) return "inaction_pattern";
+  if (/\b(?:important now|needs? to change|different solution|same way is not enough|continuing.*not enough)\b/i.test(text)) return "need_for_change";
+  if (/\b(?:costing|cost you|delay|delaying|make harder|affect.*goal|leave.*unsolved|stays? the same)\b/i.test(text)) return "consequences";
+  if (/\b(?:really causing|causing that|underneath|root cause|why.*(?:continue|persist|unresolved)|what do you think is really)\b/i.test(text)) return "root_cause";
+  if (/\b(?:biggest|main).*(?:obstacle|problem|challenge|gap)|\b(?:least|less).*(?:reliable|predictable|repeatable)|\bwhere.*(?:stuck|breaks? down)|\bwhat part.*(?:hardest|not working|still)\b/i.test(text)) return "active_problem";
+  if (/\b(?:content|reach|engagement|leads?|buyer conversations?|sales?|commercially).*(?:working|progress|consistent|steady|producing|showing up)|\b(?:working|progress|producing).*(?:content|reach|engagement|leads?|sales?)\b/i.test(text)) return "commercial_result";
+  if (/\b(?:tried|tested|approaches|doing up to now|what have you been doing|result did it produce|how did .* turn out)\b/i.test(text)) return "past_experience";
+  if (/\b(?:why|what would).*(?:matter|change for you|personally|everyday life|make possible)\b/i.test(text)) return "why_goal_matters";
+  if (/\b(?:concrete result|main result|working toward|want this to create|want .* to produce|result are you|goal are you)\b/i.test(text)) return "tangible_goal";
+  return "other";
+}
+
+function normalizedQuestionTokens(value: unknown): string[] {
+  const stopWords = new Set(["about", "already", "been", "does", "from", "have", "mainly", "most", "much", "right", "that", "their", "there", "they", "this", "what", "when", "where", "which", "with", "would", "your"]);
+  return Array.from(new Set((normalized(value).match(/[a-z0-9]+/g) || [])
+    .map((word) => ({ steady: "consistent", regular: "consistent", predictable: "consistent", engagement: "reach", conversations: "leads" }[word] || word))
+    .filter((word) => word.length > 2 && !stopWords.has(word))));
+}
+
+function questionsAreNearDuplicates(first: unknown, second: unknown): boolean {
+  const firstIntent = friendQuestionIntent(first);
+  const secondIntent = friendQuestionIntent(second);
+  if (firstIntent !== "other" && firstIntent === secondIntent) return true;
+  const left = normalizedQuestionTokens(first);
+  const right = normalizedQuestionTokens(second);
+  if (!left.length || !right.length) return false;
+  const rightSet = new Set(right);
+  const overlap = left.filter((token) => rightSet.has(token)).length;
+  return overlap / Math.max(left.length, right.length) >= 0.68;
+}
+
+/**
+ * A question counts as answered when an earlier Friend message asked the same
+ * checkpoint (even with different wording) and a later Prospect turn replied.
+ * This is intentionally deterministic so a model cannot reopen a completed
+ * checkpoint simply because the phrasing changed.
+ */
+export function repeatsAnsweredFriendQuestion(
+  candidate: string,
+  conversation: FriendConversationMessage[] = [],
+): boolean {
+  if (!String(candidate || "").includes("?")) return false;
+  for (let index = 0; index < conversation.length; index += 1) {
+    const turn = conversation[index];
+    if (turn.direction !== "outbound" || !questionsAreNearDuplicates(candidate, turn.content)) continue;
+    const answered = conversation.slice(index + 1).some((later) =>
+      later.direction === "inbound" && Boolean(String(later.content || "").trim())
+    );
+    if (answered) return true;
+  }
+  return false;
+}
+
+function contractMetadata(candidate: Record<string, unknown>): Record<string, unknown> {
+  const raw = candidate.knowledge_application || candidate.knowledgeApplication;
+  return raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+}
+
+function contractValue(metadata: Record<string, unknown>, snake: string, camel: string): string {
+  return cleanContractText(metadata[snake] ?? metadata[camel], 1200);
+}
+
+/**
+ * Deterministic checks for the parts of knowledge application that can be
+ * proven without trusting another model: exact locked source/principle,
+ * concrete prospect anchoring, and an exact visible phrase identified as the
+ * application. Semantic quality is additionally checked by the AI validator.
+ */
+export function friendKnowledgeApplicationIssues(
+  candidate: Record<string, unknown> | null | undefined,
+  contract: FriendKnowledgeApplicationContract | null | undefined,
+): string[] {
+  if (!contract?.required) return [];
+  const item = candidate || {};
+  const message = cleanContractText(item.message ?? item.text, 4000);
+  const metadata = contractMetadata(item);
+  const principleName = contractValue(metadata, "principle_name", "principleName")
+    || cleanContractText(item.cited_principle_name ?? item.principleUsed, 220);
+  const sourceName = contractValue(metadata, "source_name", "sourceName")
+    || cleanContractText(item.cited_source_name ?? item.sourceUsed, 260);
+  const lessonApplied = contractValue(metadata, "lesson_applied", "lessonApplied");
+  const strategicMove = contractValue(metadata, "strategic_move", "strategicMove");
+  const messageEvidence = contractValue(metadata, "message_evidence", "messageEvidence");
+  const issues: string[] = [];
+
+  if (normalized(principleName) !== normalized(contract.principleName)) issues.push("does not use the locked Knowledge Base principle");
+  if (!normalized(sourceName).includes(normalized(contract.sourceName))) issues.push("does not cite the locked Knowledge Base source");
+  if (lessonApplied.length < 18) issues.push("does not explain the actual lesson applied");
+  if (strategicMove.length < 18) issues.push("does not explain the strategic application");
+  if (messageEvidence.length < 4 || !normalized(message).includes(normalized(messageEvidence))) {
+    issues.push("knowledge application evidence is not an exact visible phrase from the reply");
+  }
+
+  const factTokens = normalizedQuestionTokens(contract.prospectFact).filter((token) => token.length >= 4);
+  const messageTokens = new Set(normalizedQuestionTokens(message));
+  if (factTokens.length > 0 && !factTokens.some((token) => messageTokens.has(token))) {
+    issues.push("reply is not anchored to the locked prospect fact");
+  }
+  const lessonTokens = normalizedQuestionTokens(`${contract.lesson} ${contract.howToApply}`).filter((token) => token.length >= 4);
+  const applicationTokens = new Set(normalizedQuestionTokens(`${lessonApplied} ${strategicMove}`));
+  if (lessonTokens.length > 0 && !lessonTokens.some((token) => applicationTokens.has(token))) {
+    issues.push("application metadata does not reflect the locked lesson");
+  }
+  return issues;
 }
 
 export function deterministicFriendQualityIssues(
   text: string,
   stage: FriendStage,
   analysis: Record<string, unknown> | null | undefined = undefined,
+  conversation: FriendConversationMessage[] = [],
+  knowledgeCandidate: Record<string, unknown> | null | undefined = undefined,
+  knowledgeContract: FriendKnowledgeApplicationContract | null | undefined = undefined,
 ): string[] {
   const message = String(text || "").trim();
   const issues: string[] = [];
@@ -510,10 +780,12 @@ export function deterministicFriendQualityIssues(
   if (stage === "intent" && /expert|mentor|buy|price|link|offer/i.test(message)) issues.push("premature expert transition in intent");
   if (stage === "intent" && /\baudience\b/i.test(message) && /struggl|problem|intimidat|overwhelm/i.test(message)) issues.push("asks about the audience instead of the prospect");
   if ((stage === "logical_certainty" || stage === "emotional_certainty") && /(?:sales?|clients?|customers?)/i.test(message) && /what.*(?:journey|inspire|passionate)|how.*feel/i.test(message)) issues.push("ignores a concrete sales gap for generic rapport");
+  if (repeatsAnsweredFriendQuestion(message, conversation)) issues.push("repeats an answered question");
   if (analysis?.result_verification_status === "unverified") {
     const testsCommercialReality = /\b(?:sales?|leads?|clients?|customers?|buyers?|orders?|income|revenue|conversions?|traffic|content (?:growth|reach)|what (?:is|has been) working)\b/i.test(message) && message.includes("?");
     if (!testsCommercialReality) issues.push("closes or drifts without verifying the prospect's commercial result");
   }
+  issues.push(...friendKnowledgeApplicationIssues(knowledgeCandidate, knowledgeContract));
   return issues;
 }
 
@@ -553,10 +825,36 @@ export function buildDeterministicFriendFallbackMessages(
   checkpoint: FriendFunnelCheckpoint,
   analysis: Record<string, unknown> | null | undefined,
   latestProspectMessage = "",
+  conversation: FriendConversationMessage[] = [],
+  knowledgeContract: FriendKnowledgeApplicationContract | null | undefined = undefined,
 ): string[] {
   const thanks = /\b(?:thanks?|thank you|appreciate|wishing you)\b/i.test(latestProspectMessage);
   const confident = /\b(?:intentional|happy with|know what works|working for me|direction)\b/i.test(latestProspectMessage);
-  const defaultLeads = thanks
+  const salesStatus = normalized(analysis?.sales_status).replace(/[ -]+/g, "_");
+  const knowledgeGroundedLeads = knowledgeContract?.required
+    ? salesStatus === "inconsistent_sales"
+      ? [
+        "So sales are starting, but making that result repeatable is still the real gap.",
+        "That tells me the direction is working, but consistency has not caught up yet.",
+        "You have proof it can work. The missing piece is making sales dependable.",
+      ]
+      : salesStatus === "first_sale"
+        ? [
+          "That first sale proves someone will buy. The next gap is making it repeatable.",
+          "You have validation now. What is missing is a reliable path to the next sales.",
+          "One sale is real proof, but it has not become a consistent system yet.",
+        ]
+        : salesStatus === "no_sales"
+          ? [
+            "So the effort is there, but it has not translated into a sale yet.",
+            "That makes the gap clearer. You are doing the work without a buyer result yet.",
+            "You are not missing effort. The current process just has not produced a sale yet.",
+          ]
+          : []
+    : [];
+  const defaultLeads = knowledgeGroundedLeads.length === 3
+    ? knowledgeGroundedLeads
+    : thanks
     ? [
       "Thank you, I really appreciate that 🤍",
       "That means a lot, thank you 🤍",
@@ -662,9 +960,30 @@ export function buildDeterministicFriendFallbackMessages(
         ]
         : checkpointQuestions["commercial_result"];
 
-  const questions = analysis?.result_verification_status === "unverified"
+  const requestedQuestions = analysis?.result_verification_status === "unverified"
     ? commercialQuestions
     : checkpointQuestions[checkpoint];
+  const unansweredQuestions = requestedQuestions.filter((question) =>
+    !repeatsAnsweredFriendQuestion(question, conversation)
+  );
+  const nextCheckpoint: Record<FriendQuestionIntent, FriendFunnelCheckpoint> = {
+    tangible_goal: "why_goal_matters",
+    why_goal_matters: "past_experience",
+    past_experience: "commercial_result",
+    commercial_result: "active_problem",
+    active_problem: "root_cause",
+    root_cause: "consequences",
+    consequences: "need_for_change",
+    need_for_change: "inaction_pattern",
+    inaction_pattern: "detailed_future_outcome",
+    detailed_future_outcome: "permission_for_help",
+    permission_for_help: "handoff_acceptance",
+    handoff_acceptance: "complete",
+    other: checkpoint === "complete" ? "complete" : checkpoint,
+  };
+  const answeredIntent = friendQuestionIntent(requestedQuestions[0]);
+  const recoveryQuestions = checkpointQuestions[nextCheckpoint[answeredIntent]];
+  const questions = unansweredQuestions.length > 0 ? unansweredQuestions : recoveryQuestions;
 
   return [0, 1, 2].map((index) => {
     const draft = drafts[index] as Record<string, unknown> | string | undefined;
@@ -672,8 +991,9 @@ export function buildDeterministicFriendFallbackMessages(
       ? draft
       : String(draft?.message || draft?.text || "");
     const lead = fallbackLeadFromDraft(draftText, stage) || defaultLeads[index];
-    const candidate = `${lead} ${questions[index]}`.replace(/\s+/g, " ").trim();
-    if (deterministicFriendQualityIssues(candidate, stage, analysis).length === 0) return candidate;
-    return `${defaultLeads[index]} ${questions[index]}`.replace(/\s+/g, " ").trim();
+    const question = questions[index % questions.length];
+    const candidate = `${lead} ${question}`.replace(/\s+/g, " ").trim();
+    if (deterministicFriendQualityIssues(candidate, stage, analysis, conversation).length === 0) return candidate;
+    return `${defaultLeads[index]} ${question}`.replace(/\s+/g, " ").trim();
   });
 }

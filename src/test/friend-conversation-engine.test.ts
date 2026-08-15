@@ -4,6 +4,7 @@ import {
   applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
   applyEarliestMissingFriendCheckpoint,
+  buildFriendKnowledgeApplicationContract,
   buildDeterministicFriendFallbackMessages,
   detectFriendCommercialReality,
   detectFriendSalesSignal,
@@ -11,7 +12,9 @@ import {
   deriveEvidenceGatedFriendStage,
   deterministicFriendQualityIssues,
   friendStageToDatabase,
+  friendKnowledgeApplicationIssues,
   normalizeFriendStage,
+  repeatsAnsweredFriendQuestion,
   selectRelevantConversationPassages,
 } from "../../supabase/functions/_shared/friend-conversation-engine";
 
@@ -166,6 +169,125 @@ describe("Friend conversation engine", () => {
     expect(signal.outcomeUnknown).toBe(false);
   });
 
+  it("treats Eva's negated consistency statement as an established active sales gap", () => {
+    const latest = "I wouldn't call the sales consistent yet. I'm getting more leads and conversations, and sales are starting to happen too. I joined the Bootcamp and it made a huge difference.";
+    const signal = detectFriendSalesSignal(latest);
+    expect(signal.resultState).toBe("inconsistent_sales");
+    expect(signal.activeSalesGap).toBe(true);
+
+    const commercial = detectFriendCommercialReality(latest, "I finally found what works for me.");
+    expect(commercial.commercialResultEstablished).toBe(true);
+    expect(commercial.outcomeUnknown).toBe(false);
+
+    const corrected = applyDeterministicSalesSignals({
+      segment: "already_successful",
+      sales_status: "already_successful",
+      mentor_status: "unknown",
+      tangible_goal: "turn content into sales",
+      motivation: "build reliable income",
+      past_experiences: ["created content and hoped something would work"],
+    }, latest);
+    expect(corrected.sales_status).toBe("inconsistent_sales");
+    expect(corrected.result_verification_status).toBe("verified_from_prospect");
+    expect(corrected.segment).toBe("inconsistent_sales");
+    expect(corrected.mentor_status).toContain("bootcamp");
+    expect(deriveEarliestMissingFriendCheckpoint(corrected)).not.toBe("commercial_result");
+  });
+
+  it("blocks paraphrases of a commercial-result question after the prospect answered it", () => {
+    const conversation = [
+      { direction: "outbound", content: "When you say it is working, has that mainly meant content growth and leads, or is it already producing consistent sales?" },
+      { direction: "inbound", content: "I wouldn't call the sales consistent yet. I'm getting more leads and conversations, and sales are starting to happen." },
+    ];
+    const repeated = "Has the progress shown up mostly in reach and engagement, or are you already seeing steady leads and sales from it?";
+    expect(repeatsAnsweredFriendQuestion(repeated, conversation)).toBe(true);
+    expect(deterministicFriendQualityIssues(repeated, "logical_certainty", {}, conversation))
+      .toContain("repeats an answered question");
+
+    const fallbacks = buildDeterministicFriendFallbackMessages(
+      [{ text: repeated }, { text: repeated }, { text: repeated }],
+      "logical_certainty",
+      "commercial_result",
+      { result_verification_status: "unverified" },
+      conversation[1].content,
+      conversation,
+    );
+    expect(fallbacks).toHaveLength(3);
+    for (const reply of fallbacks) {
+      expect(repeatsAnsweredFriendQuestion(reply, conversation)).toBe(false);
+      expect(reply).toMatch(/obstacle|less reliable|gap/i);
+    }
+  });
+
+  it("requires a retrieved lesson to materially shape a strategic Friend reply", () => {
+    const contract = buildFriendKnowledgeApplicationContract({
+      analysis: {
+        sales_status: "inconsistent_sales",
+        reply_act: "probe",
+        knowledge_need: "diagnose the consistency bottleneck",
+        evidence: ["sales are starting but they are not consistent yet"],
+      },
+      checkpoint: "active_problem",
+      stage: "logical_certainty",
+      latestProspectMessage: "Sales are starting, but I wouldn't call them consistent yet.",
+      principle: {
+        principle_name: "Gap Diagnosis Before Prescription",
+        source_name: "Sales Discovery Masterclass",
+        what_i_learned: "Separate proof that something can work from the bottleneck preventing a repeatable result.",
+        how_to_apply: "Name the remaining gap, then ask which part of the process is least reliable.",
+      },
+      sourceName: "Sales Discovery Masterclass",
+      supportingPassage: "Do not prescribe until the prospect can see the exact gap.",
+    });
+    expect(contract.required).toBe(true);
+
+    const citationOnly = {
+      text: "I hear you, and that makes sense. What feels hardest right now?",
+      principleUsed: contract.principleName,
+      sourceUsed: contract.sourceName,
+      knowledgeApplication: {
+        principleName: contract.principleName,
+        sourceName: contract.sourceName,
+        lessonApplied: "I used the gap diagnosis lesson from the retrieved source.",
+        strategicMove: "I asked a broad question intended to continue discovery.",
+        messageEvidence: "I hear you",
+      },
+    };
+    expect(friendKnowledgeApplicationIssues(citationOnly, contract))
+      .toContain("reply is not anchored to the locked prospect fact");
+
+    const applied = {
+      text: "Sales are starting, so you have proof it can work. The gap now is making them consistent. Which part feels least reliable right now?",
+      principleUsed: contract.principleName,
+      sourceUsed: contract.sourceName,
+      knowledgeApplication: {
+        principleName: contract.principleName,
+        sourceName: contract.sourceName,
+        lessonApplied: "Separated early proof from the remaining repeatability bottleneck.",
+        strategicMove: "Named the consistency gap before probing the least reliable step.",
+        messageEvidence: "The gap now is making them consistent.",
+      },
+    };
+    expect(friendKnowledgeApplicationIssues(applied, contract)).toEqual([]);
+  });
+
+  it("does not force Knowledge Base technique into simple early peer rapport", () => {
+    const contract = buildFriendKnowledgeApplicationContract({
+      analysis: { reply_act: "relate", knowledge_need: "none", contact_status: "active" },
+      checkpoint: "tangible_goal",
+      stage: "intent",
+      latestProspectMessage: "I started this page because creating is fun.",
+      principle: {
+        principle_name: "Deep Gap Discovery",
+        source_name: "Sales Course",
+        what_i_learned: "Probe the unresolved commercial gap.",
+      },
+      sourceName: "Sales Course",
+    });
+    expect(contract.requested).toBe(false);
+    expect(contract.required).toBe(false);
+  });
+
   it("rejects good-vibes endings when commercial results are still unverified", () => {
     const analysis = { result_verification_status: "unverified" };
     expect(deterministicFriendQualityIssues("Keep crushing it, I'm always here if you want to chat!", "intent", analysis))
@@ -305,6 +427,8 @@ describe("Friend conversation engine", () => {
     expect(chatSuggest).toContain("applyEarliestMissingFriendCheckpoint");
     expect(generateReply).toContain("buildDeterministicFriendFallbackMessages");
     expect(chatSuggest).toContain("buildDeterministicFriendFallbackMessages");
+    expect(generateReply).toContain("formatFriendKnowledgeApplicationContract");
+    expect(chatSuggest).toContain("formatFriendKnowledgeApplicationContract");
     expect(generateReply).not.toContain('throw new Error(`Friend quality validator rejected the reply:');
     expect(chatSuggest).not.toContain('throw new Error(`Friend quality validator rejected the reply:');
     const analyzeConversation = readFileSync("supabase/functions/analyze-conversation/index.ts", "utf8");

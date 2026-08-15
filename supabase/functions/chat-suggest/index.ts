@@ -19,11 +19,13 @@ import {
   applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
   applyEarliestMissingFriendCheckpoint,
+  buildFriendKnowledgeApplicationContract,
   buildDeterministicFriendFallbackMessages,
   buildFriendQualityValidatorPrompt,
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
   deterministicFriendQualityIssues,
+  formatFriendKnowledgeApplicationContract,
   friendStageToDatabase,
   selectRelevantConversationPassages,
 } from "../_shared/friend-conversation-engine.ts";
@@ -279,23 +281,27 @@ Represent only the real, approved identity and experiences in this workspace. Si
   const brainGroundingInstructions = brainChunks ? `
 
 ===== BRAIN-GROUNDED KNOWLEDGE (SILENT DECISION SUPPORT) =====
-RETRIEVAL PRIORITY ORDER FOR FRIEND MODE:
-1) 🎯 TRAINING CONVERSATION EXAMPLES — Your voice, your style, your exact patterns (HIGHEST PRIORITY)
-2) Workspace custom framework + style fingerprint
-3) Workspace-specific conversation chunks
-4) Core sales principles/chunks from uploaded videos & PDFs
+DECISION PRIORITY ORDER FOR FRIEND MODE:
+1) Current prospect evidence, explicit boundary, and locked funnel checkpoint
+2) LOCKED KNOWLEDGE APPLICATION CONTRACT for the exact buyer moment
+3) Approved workspace identity, offer truth, proof, and custom framework
+4) Training conversations and style fingerprint for voice only
+5) Other workspace conversation chunks and supporting Knowledge Base material
+
+Training examples control HOW the user sounds. They must never override WHAT the locked stage and knowledge contract require.
 
 You have retrieved the following knowledge. Use only what helps the analyzed reply_act:
 
 ${brainChunks}
 
 HOW TO USE BRAIN KNOWLEDGE IN FRIEND MODE:
-- Use the single most relevant principle as a private strategy guide.
+- When the locked knowledge contract says Required=true, use its exact principle as a private strategy guide in every variant.
+- When Required=false, use the single most relevant principle only if it improves the analyzed reply_act.
 - Present a principle as personal experience only when an approved story or backstory explicitly supports it.
 - Otherwise ask a grounded question or share it as a general observation without pretending it happened to you.
 - Add another principle only when it materially improves the next move.
 - The reply should feel natural, not like a textbook or a stack of sales techniques.
-- It is valid to use no principle when a simple peer reaction, answer or approved shared experience is the best response.
+- It is valid to use no principle only when the locked contract says Required=false and a simple peer reaction, answer or approved shared experience is the best response.
 
 ABSOLUTE RULES:
 - Use only knowledge relevant to this exact buyer moment.
@@ -1305,6 +1311,32 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
 
     // Keep diverse sources (≤2 per source) but ordered strictly by message relevance.
     const topPrinciples = sourceBalancedTake(scoredPrinciples, activeThreadType === "friend" ? 1 : 2, principlesCap);
+    const lockedFriendPrinciple = activeThreadType === "friend" ? topPrinciples[0] || null : null;
+    const lockedFriendSource = lockedFriendPrinciple
+      ? (lockedFriendPrinciple.source_id && kbMap[lockedFriendPrinciple.source_id]
+        ? kbMap[lockedFriendPrinciple.source_id]
+        : lockedFriendPrinciple.source_name || lockedFriendPrinciple.source_type || "unknown")
+      : "";
+    const lockedFriendPassage = activeThreadType === "friend"
+      ? topChunks.find((chunk: any) =>
+          chunk.chunk_kind === "source_passage"
+          && (!lockedFriendPrinciple?.source_id || chunk.source_id === lockedFriendPrinciple.source_id)
+        ) || topChunks.find((chunk: any) => chunk.chunk_kind === "source_passage") || topChunks[0]
+      : null;
+    const friendKnowledgeContract = activeThreadType === "friend"
+      ? buildFriendKnowledgeApplicationContract({
+          analysis: friendDecisionAnalysis,
+          checkpoint: precomputedFriendStage.checkpoint,
+          stage: precomputedFriendStage.stage,
+          latestProspectMessage: message,
+          principle: lockedFriendPrinciple,
+          sourceName: lockedFriendSource,
+          supportingPassage: lockedFriendPassage?.content || "",
+        })
+      : null;
+    const friendKnowledgeContractText = friendKnowledgeContract
+      ? formatFriendKnowledgeApplicationContract(friendKnowledgeContract)
+      : "Expert mode does not use a Friend knowledge application contract.";
 
     // Build a unique-source roster ranked by relevance — one entry per source,
     // showing the BEST-MATCHING principle + a snippet so the AI can ground the
@@ -1366,7 +1398,7 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
     }
 
     if (activeThreadType === "friend") {
-      brainChunksFormatted += `\n\n${friendStageDirective}\n\n[RELEVANT APPROVED REFERENCE MOMENTS FOR THIS EXACT STAGE]\n${relevantReferenceMoments}`;
+      brainChunksFormatted += `\n\n${friendStageDirective}\n\n${friendKnowledgeContractText}\n\n[RELEVANT APPROVED REFERENCE MOMENTS FOR THIS EXACT STAGE]\n${relevantReferenceMoments}`;
     }
 
     // Add Global Knowledge Map
@@ -1420,7 +1452,7 @@ Search ALL brain chunks across ALL sources for:
 - Treat ORIGINAL SOURCE PASSAGES as evidence and STRUCTURED PRINCIPLES as the action framework. Never invent a script or teaching that the retrieved passage does not support.
 
 **Step 3 — STRATEGIC APPLICATION:**
-First follow the analyzed reply_act. Use the single best-supported principle only when it helps that act. Use no formal principle when a simple peer response is more natural. Add another only when it provides a distinct benefit; relevance and truth matter more than source count.
+First follow the analyzed reply_act. When the locked knowledge contract says Required=true, apply that exact principle's actual lesson to the locked prospect fact and objective. A source label attached to generic wording is not application. Use no formal principle only when Required=false and a simple peer response is more natural. Add another only when it provides a distinct benefit; relevance and truth matter more than source count.
 
 **Step 4 — STRATEGY BREAKDOWN (Hidden — include in JSON response):**
 For each suggestion, track internally which principles and sources you used and why.
@@ -1525,11 +1557,13 @@ CERTAINTY FUNNEL: Intent = surface goal -> why it matters -> previous attempts -
 
 SALES CONVERSION RULE: An explicit first-person sales gap is not a reason for more generic rapport. Use the precomputed sales signal and the strongest retrieved sales psychology to diagnose the real bottleneck. Once the gap and desired result are clear, transition toward permission to explain what helped; when help is explicitly requested, ask permission now. Keep the strategy invisible in the ready-to-send text.
 
-Treat "made one sale", "has a mentor but no results", "doing it alone", "tried before", and "already successful" as different states. Use only explicit evidence. Current prospect memory may preserve earlier facts, but newer conversation evidence can correct them. Workspace audience signals are anonymous hints, never facts about this individual.
+Treat "made one sale", "has a mentor but no results", "doing it alone", "tried before", and "already successful" as different states. Use only explicit evidence. Current prospect memory may preserve earlier facts, but newer conversation evidence MUST correct it. "I wouldn't call sales consistent yet" means inconsistent_sales, not already_successful and not unknown. If the prospect says they joined a Bootcamp, mentor, course, program, or team, preserve that current support while diagnosing the remaining gap. Workspace audience signals are anonymous hints, never facts about this individual.
 
 An explicit "don't contact me", "leave me alone", or equivalent refusal is a boundary, not an objection: set contact_status="do_not_contact", choose RESPECT_NO, and return one brief acknowledgement with no question, persuasion, offer, link, referral, or promised follow-up. For "not now", set contact_status="not_now" and do not push an expert.
 
 Generate three natural variations for that SAME best next objective: primary, alternative, and softer. They may use the same single relevant Knowledge Base principle; do not force different sources or stack frameworks. Each ready-to-send message must be short, specific, slightly informal, and contain at most one question. A question is optional.
+
+When the LOCKED KNOWLEDGE APPLICATION CONTRACT says Required=true, every suggestion must materially perform that lesson and return knowledgeApplication with principleName, sourceName, lessonApplied, strategicMove, and messageEvidence. messageEvidence must be copied exactly from that suggestion's visible text. Merely naming the source or framework fails.
 
 Return valid JSON with this exact compatible shape:
 {
@@ -1537,9 +1571,9 @@ Return valid JSON with this exact compatible shape:
     "buyerType": "plain-language description based on evidence", "emotionalState": "...", "funnelStage": "current stage", "moveLever": "single best next objective"
   },
   "suggestions": [
-    {"id": 1, "type": "primary", "text": "...", "whyThisWorks": "Why this fits the newest message and current stage", "frameworkUsed": "one relevant principle or none", "sourceUsed": "source title or workspace/current conversation", "principleUsed": "principle name or direct response"},
-    {"id": 2, "type": "alternative", "text": "...", "whyThisWorks": "...", "frameworkUsed": "...", "sourceUsed": "...", "principleUsed": "..."},
-    {"id": 3, "type": "softer", "text": "...", "whyThisWorks": "...", "frameworkUsed": "...", "sourceUsed": "...", "principleUsed": "..."}
+    {"id": 1, "type": "primary", "text": "...", "whyThisWorks": "Why this fits the newest message and current stage", "frameworkUsed": "one relevant principle or none", "sourceUsed": "source title or workspace/current conversation", "principleUsed": "principle name or direct response", "knowledgeApplication": {"principleName":"locked principle or null","sourceName":"locked source or null","lessonApplied":"actual lesson used","strategicMove":"how it changes this exact reply","messageEvidence":"exact phrase copied from text"}},
+    {"id": 2, "type": "alternative", "text": "...", "whyThisWorks": "...", "frameworkUsed": "...", "sourceUsed": "...", "principleUsed": "...", "knowledgeApplication": {"principleName":"...","sourceName":"...","lessonApplied":"...","strategicMove":"...","messageEvidence":"..."}},
+    {"id": 3, "type": "softer", "text": "...", "whyThisWorks": "...", "frameworkUsed": "...", "sourceUsed": "...", "principleUsed": "...", "knowledgeApplication": {"principleName":"...","sourceName":"...","lessonApplied":"...","strategicMove":"...","messageEvidence":"..."}}
   ],
   "pushyWarning": null or "warning text",
   "detectedTone": "...",
@@ -1553,7 +1587,7 @@ Return valid JSON with this exact compatible shape:
   "prospectDreams": [],
   "conversionTriggers": [],
   "prospectLearning": {
-    "segment": "beginner|first_sale_stuck|mentor_no_results|independent|tried_before|already_successful|not_ready|other",
+    "segment": "beginner|first_sale_stuck|inconsistent_sales|mentor_no_results|independent|tried_before|already_successful|not_ready|other",
     "experience_level": "evidence-based level or unknown",
     "sales_status": "explicit result status or unknown",
     "mentor_status": "explicit support status or unknown",
@@ -1795,6 +1829,7 @@ ${jsonFormat}
     const structuredFriendProfile = activeThreadType === "friend"
       ? buildFriendProspectProfile(combinedFriendLearning || parsed, existingFriendProfile)
       : null;
+    if (structuredFriendProfile) parsed.prospectType = structuredFriendProfile.segment;
     if (structuredFriendProfile?.contact_status === "do_not_contact") {
       parsed.questioningPattern = "decision";
       parsed.detectedObjection = null;
@@ -1814,9 +1849,19 @@ ${jsonFormat}
     if (activeThreadType === "friend") {
       parsed.questioningPattern = finalFriendStageResult.stage;
       const finalStageDirective = buildFriendStageDirective(finalFriendStageResult);
+      const finalFriendKnowledgeContract = buildFriendKnowledgeApplicationContract({
+        analysis: combinedFriendLearning || parsed.prospectLearning || {},
+        checkpoint: finalFriendStageResult.checkpoint,
+        stage: finalFriendStageResult.stage,
+        latestProspectMessage: message,
+        principle: lockedFriendPrinciple,
+        sourceName: lockedFriendSource,
+        supportingPassage: lockedFriendPassage?.content || "",
+      });
+      const finalFriendKnowledgeContractText = formatFriendKnowledgeApplicationContract(finalFriendKnowledgeContract);
       const originalSuggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
       const deterministicIssues = originalSuggestions.flatMap((suggestion: any, index: number) =>
-        deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {})
+        deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {}, speakerMessages, suggestion, finalFriendKnowledgeContract)
           .map((issue) => `suggestion ${index + 1}: ${issue}`)
       );
       let repairedSuggestions: any[] = [];
@@ -1830,7 +1875,7 @@ ${jsonFormat}
             { role: "system", content: buildFriendQualityValidatorPrompt("suggestions") },
             {
               role: "user",
-              content: `${finalStageDirective}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nEXACT-MOMENT RETRIEVED KNOWLEDGE:\n${exactMomentKnowledge.substring(0, 12000)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
+              content: `${finalStageDirective}\n\n${finalFriendKnowledgeContractText}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nEXACT-MOMENT RETRIEVED KNOWLEDGE:\n${exactMomentKnowledge.substring(0, 12000)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
             },
           ],
           temperature: 0.2,
@@ -1845,7 +1890,7 @@ ${jsonFormat}
         repairedSuggestions = Array.isArray(qualityJson.suggestions) ? qualityJson.suggestions : [];
         if (repairedSuggestions.length !== originalSuggestions.length) throw new Error("Friend quality validator returned an incomplete suggestion set");
         const remainingIssues = repairedSuggestions.flatMap((suggestion: any, index: number) =>
-          deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {})
+          deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {}, speakerMessages, suggestion, finalFriendKnowledgeContract)
             .map((issue) => `suggestion ${index + 1}: ${issue}`)
         );
         if (remainingIssues.length > 0) validationFailure = `Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`;
@@ -1861,6 +1906,8 @@ ${jsonFormat}
           finalFriendStageResult.checkpoint,
           combinedFriendLearning || parsed.prospectLearning || {},
           message,
+          speakerMessages,
+          finalFriendKnowledgeContract,
         );
         repairedSuggestions = fallbackMessages.map((fallbackMessage, index) => ({
           ...(originalSuggestions[index] || {
@@ -1872,6 +1919,11 @@ ${jsonFormat}
             principleUsed: "truthful diagnosis",
           }),
           text: fallbackMessage,
+          frameworkUsed: "knowledge-aware deterministic fallback",
+          sourceUsed: "current conversation",
+          principleUsed: "verified prospect gap",
+          knowledgeApplication: null,
+          whyThisWorks: "Uses verified prospect facts and the earliest missing checkpoint without falsely claiming that an AI-selected source lesson was applied.",
         }));
         console.warn("chat-suggest used deterministic Friend fallback:", validationFailure);
       }
@@ -2119,6 +2171,14 @@ ${jsonFormat}
     parsed.learningResult = learningResult;
     parsed.prospectLearning = structuredFriendProfile;
     parsed.friendJourney = activeThreadType === "friend" ? finalFriendStageResult : null;
+    parsed.knowledgeApplicationContract = friendKnowledgeContract ? {
+      requested: friendKnowledgeContract.requested,
+      required: friendKnowledgeContract.required,
+      available: friendKnowledgeContract.available,
+      checkpoint: friendKnowledgeContract.checkpoint,
+      principleName: friendKnowledgeContract.principleName || null,
+      sourceName: friendKnowledgeContract.sourceName || null,
+    } : null;
     parsed.brainRetrieval = {
       chunksRetrieved: topChunks.length,
       uniqueSources: new Set([...topChunks.map((c: any) => c.source_id)].filter(Boolean)).size,
