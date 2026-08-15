@@ -27,6 +27,9 @@ export interface Suggestion {
   // Visible citation — proof the Brain is using uploaded material
   citedPrincipleName?: string | null;
   citedSourceName?: string | null;
+  decisionId?: string | null;
+  strategyAttemptId?: string | null;
+  knowledgeApplication?: Record<string, unknown> | null;
 }
 
 interface SuggestionCardProps {
@@ -34,7 +37,7 @@ interface SuggestionCardProps {
   analysis: ConversationAnalysis | null;
   copiedId: number | null;
   feedbackState?: "positive" | "negative";
-  onCopy: (id: number, text: string) => void;
+  onCopy: (suggestion: Suggestion) => void;
   onUse: (suggestion: Suggestion) => void;
   onFeedback: (suggestion: Suggestion, feedback: "positive" | "negative") => void;
 }
@@ -311,7 +314,7 @@ export default function SuggestionCard({
           </Button>
         </div>
         <div className="flex gap-1">
-          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => onCopy(suggestion.id, suggestion.text)}>
+            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => onCopy(suggestion)}>
             {copiedId === suggestion.id ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
           </Button>
           <Button size="sm" onClick={() => onUse(suggestion)}>Use</Button>

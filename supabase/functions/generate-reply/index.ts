@@ -10,6 +10,16 @@ import {
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
+  applyOutcomeAwareStrategyRank,
+  loadKnowledgeGraphContext,
+  loadProspectDecisionHistory,
+  loadStrategyPerformance,
+  persistProspectFactLedger,
+  persistSalesDecision,
+  recordInboundOutcomeSignals,
+  traverseSalesKnowledgeGraph,
+} from "../_shared/sales-superbrain.ts";
+import {
   applyDeterministicCommercialRealityCheck,
   applyDeterministicSalesSignals,
   applyEarliestMissingFriendCheckpoint,
@@ -32,7 +42,7 @@ const corsHeaders = {
 
 const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "video", "pdf"];
 const PAGE_SIZE = 1000;
-const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, common_mistake, knowledge_types, objection_types, hidden_causes, buying_stages, psychological_mechanisms, intended_outcomes, techniques, contraindications, language_patterns, extraction_confidence, evidence_mode";
 const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score, chunk_kind, chunk_index, locator, metadata";
 const MAX_SOURCE_COVERAGE_FILES = 32;
 
@@ -220,6 +230,18 @@ serve(async (req) => {
       // authoritative prospect turn.
       const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
       if (latestInbound?.content?.trim()) message = keepHeadAndLatest(latestInbound.content.trim(), 12000);
+    }
+    if (activeThreadType === "friend") {
+      const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
+      await recordInboundOutcomeSignals({
+        supabase,
+        userId: user.id,
+        workspaceId: prospect.workspace_id,
+        prospectId,
+        threadType: activeThreadType,
+        messageId: latestInbound?.id || null,
+        message,
+      });
     }
 
     // Resolve the configured Friend -> Expert relationship so referral-stage
@@ -530,10 +552,13 @@ serve(async (req) => {
     const friendLearningContext = activeThreadType === "friend"
       ? buildFriendLearningContext(existingFriendProfile, friendAudienceSignals || [])
       : "Friend learning is not used in Expert mode.";
+    const prospectDecisionHistory = activeThreadType === "friend"
+      ? await loadProspectDecisionHistory(supabase, user.id, prospectId, activeThreadType)
+      : "Fact-level Friend decision history is not used in Expert mode.";
 
     const analysisPrompt = `You are a sales conversation intelligence engine with an OBJECTION RADAR and multi-framework analyzer. Analyze and return JSON ONLY.
 
-Return the existing sales fields plus these REQUIRED structured learning fields: "segment" (beginner|first_sale_stuck|inconsistent_sales|mentor_no_results|independent|tried_before|already_successful|not_ready|other), "experience_level", "sales_status", "mentor_status", "current_strategy", "interests" (array), "desires" (array), "pain_points" (array), "objections" (array), "motivation", "intent" (what they are trying to protect, prove, avoid or achieve), "tangible_goal" (the concrete result they want), "problem_gap" (distance between current and desired state), "problem_status" (active|past_resolved|unclear|none), "doubt_cause" (why they hesitate), "certainty_gap" (what must become logically clear), "reply_act" (relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop), "question_needed" (boolean), "knowledge_need" (the exact principle or evidence needed, or "none"), "readiness" (not_ready|exploring|problem_aware|wants_help|accepted_referral), "contact_status" (active|not_now|do_not_contact|not_a_fit), "next_best_action", "learning_confidence" (0-100), and "evidence" (short array of conversation facts supporting the profile). New explicit facts always correct stale memory: a prospect saying sales are not consistent yet is inconsistent_sales, not already_successful or unknown; preserve any current Bootcamp, mentor, course, program, or team support they mention.
+Return the existing sales fields plus these REQUIRED structured learning fields: "segment" (beginner|first_sale_stuck|inconsistent_sales|mentor_no_results|independent|tried_before|already_successful|not_ready|other), "experience_level", "sales_status", "mentor_status", "current_strategy", "interests" (array), "desires" (array), "pain_points" (array), "objections" (array), "questions_already_answered" (array of topics or questions the conversation has already resolved), "objections_handled" (array), "strategies_attempted" (array), "exact_unresolved_issue", "motivation", "intent" (what they are trying to protect, prove, avoid or achieve), "tangible_goal" (the concrete result they want), "problem_gap" (distance between current and desired state), "problem_status" (active|past_resolved|unclear|none), "doubt_cause" (why they hesitate), "certainty_gap" (what must become logically clear), "reply_act" (relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop), "question_needed" (boolean), "knowledge_need" (the exact principle or evidence needed, or "none"), "readiness" (not_ready|exploring|problem_aware|wants_help|accepted_referral), "contact_status" (active|not_now|do_not_contact|not_a_fit), "next_best_action", "learning_confidence" (0-100), and "evidence" (short array of conversation facts supporting the profile). New explicit facts always correct stale memory: a prospect saying sales are not consistent yet is inconsistent_sales, not already_successful or unknown; preserve any current Bootcamp, mentor, course, program, or team support they mention. Never list an unanswered question as answered.
 Also REQUIRED for the certainty funnel: "why_goal_matters", "past_experiences" (array), "root_cause", "consequences", "need_for_change_reason", "inaction_pattern", and "detailed_future_outcome".
 
 Existing sales fields: { "warmth_score": <0-100>, "stage": <"intent"|"logical_certainty"|"emotional_certainty"|"pitch"|"handoff">, "prospect_psychology": <string>, "pain_expressed": <boolean>, "pain_summary": <string|null>, "signals_detected": [<strings>], "predicted_next_objection": <string|null>, "recommended_move": <string>, "brain_principle_used": <string|null>, "brain_principle_reason": <string|null>, "stage_reason": <string>, "detectedTone": <string>, "prospectType": <string>, "objection_detected": <string|null>, "objection_bucket": <string|null>, "objection_response_type": <string|null>, "spin_stage": <string>, "offer_fit": <string>, "referral_readiness": <string>, "next_objective": <string>, "prospect_fears": [<strings>], "prospect_dreams": [<strings>], "conversion_triggers": [<strings>] }
@@ -570,6 +595,9 @@ ${learnedInsightsText.substring(0, 2000)}
 
 FRIEND_LEARNING_MEMORY:
 ${friendLearningContext.substring(0, 5000)}
+
+FACT_AND_STRATEGY_LEDGER:
+${prospectDecisionHistory.substring(0, 6500)}
 
 PROSPECT_EVIDENCE_LEDGER (every unique inbound turn, chronological):
 ${prospectEvidenceLedger}
@@ -715,6 +743,65 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
             }).join("\n")
           : "No knowledge passage is necessary for this reply.";
       }
+    }
+
+    // Outcome-aware ranking augments relevance; it never replaces it. New
+    // strategies receive a neutral prior, while repeated failures for this
+    // exact prospect are penalized and verified positive outcomes add weight.
+    let strategyPerformance: any[] = [];
+    const decisionGraphTraversal = activeThreadType === "friend"
+      ? await traverseSalesKnowledgeGraph(supabase, user.id, appliedRetrievalQuery)
+      : { text: "(Friend decision graph not used)", paths: [] as Array<Record<string, unknown>>, candidateSalesBrainIds: [] as string[] };
+    if (decisionGraphTraversal.candidateSalesBrainIds.length > 0) {
+      const graphIds = new Set(decisionGraphTraversal.candidateSalesBrainIds);
+      const graphCandidates = mergedPrinciples.filter((principle: any) => graphIds.has(principle.id)).map((principle: any) => ({
+        ...principle,
+        matchScore: Number(principle.matchScore || principle.relevance_score || 0) + 12,
+        _graphMatched: true,
+      }));
+      replyTopPrinciples = sourceBalancedTake(
+        deduplicatePrinciples([...replyTopPrinciples, ...graphCandidates], "relevance_score")
+          .sort((a: any, b: any) => Number(b.matchScore || 0) - Number(a.matchScore || 0)),
+        1,
+        8,
+      );
+    }
+    let knowledgeGraphContext = { text: "(Friend knowledge graph not used)", paths: [] as Array<Record<string, unknown>>, nodeByPrinciple: {} as Record<string, string> };
+    if (activeThreadType === "friend" && replyTopPrinciples.length > 0) {
+      strategyPerformance = await loadStrategyPerformance({
+        supabase,
+        userId: user.id,
+        workspaceId: prospect.workspace_id,
+        prospectId,
+        prospectSegment: analysisJson.segment || existingFriendProfile?.segment || null,
+        funnelStage: friendStageResult.stage,
+        objectionType: analysisJson.objection_detected || analysisJson.objection_bucket || null,
+        salesBrainIds: replyTopPrinciples.map((principle: any) => principle.id).filter(Boolean),
+      });
+      replyTopPrinciples = applyOutcomeAwareStrategyRank(replyTopPrinciples, strategyPerformance, {
+        funnelStage: analysisJson.stage,
+        objectionType: analysisJson.objection_detected || analysisJson.objection_bucket,
+        prospectText: `${message}\n${conversationHistory}`,
+      }).slice(0, 8);
+      replyPrinciplesText = replyTopPrinciples.map((principle: any) => {
+        const source = principle.source_id && kbMap[principle.source_id]
+          ? kbMap[principle.source_id]
+          : principle.source_name;
+        const performance = principle._strategyPerformance
+          ? ` | verified effectiveness=${principle._strategyPerformance.effectiveness_score}; prior attempts=${principle._strategyPerformance.previous_attempt_count}`
+          : " | no verified outcome history yet";
+        return `• [${principle.principle_name}] (Source: ${source}${performance}): ${principle.what_i_learned}\n  Apply: ${principle.how_to_apply}`;
+      }).join("\n");
+      const selectedGraphContext = await loadKnowledgeGraphContext(
+        supabase,
+        user.id,
+        replyTopPrinciples.map((principle: any) => principle.id).filter(Boolean),
+      );
+      knowledgeGraphContext = {
+        text: `${decisionGraphTraversal.text}\n${selectedGraphContext.text}`,
+        paths: [...decisionGraphTraversal.paths, ...selectedGraphContext.paths],
+        nodeByPrinciple: selectedGraphContext.nodeByPrinciple,
+      };
     }
 
     const friendStageDirective = activeThreadType === "friend"
@@ -929,6 +1016,9 @@ ${replyPrinciplesText.substring(0, 6500)}
 RELEVANT_KNOWLEDGE_CHUNKS:
 ${replyChunksText.substring(0, 6500)}
 
+TYPED_SALES_KNOWLEDGE_GRAPH:
+${knowledgeGraphContext.text.substring(0, 6500)}
+
 DECISION_AWARE_RETRIEVAL_QUERY:
 ${appliedRetrievalQuery.substring(0, 3600)}
 
@@ -940,6 +1030,9 @@ ${learnedInsightsText.substring(0, 2500)}
 
 FRIEND_LEARNING_CONTEXT:
 ${friendLearningContext.substring(0, 5000)}
+
+FACT_AND_PREVIOUS_STRATEGY_LEDGER:
+${prospectDecisionHistory.substring(0, 6500)}
 
 VERIFIED_WINNING_PATTERNS:
 ${winningPatternsText.substring(0, 2000)}`;
@@ -997,7 +1090,7 @@ ${winningPatternsText.substring(0, 2000)}`;
             { role: "system", content: buildFriendQualityValidatorPrompt("variants") },
             {
               role: "user",
-              content: `${friendStageDirective}\n\n${friendKnowledgeContractText}\n\nLOCKED ANALYSIS:\n${JSON.stringify(analysisJson)}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nRETRIEVED KNOWLEDGE:\n${replyPrinciplesText.substring(0, 4500)}\n${replyChunksText.substring(0, 4500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT VARIANTS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalVariants)}`,
+              content: `${friendStageDirective}\n\n${friendKnowledgeContractText}\n\nLOCKED ANALYSIS:\n${JSON.stringify(analysisJson)}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nFACT AND PREVIOUS STRATEGY LEDGER:\n${prospectDecisionHistory.substring(0, 5000)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nRETRIEVED KNOWLEDGE:\n${replyPrinciplesText.substring(0, 4500)}\n${replyChunksText.substring(0, 4500)}\n\nKNOWLEDGE GRAPH:\n${knowledgeGraphContext.text.substring(0, 3500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT VARIANTS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalVariants)}`,
             },
           ],
           temperature: 0.2,
@@ -1071,6 +1164,20 @@ ${winningPatternsText.substring(0, 2000)}`;
         { variant: "alternative", message: "Understood. I'll leave it there.", move_used: "respect_boundary", principle_applied: "consent", why_this_works: "Ends the outreach without reopening the conversation.", warmth_prediction: 0 },
         { variant: "casual", message: "Got it. Take care.", move_used: "respect_boundary", principle_applied: "consent", why_this_works: "Acknowledges the request briefly and applies no pressure.", warmth_prediction: 0 },
       ];
+    }
+    if (structuredFriendProfile) {
+      const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
+      await persistProspectFactLedger({
+        supabase,
+        userId: user.id,
+        workspaceId: prospect.workspace_id,
+        prospectId,
+        threadType: activeThreadType,
+        profile: structuredFriendProfile,
+        sourceMessageId: latestInbound?.id || null,
+        sourceDirection: "inbound",
+        sourceMessages: speakerMessages,
+      });
     }
 
     // ===== SIDE EFFECTS: Analytics, Learning, Lead Registry =====
@@ -1195,6 +1302,42 @@ ${winningPatternsText.substring(0, 2000)}`;
       knowledgeApplication: v.knowledge_application || v.knowledgeApplication || null,
     }));
 
+    let decisionTrace: { decisionId: string | null; attemptIds: string[] } = { decisionId: null, attemptIds: [] };
+    if (activeThreadType === "friend") {
+      const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
+      decisionTrace = await persistSalesDecision({
+        supabase,
+        userId: user.id,
+        workspaceId: prospect.workspace_id,
+        prospectId,
+        threadType: activeThreadType,
+        inputMessageId: latestInbound?.id || null,
+        inputText: message,
+        analysis: analysisJson,
+        selectedPrinciple: lockedReplyPrinciple,
+        selectedKnowledgeNodeId: lockedReplyPrinciple?.id
+          ? knowledgeGraphContext.nodeByPrinciple[lockedReplyPrinciple.id] || null
+          : null,
+        graphPath: knowledgeGraphContext.paths,
+        scoreBreakdown: {
+          retrieval_query: appliedRetrievalQuery,
+          outcome_performance: strategyPerformance,
+          knowledge_contract_required: friendKnowledgeContract?.required || false,
+        },
+        modelProvider: chat.provider,
+        modelName: chat.models.balanced,
+        workspaceOffer: JSON.stringify(
+          workspace?.offer_truth || workspace?.products_detected || workspace?.expert_description || workspace?.store_url || "",
+        ).slice(0, 1500),
+        generationStatus: replyJson.qualityValidation?.fallbackApplied ? "fallback" : "generated",
+        variants: replyJson.variants || [],
+      });
+      suggestions.forEach((suggestion: any, index: number) => {
+        suggestion.decisionId = decisionTrace.decisionId;
+        suggestion.strategyAttemptId = decisionTrace.attemptIds[index] || null;
+      });
+    }
+
     const sourceTypes = new Set<string>();
     replyTopChunks.forEach((c: any) => sourceTypes.add(c.source_type || "unknown"));
     replyTopPrinciples.forEach((p: any) => sourceTypes.add(p.source_type || "unknown"));
@@ -1216,12 +1359,15 @@ ${winningPatternsText.substring(0, 2000)}`;
         sourceName: friendKnowledgeContract.sourceName || null,
       } : null,
       learningResult,
+      decisionTrace,
       brainRetrieval: {
         chunksRetrieved: replyTopChunks.length,
         uniqueSources: new Set([...replyTopChunks.map((c: any) => c.source_id)].filter(Boolean)).size,
         sources: Array.from(sourceTypes),
         insightsRetrieved: brainInsights?.length || 0,
         retrievalPhase: activeThreadType === "friend" ? "analysis_then_decision_search" : "message_search",
+        graphPathsRetrieved: knowledgeGraphContext.paths.length,
+        outcomeRankedStrategies: strategyPerformance.length,
       },
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
