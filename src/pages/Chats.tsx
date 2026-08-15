@@ -1113,18 +1113,38 @@ export default function Chats() {
       toast.info("This response is already recorded.");
       return;
     }
-    const { error: messageError } = await supabase.from("chat_messages").insert({
+    const { data: recordedMessage, error: messageError } = await supabase.from("chat_messages").insert({
       user_id: user!.id,
       prospect_id: selectedProspectId,
       content: suggestion.text,
       direction: "outbound",
       thread_type: currentThreadType,
       is_ai_suggestion: true,
-    });
+    }).select("id").single();
     if (messageError) {
       console.error("Failed to record used suggestion:", messageError);
       toast.error("Could not record this response. Please try again.");
       return;
+    }
+    if (activeWorkspace && suggestion.strategyAttemptId) {
+      const { error: outcomeError } = await (supabase as any).from("sales_outcome_events").insert({
+        user_id: user!.id,
+        workspace_id: activeWorkspace.id,
+        prospect_id: selectedProspectId,
+        decision_id: suggestion.decisionId || null,
+        strategy_attempt_id: suggestion.strategyAttemptId,
+        message_id: recordedMessage?.id || null,
+        event_type: "used",
+        prospect_segment: (selectedProspect as any)?.friend_profile?.segment || (selectedProspect as any)?.prospect_profile?.segment || null,
+        funnel_stage: conversationStage || selectedProspect?.conversation_stage || null,
+        strategy_key: suggestion.citedPrincipleName || suggestion.frameworkUsed || suggestion.type,
+        reply_style: suggestion.type,
+        workspace_offer: JSON.stringify(
+          (activeWorkspace as any).offer_truth || (activeWorkspace as any).products_detected || (activeWorkspace as any).store_url || "",
+        ).slice(0, 1500),
+        metadata: { source: "friend_use_button" },
+      });
+      if (outcomeError) console.warn("Could not record strategy use event", outcomeError);
     }
 
     // First-message suggestions are stored on the prospect for navigation
@@ -1230,10 +1250,29 @@ export default function Chats() {
     setIsAnalyzingIntel(false);
   };
 
-  const handleCopy = (id: number, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
+  const handleCopy = async (suggestion: Suggestion) => {
+    await navigator.clipboard.writeText(suggestion.text);
+    setCopiedId(suggestion.id);
     setTimeout(() => setCopiedId(null), 2000);
+    if (selectedProspectId && activeWorkspace && suggestion.strategyAttemptId) {
+      const { error } = await (supabase as any).from("sales_outcome_events").insert({
+        user_id: user!.id,
+        workspace_id: activeWorkspace.id,
+        prospect_id: selectedProspectId,
+        decision_id: suggestion.decisionId || null,
+        strategy_attempt_id: suggestion.strategyAttemptId,
+        event_type: "copied",
+        prospect_segment: (selectedProspect as any)?.friend_profile?.segment || (selectedProspect as any)?.prospect_profile?.segment || null,
+        funnel_stage: conversationStage || selectedProspect?.conversation_stage || null,
+        strategy_key: suggestion.citedPrincipleName || suggestion.frameworkUsed || suggestion.type,
+        reply_style: suggestion.type,
+        workspace_offer: JSON.stringify(
+          (activeWorkspace as any).offer_truth || (activeWorkspace as any).products_detected || (activeWorkspace as any).store_url || "",
+        ).slice(0, 1500),
+        metadata: { source: "friend_copy_button" },
+      });
+      if (error) console.warn("Could not record strategy copy event", error);
+    }
     toast.success("Copied!");
   };
 
@@ -1241,6 +1280,27 @@ export default function Chats() {
     mutationFn: async ({ id, outcome }: { id: string; outcome: string }) => {
       const { error } = await supabase.from("prospects").update({ outcome }).eq("id", id);
       if (error) throw error;
+      const eventType = outcome === "won" ? "purchase_completed" : outcome === "ghosted" ? "ghosted" : outcome === "lost" ? "refused" : null;
+      if (eventType && activeWorkspace) {
+        const { data: latestAttempt } = await (supabase as any).from("sales_strategy_attempts")
+          .select("id, decision_id, strategy_key, funnel_stage")
+          .eq("user_id", user!.id)
+          .eq("prospect_id", id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        await (supabase as any).from("sales_outcome_events").insert({
+          user_id: user!.id,
+          workspace_id: activeWorkspace.id,
+          prospect_id: id,
+          decision_id: latestAttempt?.decision_id || null,
+          strategy_attempt_id: latestAttempt?.id || null,
+          event_type: eventType,
+          funnel_stage: latestAttempt?.funnel_stage || selectedProspect?.conversation_stage || null,
+          strategy_key: latestAttempt?.strategy_key || null,
+          metadata: { source: "manual_prospect_outcome", prospect_outcome: outcome },
+        });
+      }
       // Conversion learning loop: on a WIN, boost the principles that closed it so
       // the brain gets smarter at what actually converts for this user.
       if (outcome === "won") {

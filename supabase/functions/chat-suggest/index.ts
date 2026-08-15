@@ -11,6 +11,16 @@ import {
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
+  applyOutcomeAwareStrategyRank,
+  loadKnowledgeGraphContext,
+  loadProspectDecisionHistory,
+  loadStrategyPerformance,
+  persistProspectFactLedger,
+  persistSalesDecision,
+  recordInboundOutcomeSignals,
+  traverseSalesKnowledgeGraph,
+} from "../_shared/sales-superbrain.ts";
+import {
   buildProfileGroundedFirstMessages,
   extractFirstMessageProfileEvidence,
   isProfileGroundedFirstMessage,
@@ -46,7 +56,7 @@ function getCorsHeaders(req: Request) {
 
 const MAX_MESSAGE_LENGTH = 12000;
 const PAGE_SIZE = 1000;
-const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, exact_words_to_use, the_deep_why, when_to_use, common_mistake";
+const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, exact_words_to_use, the_deep_why, when_to_use, common_mistake, knowledge_types, objection_types, hidden_causes, buying_stages, psychological_mechanisms, intended_outcomes, techniques, contraindications, language_patterns, extraction_confidence, evidence_mode";
 const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score, chunk_kind, chunk_index, locator, metadata";
 const MAX_SOURCE_COVERAGE_FILES = 32;
 
@@ -816,6 +826,18 @@ serve(async (req) => {
       const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
       if (latestInbound?.content?.trim()) message = keepHeadAndLatest(latestInbound.content.trim(), MAX_MESSAGE_LENGTH);
     }
+    if (activeThreadType === "friend") {
+      const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
+      await recordInboundOutcomeSignals({
+        supabase,
+        userId: user.id,
+        workspaceId: prospect.workspace_id,
+        prospectId,
+        threadType: activeThreadType,
+        messageId: latestInbound?.id || null,
+        message,
+      });
+    }
     
     // Build conversation memory: summarize older messages, keep recent ones verbatim
     const recentCount = 10;
@@ -1096,6 +1118,9 @@ serve(async (req) => {
     const friendLearningContext = activeThreadType === "friend"
       ? buildFriendLearningContext(existingFriendProfile, friendAudienceSignals || [])
       : "";
+    const prospectDecisionHistory = activeThreadType === "friend"
+      ? await loadProspectDecisionHistory(supabase, user.id, prospectId, activeThreadType)
+      : "";
 
     let chat;
     try {
@@ -1123,13 +1148,13 @@ serve(async (req) => {
               role: "system",
               content: `Analyze a peer-to-peer Friend conversation before Knowledge Base retrieval. Return JSON only. Do not write the reply.
 
-Return: {"intent":"what they are trying to protect, prove, avoid or achieve","tangible_goal":"concrete desired result or unknown","why_goal_matters":"why it matters","past_experiences":[],"experience_level":"evidence-based level","sales_status":"explicit result status or unknown","mentor_status":"explicit support status or unknown","current_strategy":"explicit approach or unknown","problem_gap":"distance between current and desired state","problem_status":"active|past_resolved|unclear|none","root_cause":"their explanation and likely root cause","consequences":"what leaving it unresolved costs","need_for_change_reason":"their own recognition that change is needed","inaction_pattern":"why they have not solved it","detailed_future_outcome":"specific lived outcome if solved","pain_points":[],"objections":[],"doubt_cause":"why they hesitate","certainty_gap":"what must become logically clear","motivation":"why it matters","readiness":"not_ready|exploring|problem_aware|wants_help|accepted_referral","stage":"intent|logical_certainty|emotional_certainty|pitch|handoff","reply_act":"relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop","question_needed":false,"knowledge_need":"the exact principle/evidence needed, or none","contact_status":"active|not_now|do_not_contact|not_a_fit","next_best_action":"one natural peer action","learning_confidence":0,"evidence":[]}
+Return: {"intent":"what they are trying to protect, prove, avoid or achieve","tangible_goal":"concrete desired result or unknown","why_goal_matters":"why it matters","past_experiences":[],"experience_level":"evidence-based level","sales_status":"explicit result status or unknown","mentor_status":"explicit support status or unknown","current_strategy":"explicit approach or unknown","problem_gap":"distance between current and desired state","problem_status":"active|past_resolved|unclear|none","root_cause":"their explanation and likely root cause","consequences":"what leaving it unresolved costs","need_for_change_reason":"their own recognition that change is needed","inaction_pattern":"why they have not solved it","detailed_future_outcome":"specific lived outcome if solved","pain_points":[],"objections":[],"questions_already_answered":[],"objections_handled":[],"strategies_attempted":[],"exact_unresolved_issue":"the one issue still preventing progress","doubt_cause":"why they hesitate","certainty_gap":"what must become logically clear","motivation":"why it matters","readiness":"not_ready|exploring|problem_aware|wants_help|accepted_referral","stage":"intent|logical_certainty|emotional_certainty|pitch|handoff","reply_act":"relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop","question_needed":false,"knowledge_need":"the exact principle/evidence needed, or none","contact_status":"active|not_now|do_not_contact|not_a_fit","next_best_action":"one natural peer action","learning_confidence":0,"evidence":[]}
 
 Choose a question only when one missing answer is genuinely necessary. Follow Intent -> Logical Certainty -> Emotional Certainty -> Pitch -> Handoff and preserve prior answers. Do not pitch from a surface goal. A real friend often relates, shares, answers, validates or observes without asking anything. The problem must belong to this prospect, not merely their audience. An explicit first-person lack of sales, inconsistent sales, or desire for more sales is an active sales gap: identify traffic, offer, messaging, conversion, follow-up, or consistency, then retrieve accordingly. At pitch, recap the prospect's complete context and ask permission. At handoff, give the approved destination only after acceptance. A clear stop means reply_act=stop and contact_status=do_not_contact. Never treat a boundary as an objection.`
             },
             {
               role: "user",
-              content: `CURRENT PROSPECT MEMORY:\n${friendLearningContext.substring(0, 4000)}\n\nPROSPECT EVIDENCE LEDGER (every unique inbound turn):\n${evidenceLedger}\n\nCONVERSATION HEAD + LATEST:\n${keepHeadAndLatest(decisionHistory, 7000, 1200)}\n\nLATEST INPUT:\n${message}\n\nSCREENSHOT CONTEXT:\n${screenshotContext || "none"}`,
+              content: `CURRENT PROSPECT MEMORY:\n${friendLearningContext.substring(0, 4000)}\n\nFACT AND PREVIOUS STRATEGY LEDGER:\n${prospectDecisionHistory.substring(0, 6000)}\n\nPROSPECT EVIDENCE LEDGER (every unique inbound turn):\n${evidenceLedger}\n\nCONVERSATION HEAD + LATEST:\n${keepHeadAndLatest(decisionHistory, 7000, 1200)}\n\nLATEST INPUT:\n${message}\n\nSCREENSHOT CONTEXT:\n${screenshotContext || "none"}`,
             },
           ],
           temperature: 0.2,
@@ -1310,7 +1335,53 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
     }).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
     // Keep diverse sources (≤2 per source) but ordered strictly by message relevance.
-    const topPrinciples = sourceBalancedTake(scoredPrinciples, activeThreadType === "friend" ? 1 : 2, principlesCap);
+    let topPrinciples = sourceBalancedTake(scoredPrinciples, activeThreadType === "friend" ? 1 : 2, principlesCap);
+    let strategyPerformance: any[] = [];
+    const decisionGraphTraversal = activeThreadType === "friend"
+      ? await traverseSalesKnowledgeGraph(supabase, user.id, decisionSearchQuery)
+      : { text: "(Friend decision graph not used)", paths: [] as Array<Record<string, unknown>>, candidateSalesBrainIds: [] as string[] };
+    if (decisionGraphTraversal.candidateSalesBrainIds.length > 0) {
+      const graphIds = new Set(decisionGraphTraversal.candidateSalesBrainIds);
+      const graphCandidates = scoredPrinciples.filter((principle: any) => graphIds.has(principle.id)).map((principle: any) => ({
+        ...principle,
+        matchScore: Number(principle.matchScore || principle.relevance_score || 0) + 12,
+        _graphMatched: true,
+      }));
+      topPrinciples = sourceBalancedTake(
+        deduplicatePrinciples([...topPrinciples, ...graphCandidates], "relevance_score")
+          .sort((a: any, b: any) => Number(b.matchScore || 0) - Number(a.matchScore || 0)),
+        1,
+        principlesCap,
+      );
+    }
+    let knowledgeGraphContext = { text: "(Friend knowledge graph not used)", paths: [] as Array<Record<string, unknown>>, nodeByPrinciple: {} as Record<string, string> };
+    if (activeThreadType === "friend" && topPrinciples.length > 0) {
+      strategyPerformance = await loadStrategyPerformance({
+        supabase,
+        userId: user.id,
+        workspaceId: prospect.workspace_id,
+        prospectId,
+        prospectSegment: friendDecisionAnalysis?.segment || existingFriendProfile?.segment || null,
+        funnelStage: precomputedFriendStage.stage,
+        objectionType: friendDecisionAnalysis?.objection_detected || friendDecisionAnalysis?.objection_bucket || null,
+        salesBrainIds: topPrinciples.map((principle: any) => principle.id).filter(Boolean),
+      });
+      topPrinciples = applyOutcomeAwareStrategyRank(topPrinciples, strategyPerformance, {
+        funnelStage: precomputedFriendStage.stage,
+        objectionType: friendDecisionAnalysis?.objection_detected || friendDecisionAnalysis?.objection_bucket,
+        prospectText: `${message}\n${conversationHistory}`,
+      }).slice(0, principlesCap);
+      const selectedGraphContext = await loadKnowledgeGraphContext(
+        supabase,
+        user.id,
+        topPrinciples.map((principle: any) => principle.id).filter(Boolean),
+      );
+      knowledgeGraphContext = {
+        text: `${decisionGraphTraversal.text}\n${selectedGraphContext.text}`,
+        paths: [...decisionGraphTraversal.paths, ...selectedGraphContext.paths],
+        nodeByPrinciple: selectedGraphContext.nodeByPrinciple,
+      };
+    }
     const lockedFriendPrinciple = activeThreadType === "friend" ? topPrinciples[0] || null : null;
     const lockedFriendSource = lockedFriendPrinciple
       ? (lockedFriendPrinciple.source_id && kbMap[lockedFriendPrinciple.source_id]
@@ -1392,6 +1463,12 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
     }
     if (friendLearningContext) {
       brainChunksFormatted += `\n\n${friendLearningContext}`;
+    }
+    if (prospectDecisionHistory) {
+      brainChunksFormatted += `\n\n${prospectDecisionHistory}`;
+    }
+    if (activeThreadType === "friend") {
+      brainChunksFormatted += `\n\n[TYPED SALES KNOWLEDGE GRAPH — use relationships and contraindications, not labels]\n${knowledgeGraphContext.text}`;
     }
     if (friendDecisionAnalysis) {
       brainChunksFormatted += `\n\n[FRIEND DECISION ANALYSIS — locked for this generation]\nUse its reply_act and question_needed for all three variants. Do not replace the act merely to ask a question or display a framework.\n${JSON.stringify(friendDecisionAnalysis).substring(0, 4000)}\n[DECISION-AWARE RETRIEVAL QUERY]\n${decisionSearchQuery.substring(0, 3200)}`;
@@ -1593,6 +1670,10 @@ Return valid JSON with this exact compatible shape:
     "mentor_status": "explicit support status or unknown",
     "current_strategy": "explicit strategy or unknown",
     "interests": [], "desires": [], "pain_points": [], "objections": [],
+    "questions_already_answered": [],
+    "objections_handled": [],
+    "strategies_attempted": [],
+    "exact_unresolved_issue": "the one evidenced issue still preventing progress or unknown",
     "motivation": "evidenced motivation or unknown",
     "intent": "what they are trying to protect, prove, avoid or achieve",
     "tangible_goal": "concrete desired result or unknown",
@@ -1816,6 +1897,39 @@ ${jsonFormat}
         suggested_first_message: JSON.stringify(firstMessageSuggestions),
       }).eq("id", prospectId).eq("user_id", user.id);
 
+      const firstMessageTrace = await persistSalesDecision({
+        supabase,
+        userId: user.id,
+        workspaceId: prospect.workspace_id,
+        prospectId,
+        threadType: activeThreadType,
+        inputText: message,
+        analysis: { ...friendDecisionAnalysis, stage: "intent", earliest_missing_checkpoint: "tangible_goal" },
+        selectedPrinciple: lockedFriendPrinciple,
+        selectedKnowledgeNodeId: lockedFriendPrinciple?.id
+          ? knowledgeGraphContext.nodeByPrinciple[lockedFriendPrinciple.id] || null
+          : null,
+        graphPath: knowledgeGraphContext.paths,
+        scoreBreakdown: { outcome_performance: strategyPerformance, mode: "first_message" },
+        modelProvider: chat.provider,
+        modelName: chat.models.balanced,
+        workspaceOffer: JSON.stringify(
+          workspace?.offer_truth || workspace?.products_detected || workspace?.expert_description || workspace?.store_url || "",
+        ).slice(0, 1500),
+        generationStatus: fallbackApplied ? "fallback" : "generated",
+        variants: firstMessageSuggestions,
+      });
+      firstMessageSuggestions.forEach((suggestion: any, index: number) => {
+        suggestion.decisionId = firstMessageTrace.decisionId;
+        suggestion.strategyAttemptId = firstMessageTrace.attemptIds[index] || null;
+      });
+      // Cache the trace-aware variants so a reopened first-contact chat keeps
+      // outcome attribution for Copy and Use instead of becoming anonymous.
+      await supabase.from("prospects").update({
+        suggested_first_message: JSON.stringify(firstMessageSuggestions),
+      }).eq("id", prospectId).eq("user_id", user.id);
+      parsed.decisionTrace = firstMessageTrace;
+
       return new Response(JSON.stringify(parsed), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -1840,6 +1954,20 @@ ${jsonFormat}
         { id: 2, type: "alternative", text: "Understood. I'll leave it there.", whyThisWorks: "Ends the outreach without reopening the conversation.", frameworkUsed: "RESPECT_NO", sourceUsed: "current conversation", principleUsed: "consent" },
         { id: 3, type: "softer", text: "Got it. Take care.", whyThisWorks: "Acknowledges the request briefly and applies no pressure.", frameworkUsed: "RESPECT_NO", sourceUsed: "current conversation", principleUsed: "consent" },
       ];
+    }
+    if (structuredFriendProfile && mode !== "refine") {
+      const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
+      await persistProspectFactLedger({
+        supabase,
+        userId: user.id,
+        workspaceId: prospect.workspace_id,
+        prospectId,
+        threadType: activeThreadType,
+        profile: structuredFriendProfile,
+        sourceMessageId: latestInbound?.id || null,
+        sourceDirection: "inbound",
+        sourceMessages: speakerMessages,
+      });
     }
 
     const finalFriendStageResult = deriveEvidenceGatedFriendStage(
@@ -1875,7 +2003,7 @@ ${jsonFormat}
             { role: "system", content: buildFriendQualityValidatorPrompt("suggestions") },
             {
               role: "user",
-              content: `${finalStageDirective}\n\n${finalFriendKnowledgeContractText}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nEXACT-MOMENT RETRIEVED KNOWLEDGE:\n${exactMomentKnowledge.substring(0, 12000)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
+              content: `${finalStageDirective}\n\n${finalFriendKnowledgeContractText}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nFACT AND PREVIOUS STRATEGY LEDGER:\n${prospectDecisionHistory.substring(0, 5000)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nEXACT-MOMENT RETRIEVED KNOWLEDGE:\n${exactMomentKnowledge.substring(0, 12000)}\n\nKNOWLEDGE GRAPH:\n${knowledgeGraphContext.text.substring(0, 3500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
             },
           ],
           temperature: 0.2,
@@ -2179,12 +2307,50 @@ ${jsonFormat}
       principleName: friendKnowledgeContract.principleName || null,
       sourceName: friendKnowledgeContract.sourceName || null,
     } : null;
+    let decisionTrace: { decisionId: string | null; attemptIds: string[] } = { decisionId: null, attemptIds: [] };
+    if (activeThreadType === "friend" && mode !== "refine") {
+      const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
+      decisionTrace = await persistSalesDecision({
+        supabase,
+        userId: user.id,
+        workspaceId: prospect.workspace_id,
+        prospectId,
+        threadType: activeThreadType,
+        inputMessageId: latestInbound?.id || null,
+        inputText: message,
+        analysis: structuredFriendProfile || combinedFriendLearning || parsed,
+        selectedPrinciple: lockedFriendPrinciple,
+        selectedKnowledgeNodeId: lockedFriendPrinciple?.id
+          ? knowledgeGraphContext.nodeByPrinciple[lockedFriendPrinciple.id] || null
+          : null,
+        graphPath: knowledgeGraphContext.paths,
+        scoreBreakdown: {
+          retrieval_query: decisionSearchQuery,
+          outcome_performance: strategyPerformance,
+          knowledge_contract_required: friendKnowledgeContract?.required || false,
+        },
+        modelProvider: chat.provider,
+        modelName: chat.models.balanced,
+        workspaceOffer: JSON.stringify(
+          workspace?.offer_truth || workspace?.products_detected || workspace?.expert_description || workspace?.store_url || "",
+        ).slice(0, 1500),
+        generationStatus: parsed.qualityValidation?.fallbackApplied ? "fallback" : "generated",
+        variants: parsed.suggestions || [],
+      });
+      (parsed.suggestions || []).forEach((suggestion: any, index: number) => {
+        suggestion.decisionId = decisionTrace.decisionId;
+        suggestion.strategyAttemptId = decisionTrace.attemptIds[index] || null;
+      });
+    }
+    parsed.decisionTrace = decisionTrace;
     parsed.brainRetrieval = {
       chunksRetrieved: topChunks.length,
       uniqueSources: new Set([...topChunks.map((c: any) => c.source_id)].filter(Boolean)).size,
       sources: Array.from(sourceTypes),
       insightsRetrieved: brainInsights?.length || 0,
       retrievalPhase: activeThreadType === "friend" ? "analysis_then_decision_search" : "message_search",
+      graphPathsRetrieved: knowledgeGraphContext.paths.length,
+      outcomeRankedStrategies: strategyPerformance.length,
     };
 
     return new Response(JSON.stringify(parsed), {

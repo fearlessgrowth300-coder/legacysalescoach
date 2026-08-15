@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { describeApiKey, getLatestUserApiKey, getAllUserApiKeys } from "../_shared/api-key-utils.ts";
 import { resolveAiProvider, aiEmbed, type AiProvider } from "../_shared/ai-provider.ts";
 import { shouldOmitGeminiSamplingParameters } from "../_shared/gemini-models.ts";
+import { extractSalesOntology, persistSalesKnowledgeGraph } from "../_shared/sales-superbrain.ts";
 
 function compatibleTemperature(ai: AiProvider, model: string, value: number): number | undefined {
   return shouldOmitGeminiSamplingParameters(ai.name, model) ? undefined : value;
@@ -173,12 +174,30 @@ For EVERY learning you extract, return it in this exact JSON structure:
                             connects to or should be used alongside]",
 
   "trigger_phrases": "[3-5 key words or phrases that should trigger retrieval 
-                      of this principle when someone asks about it]"
+                      of this principle when someone asks about it]",
+
+  "knowledge_types": ["principle|strategy|technique|warning|psychology|script|example"],
+  "objection_types": ["price|trust|timing|authority|need|risk|competition|other"],
+  "hidden_causes": ["Specific possible causes this learning diagnoses"],
+  "buying_stages": ["awareness|consideration|evaluation|decision|post_purchase"],
+  "psychological_mechanisms": ["Specific buyer psychology mechanisms involved"],
+  "intended_outcomes": ["What applying this is meant to accomplish"],
+  "strategies": ["The distinct overall approaches recommended in this learning"],
+  "techniques": ["Distinct concrete actions taught in this learning"],
+  "contraindications": ["Specific conditions where this move should not be used"],
+  "language_patterns": ["Short reusable phrasing patterns, not invented personal claims"],
+  "knowledge_relationships": [{"from_type":"technique","from":"Exact extracted technique name","relationship":"technique_handles_objection","to_type":"objection","to":"Exact extracted objection name","confidence":0.0}],
+  "evidence_quote": "[A short exact quote from THIS source chunk that supports the learning]",
+  "evidence_mode": "verbatim|paraphrased|inferred",
+  "speaker": "[Speaker/author if identifiable, otherwise empty]",
+  "extraction_confidence": 0.85
 }
 
 ---
 
 EXTRACTION RULES:
+
+For knowledge_relationships, only connect objects actually extracted in this same principle. Allowed relationships: objection_has_possible_cause, cause_increases_emotion, technique_handles_cause, technique_handles_objection, technique_requires_stage, technique_contraindicated_when, technique_sequences_before, strategy_uses_technique, trigger_activates_technique, technique_produces_outcome, language_pattern_expresses_technique, example_demonstrates_principle. Use the exact names from the typed arrays.
 
 1. NEVER summarise multiple ideas into one principle. Each distinct idea gets its own entry. If the speaker makes 8 points — extract 8.
 
@@ -239,7 +258,11 @@ Return a single JSON object with this exact shape: { "principles": [ ...principl
     } else if (finishReason === "length") {
       console.log(`Pass 2 salvaged ${parsed.length} principles from truncated output.`);
     }
-    return parsed;
+    return parsed.map((learning) => ({
+      ...learning,
+      _source_window: chunkIndex,
+      _source_window_total: totalChunks,
+    }));
   } catch (e) {
     console.error("Structured learnings extraction failed:", e);
     return [];
@@ -508,10 +531,26 @@ Return JSON ONLY:
 "real_example_or_story":"any example or story the author uses, kept concrete (else empty)",
 "words_to_never_use":"phrases to avoid (if mentioned, else empty)",
 "trigger_phrases":"3-6 comma-separated phrases that signal this applies",
+"knowledge_types":["principle|strategy|technique|warning|psychology|script|example"],
+"objection_types":["price|trust|timing|authority|need|risk|competition|other"],
+"hidden_causes":["specific possible causes diagnosed by this learning"],
+"buying_stages":["awareness|consideration|evaluation|decision|post_purchase"],
+"psychological_mechanisms":["buyer psychology mechanisms involved"],
+"intended_outcomes":["what applying this is intended to achieve"],
+"strategies":["distinct overall approaches recommended"],
+"techniques":["distinct concrete actions taught"],
+"contraindications":["conditions where this should not be used"],
+"language_patterns":["short reusable phrasing patterns"],
+"knowledge_relationships":[{"from_type":"technique","from":"exact extracted technique name","relationship":"technique_handles_objection","to_type":"objection","to":"exact extracted objection name","confidence":0.0}],
+"evidence_quote":"a short exact quote from THIS section supporting the learning",
+"evidence_mode":"verbatim|paraphrased|inferred",
+"speaker":"speaker or author if identifiable, otherwise empty",
+"extraction_confidence":0.85,
 "power_level":7
 }]}
 
 RULES:
+- For knowledge_relationships, only connect objects extracted in this same principle. Allowed relationships: objection_has_possible_cause, cause_increases_emotion, technique_handles_cause, technique_handles_objection, technique_requires_stage, technique_contraindicated_when, technique_sequences_before, strategy_uses_technique, trigger_activates_technique, technique_produces_outcome, language_pattern_expresses_technique, example_demonstrates_principle. Use exact names from the typed arrays.
 - Extract UP TO 6 distinct, high-value principles from this section. Capture the genuinely valuable ideas, scripts, frameworks, warnings, objection-handlers, and stories. Do NOT pad with weak or duplicate items.
 - exact_words_to_use MUST be VERBATIM — reproduce the author's scripts and exact lines word-for-word, no paraphrasing or shortening.
 - what_i_learned must be RICH (3+ sentences), never a one-line headline.
@@ -525,7 +564,12 @@ RULES:
     });
     if (!response.ok) return [];
     const data = await response.json();
-    return parsePrinciplesJson(data.choices?.[0]?.message?.content || "");
+    return parsePrinciplesJson(data.choices?.[0]?.message?.content || "").map((learning) => ({
+      ...learning,
+      _source_window: chunkIndex,
+      _source_window_total: totalChunks,
+      _chapter_title: chapterTitle,
+    }));
   } catch (e) {
     console.error("Book chunk extraction failed fast:", e);
     return [];
@@ -696,7 +740,7 @@ const SOURCE_INDEX_VERSION = 2;
 // Bump whenever the structured-insight contract changes. This also gives
 // Lovable Cloud an explicit function diff so publishing cannot treat the Edge
 // deployment as unchanged while only updating the frontend bundle.
-const PROCESS_KNOWLEDGE_PIPELINE_VERSION = 4;
+const PROCESS_KNOWLEDGE_PIPELINE_VERSION = 5;
 
 function sourcePassageType(type: string, url?: string | null): "pdf" | "video" | "content" {
   if (type === "pdf") return "pdf";
@@ -820,6 +864,56 @@ async function markSourceIndexReady(supabase: any, userId: string, itemId: strin
 }
 
 // ===== Persist a single learning row + companion chunk (used by both pipelines) =====
+function evidenceTokens(value: unknown): string[] {
+  return [...new Set(String(value || "").toLowerCase().match(/[a-z0-9]{4,}/g) || [])].slice(0, 120);
+}
+
+async function findBestEvidencePassage(
+  supabase: any,
+  userId: string,
+  sourceId: string,
+  learning: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const { data, error } = await supabase.from("knowledge_chunks")
+      .select("id, content, chunk_index, locator, metadata")
+      .eq("user_id", userId)
+      .eq("source_id", sourceId)
+      .eq("chunk_kind", "source_passage")
+      .order("chunk_index", { ascending: true })
+      .limit(300);
+    if (error || !data?.length) return null;
+
+    const ontology = extractSalesOntology(learning);
+    const needle = evidenceTokens([
+      ontology.evidenceQuote,
+      learning.what_i_learned,
+      learning.exact_words_to_use,
+      learning.when_to_use,
+    ].filter(Boolean).join(" "));
+    const chapter = String(learning._chapter_title || learning._chapter || "").toLowerCase();
+    let best: Record<string, unknown> | null = null;
+    let bestScore = -1;
+    for (const passage of data) {
+      const content = String(passage.content || "").toLowerCase();
+      const locator = String(passage.locator || "").toLowerCase();
+      let score = needle.reduce((sum, token) => sum + (content.includes(token) ? 1 : 0), 0);
+      if (ontology.evidenceQuote && content.includes(ontology.evidenceQuote.toLowerCase().slice(0, 90))) score += 30;
+      if (chapter && locator.includes(chapter.slice(0, 60))) score += 12;
+      const sourceWindow = Number(learning._source_window);
+      if (Number.isFinite(sourceWindow) && Number(passage.chunk_index) === sourceWindow) score += 3;
+      if (score > bestScore) {
+        best = passage;
+        bestScore = score;
+      }
+    }
+    return bestScore > 0 ? best : null;
+  } catch (error) {
+    console.warn("Evidence passage matching skipped:", error);
+    return null;
+  }
+}
+
 async function persistLearning(
   supabase: any,
   userId: string,
@@ -842,6 +936,7 @@ async function persistLearning(
     learning.trigger_phrases,
   ].filter((s) => typeof s === "string" && s.trim().length > 0).join(" | ");
   const embedding = await generateEmbedding(embeddingText, ai);
+  const ontology = extractSalesOntology(learning);
 
   const brainRow = {
     user_id: userId,
@@ -867,19 +962,53 @@ async function persistLearning(
     metadata: { source: sourceName, chapter: learning._chapter || null },
     embedding,
     workspace_id: null,
+    knowledge_types: ontology.knowledgeTypes,
+    objection_types: ontology.objectionTypes,
+    hidden_causes: ontology.hiddenCauses,
+    buying_stages: ontology.buyingStages,
+    psychological_mechanisms: ontology.psychologicalMechanisms,
+    intended_outcomes: ontology.intendedOutcomes,
+    techniques: ontology.techniques,
+    contraindications: ontology.contraindications,
+    language_patterns: ontology.languagePatterns,
+    extraction_confidence: ontology.extractionConfidence,
+    evidence_mode: ontology.evidenceMode,
   };
 
   let inserted: any = null;
-  const { data: upserted, error: upsertErr } = await supabase
+  let { data: upserted, error: upsertErr } = await supabase
     .from("sales_brain")
     .insert(brainRow)
     .select()
     .single();
 
+  // Deploying the function before the additive migration must not break the
+  // existing knowledge pipeline. Store the legacy row and let the next upgrade
+  // populate ontology fields after the migration is applied.
+  if (upsertErr && /column .* does not exist|schema cache/i.test(upsertErr.message || "")) {
+    const {
+      knowledge_types: _knowledgeTypes,
+      objection_types: _objectionTypes,
+      hidden_causes: _hiddenCauses,
+      buying_stages: _buyingStages,
+      psychological_mechanisms: _psychologicalMechanisms,
+      intended_outcomes: _intendedOutcomes,
+      techniques: _techniques,
+      contraindications: _contraindications,
+      language_patterns: _languagePatterns,
+      extraction_confidence: _extractionConfidence,
+      evidence_mode: _evidenceMode,
+      ...legacyBrainRow
+    } = brainRow;
+    const legacyResult = await supabase.from("sales_brain").insert(legacyBrainRow).select().single();
+    upserted = legacyResult.data;
+    upsertErr = legacyResult.error;
+  }
+
   if (upserted) {
     inserted = upserted;
   } else if (upsertErr && /duplicate key|unique/i.test(upsertErr.message || "")) {
-    const { data: updated } = await supabase
+    let { data: updated, error: updateError } = await supabase
       .from("sales_brain")
       .update(brainRow)
       .eq("user_id", userId)
@@ -887,6 +1016,32 @@ async function persistLearning(
       .ilike("principle_name", principleName)
       .select()
       .single();
+    if (updateError && /column .* does not exist|schema cache/i.test(updateError.message || "")) {
+      const {
+        knowledge_types: _knowledgeTypes,
+        objection_types: _objectionTypes,
+        hidden_causes: _hiddenCauses,
+        buying_stages: _buyingStages,
+        psychological_mechanisms: _psychologicalMechanisms,
+        intended_outcomes: _intendedOutcomes,
+        techniques: _techniques,
+        contraindications: _contraindications,
+        language_patterns: _languagePatterns,
+        extraction_confidence: _extractionConfidence,
+        evidence_mode: _evidenceMode,
+        ...legacyBrainRow
+      } = brainRow;
+      const legacyUpdate = await supabase.from("sales_brain")
+        .update(legacyBrainRow)
+        .eq("user_id", userId)
+        .eq("source_id", itemId)
+        .ilike("principle_name", principleName)
+        .select()
+        .single();
+      updated = legacyUpdate.data;
+      updateError = legacyUpdate.error;
+    }
+    if (updateError) console.warn("Principle update skipped:", updateError.message);
     inserted = updated;
   } else if (upsertErr) {
     // FK violation = parent knowledge_base_items row was deleted (e.g. user removed
@@ -902,9 +1057,10 @@ async function persistLearning(
   if (inserted) {
     const chunkContent = `${principleName}: ${learning.what_i_learned || ""}\n\nApply: ${learning.how_to_apply || ""}`;
     const chunkKey = chunkContent.trim().toLowerCase();
+    let principleChunkId: string | null = null;
     if (!seenChunkContent.has(chunkKey)) {
       seenChunkContent.add(chunkKey);
-      await supabase.from("knowledge_chunks").insert({
+      const { data: savedChunk, error: savedChunkError } = await supabase.from("knowledge_chunks").insert({
         user_id: userId,
         source_id: itemId,
         category: learning.category || "general",
@@ -922,7 +1078,30 @@ async function persistLearning(
           chapter_index: learning._chapter || null,
           source_title: sourceName,
         },
+      }).select("id").single();
+      if (savedChunkError) console.warn("Principle summary chunk insert skipped:", savedChunkError.message);
+      principleChunkId = savedChunk?.id || null;
+    }
+
+    try {
+      const evidenceChunk = await findBestEvidencePassage(supabase, userId, itemId, learning);
+      const knowledgeNodeId = await persistSalesKnowledgeGraph({
+        supabase,
+        userId,
+        workspaceId: null,
+        sourceId: itemId,
+        salesBrainId: inserted.id,
+        principleName,
+        summary: learning.what_i_learned || learning.how_to_apply || principleName,
+        learning,
+        principleChunkId,
+        evidenceChunk,
       });
+      inserted.knowledge_node_id = knowledgeNodeId;
+    } catch (graphError) {
+      // The source remains usable through the existing RAG tables if the
+      // additive Sales Superbrain migration has not been applied yet.
+      console.warn("Sales ontology/graph persistence skipped:", graphError);
     }
   }
   return inserted;

@@ -11,6 +11,10 @@ export type FriendProspectProfile = {
   desires: string[];
   pain_points: string[];
   objections: string[];
+  questions_already_answered: string[];
+  objections_handled: string[];
+  strategies_attempted: string[];
+  exact_unresolved_issue: string;
   motivation: string;
   intent: string;
   tangible_goal: string;
@@ -106,6 +110,10 @@ export function buildFriendProspectProfile(
     desires: mergeLists(prior.desires, next.desires ?? next.prospect_dreams),
     pain_points: mergeLists(prior.pain_points, next.pain_points),
     objections: mergeLists(prior.objections, next.objections ?? (next.objection_detected ? [next.objection_detected] : [])),
+    questions_already_answered: mergeLists(prior.questions_already_answered, next.questions_already_answered, 24),
+    objections_handled: mergeLists(prior.objections_handled, next.objections_handled, 16),
+    strategies_attempted: mergeLists(prior.strategies_attempted, next.strategies_attempted, 20),
+    exact_unresolved_issue: choose("exact_unresolved_issue", choose("problem_gap", "unknown", 400), 500),
     motivation: choose("motivation", "unknown", 300),
     intent: choose("intent", "unknown", 300),
     tangible_goal: choose("tangible_goal", "unknown", 300),
@@ -148,6 +156,10 @@ export function buildFriendLearningContext(
     `Desires: ${cleanList(p.desires).join(", ") || "unknown"}`,
     `Pain points: ${cleanList(p.pain_points).join(", ") || "unknown"}`,
     `Objections: ${cleanList(p.objections).join(", ") || "none observed"}`,
+    `Questions already answered: ${cleanList(p.questions_already_answered, 24).join("; ") || "none recorded"}`,
+    `Objections already handled: ${cleanList(p.objections_handled, 16).join("; ") || "none recorded"}`,
+    `Strategies already attempted: ${cleanList(p.strategies_attempted, 20).join("; ") || "none recorded"}`,
+    `Exact unresolved issue: ${cleanText(p.exact_unresolved_issue)}`,
     `Motivation: ${cleanText(p.motivation)}`,
     `Intent: ${cleanText(p.intent)}`,
     `Tangible goal: ${cleanText(p.tangible_goal)}`,
@@ -230,6 +242,10 @@ export function buildFriendDecisionSearchQuery(
     `Doubt cause: ${value("doubt_cause")}`,
     `Missing logical certainty: ${value("certainty_gap")}`,
     `Objections: ${list("objections")}`,
+    `Questions already answered (do not ask again): ${list("questions_already_answered")}`,
+    `Objections already handled: ${list("objections_handled")}`,
+    `Strategies already attempted: ${list("strategies_attempted")}`,
+    `Exact unresolved issue: ${value("exact_unresolved_issue", value("problem_gap"))}`,
     `Readiness: ${value("readiness", value("referral_readiness", "not_ready"))}`,
     `Conversation stage: ${value("stage", value("questioningPattern", "unknown"))}`,
     `Best conversational act: ${value("reply_act", value("recommended_move", "respond naturally"))}`,
