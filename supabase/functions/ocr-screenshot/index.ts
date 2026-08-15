@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { resolveUserChatTarget, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { buildVisionModelChain } from "../_shared/gemini-models.ts";
 
 
 const corsHeaders = {
@@ -123,8 +124,7 @@ Rules:
 - Do not merge separate bubbles into one message.
 - Capture reactions, quoted replies, timestamps, read/seen state, attachments, and who sent the latest message.
 - Do not give sales advice. Return JSON only.`;
-    const visionModels = [chat.models.vision, ...(chat.visionFallbackModels || [])]
-      .filter((model, index, list) => model && list.indexOf(model) === index);
+    const visionModels = buildVisionModelChain(chat.models.vision, chat.visionFallbackModels);
     let extractedText = "";
     let lastError = "";
 

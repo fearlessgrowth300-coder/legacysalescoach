@@ -16,6 +16,7 @@ import { toAnthropicContent } from "./anthropic-content.ts";
 import {
   GEMINI_CHAT_MODELS,
   GEMINI_EMBEDDING_MODEL,
+  GEMINI_VISION_FALLBACK_MODELS,
   shouldOmitGeminiSamplingParameters,
 } from "./gemini-models.ts";
 
@@ -134,7 +135,7 @@ export async function resolveUserChatTarget(
       url: `${GEMINI_BASE}/chat/completions`,
       headers: { Authorization: `Bearer ${found.key}`, "Content-Type": "application/json" },
       models: { ...GEMINI_CHAT_MODELS },
-      visionFallbackModels: [GEMINI_CHAT_MODELS.vision],
+      visionFallbackModels: [...GEMINI_VISION_FALLBACK_MODELS],
       isAnthropic: false,
     };
   }
