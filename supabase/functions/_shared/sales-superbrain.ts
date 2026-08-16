@@ -822,13 +822,21 @@ export async function traverseSalesKnowledgeGraph(
   userId: string,
   decisionQuery: string,
   maxConcepts = 6,
+  options: { includeGeneralConcepts?: boolean } = {},
 ): Promise<{ text: string; paths: Array<Record<string, unknown>>; candidateSalesBrainIds: string[] }> {
   try {
     const queryTokens = new Set(normalizeSalesKey(decisionQuery).split("_").filter((token) => token.length > 3));
+    const conceptTypes = options.includeGeneralConcepts
+      ? [
+          "principle", "strategy", "technique", "trigger", "contraindication",
+          "psychology", "objection", "hidden_cause", "buying_stage", "example",
+          "language_pattern", "intended_outcome", "emotion", "proof_type",
+        ]
+      : ["objection", "hidden_cause", "buying_stage", "psychology", "trigger", "intended_outcome"];
     const { data: concepts, error: conceptError } = await supabase.from("sales_concepts")
       .select("id, concept_type, canonical_key, name")
       .eq("user_id", userId)
-      .in("concept_type", ["objection", "hidden_cause", "buying_stage", "psychology", "trigger", "intended_outcome"])
+      .in("concept_type", conceptTypes)
       .limit(300);
     if (conceptError || !concepts?.length) return { text: "(no matching graph concepts)", paths: [], candidateSalesBrainIds: [] };
     const rankedConcepts = concepts.map((concept: any) => {

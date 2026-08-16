@@ -114,6 +114,7 @@ describe("AI Chat connection helpers", () => {
     expect(classifyBrainChatIntent("Summarize the main lessons from Objection Crusher")).toBe("source_summary");
     expect(classifyBrainChatIntent("Compare SPIN Selling versus Never Split the Difference")).toBe("source_comparison");
     expect(classifyBrainChatIntent("Write an Instagram caption for my course")).toBe("copywriting");
+    expect(classifyBrainChatIntent("Build a funnel and content calendar for my new offer")).toBe("business_planning");
     expect(classifyBrainChatIntent("What does the knowledge base teach about trust?")).toBe("knowledge_qa");
     expect(classifyBrainChatIntent("How should objections be handled according to the books?")).toBe("knowledge_qa");
     expect(classifyBrainChatIntent("This buyer said the price is too high. What should I reply?")).toBe("conversation_coaching");

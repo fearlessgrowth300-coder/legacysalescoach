@@ -33,7 +33,8 @@ export type BrainChatIntent =
   | "source_summary"
   | "source_comparison"
   | "copywriting"
-  | "conversation_coaching";
+  | "conversation_coaching"
+  | "business_planning";
 
 export function classifyBrainChatIntent(text: string, hasImage = false): BrainChatIntent {
   const value = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -46,6 +47,9 @@ export function classifyBrainChatIntent(text: string, hasImage = false): BrainCh
   }
   if (/\b(?:write|rewrite|draft|create)\b.*\b(?:caption|email|post|script|landing page|headline|hook|copy)\b/.test(value)) {
     return "copywriting";
+  }
+  if (/\b(?:build|create|plan|design|improve|fix|audit|launch|outline)\b.*\b(?:offer|product|funnel|strategy|business|content calendar|marketing plan|sales process|campaign|roadmap)\b/.test(value)) {
+    return "business_planning";
   }
   if (/\b(?:what should i reply|what do i say|reply to (?:her|him|them)|message should i send|(?:my|this|the) (?:prospect|buyer|lead|client)|(?:she|he|they) (?:said|replied|asked|told me)|pasted conversation|conversation below|dm conversation|ghosted me|close this prospect)\b/.test(value)) {
     return "conversation_coaching";
