@@ -544,6 +544,96 @@ export type Database = {
           },
         ]
       }
+      knowledge_evidence_links: {
+        Row: {
+          created_at: string
+          evidence_mode: string
+          extraction_confidence: number
+          id: string
+          knowledge_chunk_id: string | null
+          locator: string | null
+          metadata: Json
+          node_id: string
+          quoted_text: string | null
+          sales_brain_id: string | null
+          source_id: string | null
+          speaker: string | null
+          supports_or_contradicts: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          evidence_mode?: string
+          extraction_confidence?: number
+          id?: string
+          knowledge_chunk_id?: string | null
+          locator?: string | null
+          metadata?: Json
+          node_id: string
+          quoted_text?: string | null
+          sales_brain_id?: string | null
+          source_id?: string | null
+          speaker?: string | null
+          supports_or_contradicts?: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          evidence_mode?: string
+          extraction_confidence?: number
+          id?: string
+          knowledge_chunk_id?: string | null
+          locator?: string | null
+          metadata?: Json
+          node_id?: string
+          quoted_text?: string | null
+          sales_brain_id?: string | null
+          source_id?: string | null
+          speaker?: string | null
+          supports_or_contradicts?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "knowledge_evidence_links_knowledge_chunk_id_fkey"
+            columns: ["knowledge_chunk_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_chunks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "knowledge_evidence_links_node_id_fkey"
+            columns: ["node_id"]
+            isOneToOne: false
+            referencedRelation: "sales_knowledge_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "knowledge_evidence_links_sales_brain_id_fkey"
+            columns: ["sales_brain_id"]
+            isOneToOne: false
+            referencedRelation: "sales_brain"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "knowledge_evidence_links_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_base_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "knowledge_evidence_links_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_registry: {
         Row: {
           contact_status: string
@@ -763,6 +853,101 @@ export type Database = {
         }
         Relationships: []
       }
+      prospect_fact_ledger: {
+        Row: {
+          confidence: number
+          contradicts_fact_id: string | null
+          created_at: string
+          fact_key: string
+          fact_value: Json
+          first_observed_at: string
+          id: string
+          invalidated_at: string | null
+          last_confirmed_at: string
+          metadata: Json
+          normalized_value: string
+          prospect_id: string
+          source_direction: string | null
+          source_message_id: string | null
+          status: string
+          thread_type: string
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          confidence?: number
+          contradicts_fact_id?: string | null
+          created_at?: string
+          fact_key: string
+          fact_value: Json
+          first_observed_at?: string
+          id?: string
+          invalidated_at?: string | null
+          last_confirmed_at?: string
+          metadata?: Json
+          normalized_value: string
+          prospect_id: string
+          source_direction?: string | null
+          source_message_id?: string | null
+          status?: string
+          thread_type?: string
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          confidence?: number
+          contradicts_fact_id?: string | null
+          created_at?: string
+          fact_key?: string
+          fact_value?: Json
+          first_observed_at?: string
+          id?: string
+          invalidated_at?: string | null
+          last_confirmed_at?: string
+          metadata?: Json
+          normalized_value?: string
+          prospect_id?: string
+          source_direction?: string | null
+          source_message_id?: string | null
+          status?: string
+          thread_type?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "prospect_fact_ledger_contradicts_fact_id_fkey"
+            columns: ["contradicts_fact_id"]
+            isOneToOne: false
+            referencedRelation: "prospect_fact_ledger"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "prospect_fact_ledger_prospect_id_fkey"
+            columns: ["prospect_id"]
+            isOneToOne: false
+            referencedRelation: "prospects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "prospect_fact_ledger_source_message_id_fkey"
+            columns: ["source_message_id"]
+            isOneToOne: false
+            referencedRelation: "chat_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "prospect_fact_ledger_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       prospects: {
         Row: {
           conversation_stage: string
@@ -849,22 +1034,33 @@ export type Database = {
       sales_brain: {
         Row: {
           brain_type: string
+          buying_stages: string[]
           category: string
           common_mistake: string | null
           connected_principles: string | null
+          contraindications: string[]
           created_at: string
           embedding: string | null
+          evidence_mode: string
           exact_words_to_use: string | null
+          extraction_confidence: number
+          hidden_causes: string[]
           how_to_apply: string
           id: string
+          intended_outcomes: string[]
+          knowledge_types: string[]
+          language_patterns: string[]
           metadata: Json | null
+          objection_types: string[]
           power_level: number | null
           principle_name: string
+          psychological_mechanisms: string[]
           real_example_or_story: string | null
           relevance_score: number | null
           source_id: string | null
           source_name: string
           source_type: string
+          techniques: string[]
           the_deep_why: string | null
           user_id: string
           what_i_learned: string
@@ -876,22 +1072,33 @@ export type Database = {
         }
         Insert: {
           brain_type?: string
+          buying_stages?: string[]
           category?: string
           common_mistake?: string | null
           connected_principles?: string | null
+          contraindications?: string[]
           created_at?: string
           embedding?: string | null
+          evidence_mode?: string
           exact_words_to_use?: string | null
+          extraction_confidence?: number
+          hidden_causes?: string[]
           how_to_apply: string
           id?: string
+          intended_outcomes?: string[]
+          knowledge_types?: string[]
+          language_patterns?: string[]
           metadata?: Json | null
+          objection_types?: string[]
           power_level?: number | null
           principle_name: string
+          psychological_mechanisms?: string[]
           real_example_or_story?: string | null
           relevance_score?: number | null
           source_id?: string | null
           source_name: string
           source_type?: string
+          techniques?: string[]
           the_deep_why?: string | null
           user_id: string
           what_i_learned: string
@@ -903,22 +1110,33 @@ export type Database = {
         }
         Update: {
           brain_type?: string
+          buying_stages?: string[]
           category?: string
           common_mistake?: string | null
           connected_principles?: string | null
+          contraindications?: string[]
           created_at?: string
           embedding?: string | null
+          evidence_mode?: string
           exact_words_to_use?: string | null
+          extraction_confidence?: number
+          hidden_causes?: string[]
           how_to_apply?: string
           id?: string
+          intended_outcomes?: string[]
+          knowledge_types?: string[]
+          language_patterns?: string[]
           metadata?: Json | null
+          objection_types?: string[]
           power_level?: number | null
           principle_name?: string
+          psychological_mechanisms?: string[]
           real_example_or_story?: string | null
           relevance_score?: number | null
           source_id?: string | null
           source_name?: string
           source_type?: string
+          techniques?: string[]
           the_deep_why?: string | null
           user_id?: string
           what_i_learned?: string
@@ -938,6 +1156,766 @@ export type Database = {
           },
           {
             foreignKeyName: "sales_brain_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_concepts: {
+        Row: {
+          aliases: string[]
+          canonical_key: string
+          concept_type: string
+          created_at: string
+          description: string | null
+          id: string
+          metadata: Json
+          name: string
+          updated_at: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          aliases?: string[]
+          canonical_key: string
+          concept_type: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          metadata?: Json
+          name: string
+          updated_at?: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          aliases?: string[]
+          canonical_key?: string
+          concept_type?: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          metadata?: Json
+          name?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_concepts_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_decisions: {
+        Row: {
+          analysis_snapshot: Json
+          created_at: string
+          earliest_missing_checkpoint: string | null
+          funnel_stage: string | null
+          generation_status: string
+          hidden_cause_hypothesis: string | null
+          id: string
+          input_message_id: string | null
+          input_text: string
+          model_name: string | null
+          model_provider: string | null
+          next_best_action: string | null
+          objection_type: string | null
+          prospect_fact_used: string | null
+          prospect_id: string
+          score_breakdown: Json
+          selected_graph_path: Json
+          selected_knowledge_node_id: string | null
+          selected_sales_brain_id: string | null
+          thread_type: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          analysis_snapshot?: Json
+          created_at?: string
+          earliest_missing_checkpoint?: string | null
+          funnel_stage?: string | null
+          generation_status?: string
+          hidden_cause_hypothesis?: string | null
+          id?: string
+          input_message_id?: string | null
+          input_text: string
+          model_name?: string | null
+          model_provider?: string | null
+          next_best_action?: string | null
+          objection_type?: string | null
+          prospect_fact_used?: string | null
+          prospect_id: string
+          score_breakdown?: Json
+          selected_graph_path?: Json
+          selected_knowledge_node_id?: string | null
+          selected_sales_brain_id?: string | null
+          thread_type?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          analysis_snapshot?: Json
+          created_at?: string
+          earliest_missing_checkpoint?: string | null
+          funnel_stage?: string | null
+          generation_status?: string
+          hidden_cause_hypothesis?: string | null
+          id?: string
+          input_message_id?: string | null
+          input_text?: string
+          model_name?: string | null
+          model_provider?: string | null
+          next_best_action?: string | null
+          objection_type?: string | null
+          prospect_fact_used?: string | null
+          prospect_id?: string
+          score_breakdown?: Json
+          selected_graph_path?: Json
+          selected_knowledge_node_id?: string | null
+          selected_sales_brain_id?: string | null
+          thread_type?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_decisions_input_message_id_fkey"
+            columns: ["input_message_id"]
+            isOneToOne: false
+            referencedRelation: "chat_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_decisions_prospect_id_fkey"
+            columns: ["prospect_id"]
+            isOneToOne: false
+            referencedRelation: "prospects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_decisions_selected_knowledge_node_id_fkey"
+            columns: ["selected_knowledge_node_id"]
+            isOneToOne: false
+            referencedRelation: "sales_knowledge_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_decisions_selected_sales_brain_id_fkey"
+            columns: ["selected_sales_brain_id"]
+            isOneToOne: false
+            referencedRelation: "sales_brain"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_decisions_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_evaluation_cases: {
+        Row: {
+          active: boolean
+          anonymized: boolean
+          created_at: string
+          expected_facts: Json
+          expected_knowledge: Json
+          expected_reply_constraints: Json
+          expected_stage: string | null
+          id: string
+          input_conversation: Json
+          name: string
+          updated_at: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          active?: boolean
+          anonymized?: boolean
+          created_at?: string
+          expected_facts?: Json
+          expected_knowledge?: Json
+          expected_reply_constraints?: Json
+          expected_stage?: string | null
+          id?: string
+          input_conversation: Json
+          name: string
+          updated_at?: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          active?: boolean
+          anonymized?: boolean
+          created_at?: string
+          expected_facts?: Json
+          expected_knowledge?: Json
+          expected_reply_constraints?: Json
+          expected_stage?: string | null
+          id?: string
+          input_conversation?: Json
+          name?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_evaluation_cases_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_evaluation_runs: {
+        Row: {
+          created_at: string
+          evaluation_case_id: string
+          failure_reasons: string[]
+          generated_decision: Json
+          generated_reply: string | null
+          id: string
+          metrics: Json
+          model_name: string | null
+          model_provider: string | null
+          passed: boolean
+          total_score: number | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          evaluation_case_id: string
+          failure_reasons?: string[]
+          generated_decision?: Json
+          generated_reply?: string | null
+          id?: string
+          metrics?: Json
+          model_name?: string | null
+          model_provider?: string | null
+          passed?: boolean
+          total_score?: number | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          evaluation_case_id?: string
+          failure_reasons?: string[]
+          generated_decision?: Json
+          generated_reply?: string | null
+          id?: string
+          metrics?: Json
+          model_name?: string | null
+          model_provider?: string | null
+          passed?: boolean
+          total_score?: number | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_evaluation_runs_evaluation_case_id_fkey"
+            columns: ["evaluation_case_id"]
+            isOneToOne: false
+            referencedRelation: "sales_evaluation_cases"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_knowledge_edges: {
+        Row: {
+          confidence: number
+          created_at: string
+          evidence_count: number
+          from_node_id: string
+          id: string
+          metadata: Json
+          relationship_type: string
+          to_node_id: string
+          updated_at: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          confidence?: number
+          created_at?: string
+          evidence_count?: number
+          from_node_id: string
+          id?: string
+          metadata?: Json
+          relationship_type: string
+          to_node_id: string
+          updated_at?: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          confidence?: number
+          created_at?: string
+          evidence_count?: number
+          from_node_id?: string
+          id?: string
+          metadata?: Json
+          relationship_type?: string
+          to_node_id?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_knowledge_edges_from_node_id_fkey"
+            columns: ["from_node_id"]
+            isOneToOne: false
+            referencedRelation: "sales_knowledge_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_knowledge_edges_to_node_id_fkey"
+            columns: ["to_node_id"]
+            isOneToOne: false
+            referencedRelation: "sales_knowledge_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_knowledge_edges_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_knowledge_nodes: {
+        Row: {
+          buying_stages: string[]
+          canonical_key: string
+          concept_id: string | null
+          confidence: number
+          created_at: string
+          id: string
+          metadata: Json
+          node_type: string
+          objection_types: string[]
+          sales_brain_id: string | null
+          source_id: string | null
+          summary: string | null
+          title: string
+          updated_at: string
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          buying_stages?: string[]
+          canonical_key: string
+          concept_id?: string | null
+          confidence?: number
+          created_at?: string
+          id?: string
+          metadata?: Json
+          node_type: string
+          objection_types?: string[]
+          sales_brain_id?: string | null
+          source_id?: string | null
+          summary?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          buying_stages?: string[]
+          canonical_key?: string
+          concept_id?: string | null
+          confidence?: number
+          created_at?: string
+          id?: string
+          metadata?: Json
+          node_type?: string
+          objection_types?: string[]
+          sales_brain_id?: string | null
+          source_id?: string | null
+          summary?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_knowledge_nodes_concept_id_fkey"
+            columns: ["concept_id"]
+            isOneToOne: false
+            referencedRelation: "sales_concepts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_knowledge_nodes_sales_brain_id_fkey"
+            columns: ["sales_brain_id"]
+            isOneToOne: false
+            referencedRelation: "sales_brain"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_knowledge_nodes_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_base_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_knowledge_nodes_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_outcome_events: {
+        Row: {
+          created_at: string
+          decision_id: string | null
+          event_type: string
+          event_value: number | null
+          funnel_stage: string | null
+          id: string
+          message_id: string | null
+          metadata: Json
+          model_name: string | null
+          model_provider: string | null
+          objection_type: string | null
+          occurred_at: string
+          prospect_id: string
+          prospect_segment: string | null
+          reply_style: string | null
+          strategy_attempt_id: string | null
+          strategy_key: string | null
+          user_id: string
+          workspace_id: string
+          workspace_offer: string | null
+        }
+        Insert: {
+          created_at?: string
+          decision_id?: string | null
+          event_type: string
+          event_value?: number | null
+          funnel_stage?: string | null
+          id?: string
+          message_id?: string | null
+          metadata?: Json
+          model_name?: string | null
+          model_provider?: string | null
+          objection_type?: string | null
+          occurred_at?: string
+          prospect_id: string
+          prospect_segment?: string | null
+          reply_style?: string | null
+          strategy_attempt_id?: string | null
+          strategy_key?: string | null
+          user_id: string
+          workspace_id: string
+          workspace_offer?: string | null
+        }
+        Update: {
+          created_at?: string
+          decision_id?: string | null
+          event_type?: string
+          event_value?: number | null
+          funnel_stage?: string | null
+          id?: string
+          message_id?: string | null
+          metadata?: Json
+          model_name?: string | null
+          model_provider?: string | null
+          objection_type?: string | null
+          occurred_at?: string
+          prospect_id?: string
+          prospect_segment?: string | null
+          reply_style?: string | null
+          strategy_attempt_id?: string | null
+          strategy_key?: string | null
+          user_id?: string
+          workspace_id?: string
+          workspace_offer?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_outcome_events_decision_id_fkey"
+            columns: ["decision_id"]
+            isOneToOne: false
+            referencedRelation: "sales_decisions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_outcome_events_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "chat_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_outcome_events_prospect_id_fkey"
+            columns: ["prospect_id"]
+            isOneToOne: false
+            referencedRelation: "prospects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_outcome_events_strategy_attempt_id_fkey"
+            columns: ["strategy_attempt_id"]
+            isOneToOne: false
+            referencedRelation: "sales_strategy_attempts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_outcome_events_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_strategy_attempts: {
+        Row: {
+          completed_at: string | null
+          copied_at: string | null
+          created_at: string
+          decision_id: string | null
+          final_outcome: string | null
+          first_suggested_at: string
+          funnel_stage: string | null
+          generated_message: string
+          hidden_cause_hypothesis: string | null
+          id: string
+          metadata: Json
+          permission_reached: boolean
+          prospect_fact_used: string | null
+          prospect_id: string
+          prospect_reaction: string | null
+          rationale: string | null
+          replied_at: string | null
+          reply_act: string | null
+          selected_knowledge_node_id: string | null
+          selected_sales_brain_id: string | null
+          sentiment_change: string | null
+          status: string
+          strategy_key: string
+          strategy_name: string | null
+          suggestion_id: string | null
+          thread_type: string
+          updated_at: string
+          used_at: string | null
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          copied_at?: string | null
+          created_at?: string
+          decision_id?: string | null
+          final_outcome?: string | null
+          first_suggested_at?: string
+          funnel_stage?: string | null
+          generated_message: string
+          hidden_cause_hypothesis?: string | null
+          id?: string
+          metadata?: Json
+          permission_reached?: boolean
+          prospect_fact_used?: string | null
+          prospect_id: string
+          prospect_reaction?: string | null
+          rationale?: string | null
+          replied_at?: string | null
+          reply_act?: string | null
+          selected_knowledge_node_id?: string | null
+          selected_sales_brain_id?: string | null
+          sentiment_change?: string | null
+          status?: string
+          strategy_key: string
+          strategy_name?: string | null
+          suggestion_id?: string | null
+          thread_type?: string
+          updated_at?: string
+          used_at?: string | null
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          copied_at?: string | null
+          created_at?: string
+          decision_id?: string | null
+          final_outcome?: string | null
+          first_suggested_at?: string
+          funnel_stage?: string | null
+          generated_message?: string
+          hidden_cause_hypothesis?: string | null
+          id?: string
+          metadata?: Json
+          permission_reached?: boolean
+          prospect_fact_used?: string | null
+          prospect_id?: string
+          prospect_reaction?: string | null
+          rationale?: string | null
+          replied_at?: string | null
+          reply_act?: string | null
+          selected_knowledge_node_id?: string | null
+          selected_sales_brain_id?: string | null
+          sentiment_change?: string | null
+          status?: string
+          strategy_key?: string
+          strategy_name?: string | null
+          suggestion_id?: string | null
+          thread_type?: string
+          updated_at?: string
+          used_at?: string | null
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_strategy_attempts_decision_id_fkey"
+            columns: ["decision_id"]
+            isOneToOne: false
+            referencedRelation: "sales_decisions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_strategy_attempts_prospect_id_fkey"
+            columns: ["prospect_id"]
+            isOneToOne: false
+            referencedRelation: "prospects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_strategy_attempts_selected_knowledge_node_id_fkey"
+            columns: ["selected_knowledge_node_id"]
+            isOneToOne: false
+            referencedRelation: "sales_knowledge_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_strategy_attempts_selected_sales_brain_id_fkey"
+            columns: ["selected_sales_brain_id"]
+            isOneToOne: false
+            referencedRelation: "sales_brain"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_strategy_attempts_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_strategy_performance: {
+        Row: {
+          copied_count: number
+          created_at: string
+          effectiveness_score: number
+          funnel_stage: string | null
+          ghosted_count: number
+          handoff_count: number
+          id: string
+          knowledge_node_id: string | null
+          last_event_at: string | null
+          objection_type: string | null
+          permission_count: number
+          positive_count: number
+          prospect_segment: string | null
+          refused_count: number
+          reply_count: number
+          sale_count: number
+          sales_brain_id: string | null
+          strategy_key: string
+          suggested_count: number
+          updated_at: string
+          used_count: number
+          user_id: string
+          workspace_id: string | null
+        }
+        Insert: {
+          copied_count?: number
+          created_at?: string
+          effectiveness_score?: number
+          funnel_stage?: string | null
+          ghosted_count?: number
+          handoff_count?: number
+          id?: string
+          knowledge_node_id?: string | null
+          last_event_at?: string | null
+          objection_type?: string | null
+          permission_count?: number
+          positive_count?: number
+          prospect_segment?: string | null
+          refused_count?: number
+          reply_count?: number
+          sale_count?: number
+          sales_brain_id?: string | null
+          strategy_key: string
+          suggested_count?: number
+          updated_at?: string
+          used_count?: number
+          user_id: string
+          workspace_id?: string | null
+        }
+        Update: {
+          copied_count?: number
+          created_at?: string
+          effectiveness_score?: number
+          funnel_stage?: string | null
+          ghosted_count?: number
+          handoff_count?: number
+          id?: string
+          knowledge_node_id?: string | null
+          last_event_at?: string | null
+          objection_type?: string | null
+          permission_count?: number
+          positive_count?: number
+          prospect_segment?: string | null
+          refused_count?: number
+          reply_count?: number
+          sale_count?: number
+          sales_brain_id?: string | null
+          strategy_key?: string
+          suggested_count?: number
+          updated_at?: string
+          used_count?: number
+          user_id?: string
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_strategy_performance_knowledge_node_id_fkey"
+            columns: ["knowledge_node_id"]
+            isOneToOne: false
+            referencedRelation: "sales_knowledge_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_strategy_performance_sales_brain_id_fkey"
+            columns: ["sales_brain_id"]
+            isOneToOne: false
+            referencedRelation: "sales_brain"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_strategy_performance_workspace_id_fkey"
             columns: ["workspace_id"]
             isOneToOne: false
             referencedRelation: "workspaces"
@@ -1310,6 +2288,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      get_sales_evaluation_dashboard: {
+        Args: { p_since?: string; p_user_id: string; p_workspace_id?: string }
+        Returns: Json
+      }
       match_knowledge_chunks: {
         Args: {
           match_count?: number
@@ -1358,6 +2340,29 @@ export type Database = {
           what_i_learned: string
           when_not_to_use: string
           when_to_use: string
+        }[]
+      }
+      normalize_sales_key: { Args: { value: string }; Returns: string }
+      rank_sales_strategy_candidates: {
+        Args: {
+          p_funnel_stage: string
+          p_objection_type: string
+          p_prospect_id: string
+          p_prospect_segment: string
+          p_sales_brain_ids?: string[]
+          p_user_id: string
+          p_workspace_id: string
+        }
+        Returns: {
+          effectiveness_score: number
+          permission_count: number
+          previous_attempt_count: number
+          previous_failure_count: number
+          reply_count: number
+          sale_count: number
+          sales_brain_id: string
+          strategy_key: string
+          used_count: number
         }[]
       }
       record_friend_learning_signals: {

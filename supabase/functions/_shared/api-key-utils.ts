@@ -1,3 +1,4 @@
+declare const Deno: { env: { get(key: string): string | undefined } };
 let cachedDecryptionKey: Promise<CryptoKey> | null = null;
 
 async function getDecryptionKey(): Promise<CryptoKey> {
