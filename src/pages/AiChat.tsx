@@ -69,6 +69,9 @@ async function streamChat({
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
         },
         body: JSON.stringify({ messages, conversation_id: conversationId || null }),
+        // The edge function does retrieval, generation, and a quality check.
+        // Do not leave the composer disabled indefinitely if the stream stalls.
+        signal: AbortSignal.timeout(90000),
       });
       break; // success
     } catch (networkErr) {
@@ -117,8 +120,10 @@ async function streamChat({
           const parsed = JSON.parse(json);
           if (parsed.error) {
             onError(parsed.error);
-            done = true;
-            break;
+            // An SSE error is a failed request, not a truncated assistant
+            // message. Returning here prevents a blank/stale reply being
+            // saved and stops the "continue" control appearing incorrectly.
+            return;
           }
           if (parsed.brain_meta) {
             onBrainMeta?.(parsed.brain_meta);
@@ -137,6 +142,8 @@ async function streamChat({
     }
   } catch (streamErr) {
     console.error("Stream read error:", streamErr);
+    onError("The AI response timed out before it finished. Please try again.");
+    return;
   }
 
   // Detect truncation: stream ended without [DONE] or ends mid-sentence
@@ -1435,8 +1442,10 @@ export default function AiChat() {
                         <button
                           onClick={() => {
                             setWasTruncated(false);
-                            setInput("Continue from where you left off — finish the rest of your response");
-                            setTimeout(() => send(), 100);
+                            // Pass the text directly. Calling send() immediately after
+                            // setInput() used the previous empty state and silently did
+                            // nothing, which made the continuation control look broken.
+                            void send("Continue from where you left off — finish the rest of your response");
                           }}
                           className="flex items-center gap-1 text-xs text-amber-500 mt-2 hover:underline"
                         >

@@ -45,6 +45,12 @@ const RECENT_EXCHANGES_CHAR_LIMIT = 6000;
 const WORKSPACE_PROFILE_CHAR_LIMIT = 500;
 const PRIOR_SUMMARY_CHAR_LIMIT = 5000;
 const VALIDATION_DRAFT_CHAR_LIMIT = 22000;
+// A Sales Brain answer needs to be useful in the chat window, not an essay that
+// exhausts the model's output budget before it reaches the copy-ready message.
+// Keep the generation and its optional validator comfortably below the provider
+// limit so the client always receives a complete answer and `[DONE]` event.
+const BRAIN_RESPONSE_MAX_TOKENS = 1800;
+const BRAIN_VALIDATION_MAX_TOKENS = 1600;
 
 function responseFormatForIntent(intent: BrainChatIntent): string {
   if (intent === "conversation_coaching") return `RESPONSE MODE: CONVERSATION COACHING
@@ -108,7 +114,7 @@ or
     const response = await userChat(chat, {
       model: chat.models.reasoning,
       temperature: 0.05,
-      max_tokens: 6000,
+      max_tokens: BRAIN_VALIDATION_MAX_TOKENS,
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: prompt }],
       timeout_ms: 60000,
@@ -299,6 +305,18 @@ DO INSTEAD:
 - Match the energy and length of the prospect's last message. Short prospect message → short reply.
 
 These rules apply to the prose around the reply too — no "elite", "weapon", "unlock", "revolutionize" energy. Calm, direct, human.
+
+=== COMPLETION CONTRACT — OVERRIDES ANY LONGER FORMAT RULE BELOW ===
+Finish the entire answer in 550 words or fewer. The ready-to-send reply is the
+most important part: write it completely before any optional explanation.
+
+For CONVERSATION COACHING, use only these compact sections:
+SITUATION (one or two sentences), STRATEGY (two sentences maximum), REPLY
+(Copy & Paste) (120 words maximum), WHY IT WORKS (two concise bullets), and
+NEXT STEP (one sentence). Use no more than two genuinely relevant sources.
+Do not add a question back to the user unless a missing fact genuinely prevents
+safe, useful advice. If any later instruction asks for more sources, longer
+analysis, or an always-required question, this completion contract wins.
 
 
 SILENT THOUGHT PROTOCOL — run this before writing, but do not reveal private chain-of-thought:
@@ -1032,62 +1050,70 @@ serve(async (req) => {
 
     const transformed = new ReadableStream({
       async start(controller) {
-        controller.enqueue(encoder.encode(loadingEvent));
-        const aiResp = await userChat(chat, {
-          model: chat.models.reasoning,
-          max_tokens: 6000,
-          temperature: 0.35,
-          messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
-          stream: false,
-        });
+        try {
+          controller.enqueue(encoder.encode(loadingEvent));
+          const aiResp = await userChat(chat, {
+            model: chat.models.reasoning,
+            max_tokens: BRAIN_RESPONSE_MAX_TOKENS,
+            temperature: 0.35,
+            messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
+            stream: false,
+          });
 
-
-        if (!aiResp.ok || !aiResp.body) {
-          let message = "AI gateway error";
-          if (aiResp.status === 429) message = "Rate limit exceeded. Please try again.";
-          else if (aiResp.status === 402) message = "Usage limit reached. Please add credits.";
-          else {
-            const t = await aiResp.text().catch(() => "");
-            console.error("AI gateway error:", aiResp.status, t);
+          if (!aiResp.ok || !aiResp.body) {
+            let message = "AI gateway error";
+            if (aiResp.status === 429) message = "Rate limit exceeded. Please try again.";
+            else if (aiResp.status === 402) message = "Usage limit reached. Please add credits.";
+            else {
+              const t = await aiResp.text().catch(() => "");
+              console.error("AI gateway error:", aiResp.status, t);
+            }
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+            return;
           }
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`));
+
+          const data = await aiResp.json();
+          const draft = sanitize(String(data.choices?.[0]?.message?.content || "")).trim();
+          if (!draft) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "AI returned an empty response" })}\n\n`));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+            return;
+          }
+
+          const validation = await validateGroundedBrainResponse({
+            chat,
+            intent: responseIntent,
+            userRequest: hasImageAttachment ? `${userInstruction}\n\n${conversationText}` : (lastUserText || retrievalQuery),
+            draft: clampText(draft, VALIDATION_DRAFT_CHAR_LIMIT),
+            allowedSourceTitles: sourceTitles,
+            evidencePack: [buildPrinciplesBlock(pipeline.selected), buildEvidenceBlock(pipeline.evidence_principles), buildChunksBlock(pipeline.supporting_chunks)].join("\n\n"),
+            durableMemory: durableMemoryText,
+          });
+          const finalResponse = sanitize(validation.response).trim();
+          const validatedMeta = {
+            ...brainMeta,
+            debug: {
+              ...brainMeta.debug,
+              response_validated: true,
+              response_repaired: validation.repaired,
+              validation_issues: validation.issues,
+            },
+          };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: validatedMeta })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: finalResponse } }] })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
-          return;
-        }
-
-        const data = await aiResp.json();
-        const draft = sanitize(String(data.choices?.[0]?.message?.content || "")).trim();
-        if (!draft) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "AI returned an empty response" })}\n\n`));
+        } catch (error) {
+          // Exceptions inside an async ReadableStream start callback otherwise
+          // leave the browser waiting forever with its composer disabled.
+          console.error("brain-chat stream error:", error);
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "The AI response could not be completed. Please try again." })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
-          return;
         }
-
-        const validation = await validateGroundedBrainResponse({
-          chat,
-          intent: responseIntent,
-          userRequest: hasImageAttachment ? `${userInstruction}\n\n${conversationText}` : (lastUserText || retrievalQuery),
-          draft: clampText(draft, VALIDATION_DRAFT_CHAR_LIMIT),
-          allowedSourceTitles: sourceTitles,
-          evidencePack: [buildPrinciplesBlock(pipeline.selected), buildEvidenceBlock(pipeline.evidence_principles), buildChunksBlock(pipeline.supporting_chunks)].join("\n\n"),
-          durableMemory: durableMemoryText,
-        });
-        const finalResponse = sanitize(validation.response).trim();
-        const validatedMeta = {
-          ...brainMeta,
-          debug: {
-            ...brainMeta.debug,
-            response_validated: true,
-            response_repaired: validation.repaired,
-            validation_issues: validation.issues,
-          },
-        };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: validatedMeta })}\n\n`));
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: finalResponse } }] })}\n\n`));
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
       },
     });
 
