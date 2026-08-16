@@ -425,7 +425,7 @@ export async function persistSalesKnowledgeGraph(input: PersistGraphInput): Prom
         kind: "source_passage",
       }
       : null,
-  ].filter((entry): entry is Record<string, any> => Boolean(entry?.id));
+  ].filter((entry): entry is NonNullable<typeof entry> => Boolean(entry?.id));
 
   for (const evidence of evidenceLinks) {
     const { error } = await input.supabase.from("knowledge_evidence_links").upsert({
@@ -796,8 +796,8 @@ export async function loadKnowledgeGraphContext(
     const { data: related } = await supabase.from("sales_knowledge_nodes")
       .select("id, title, node_type, confidence, metadata")
       .in("id", relatedIds);
-    const nodeMap = new Map((related || []).map((node: any) => [node.id, node]));
-    const rootMap = new Map(roots.map((node: any) => [node.id, node]));
+    const nodeMap = new Map<string, any>((related || []).map((node: any) => [node.id, node]));
+    const rootMap = new Map<string, any>(roots.map((node: any) => [node.id, node]));
     const paths = edges.map((edge: any) => ({
       from_node_id: edge.from_node_id,
       from: rootMap.get(edge.from_node_id)?.title || "principle",
@@ -863,7 +863,7 @@ export async function traverseSalesKnowledgeGraph(
         .select("id, title, node_type, sales_brain_id")
         .eq("user_id", userId).in("id", allIds)
       : { data: seedNodes };
-    const nodeMap = new Map((allNodes || seedNodes).map((node: any) => [node.id, node]));
+    const nodeMap = new Map<string, any>(((allNodes || seedNodes) as any[]).map((node: any) => [node.id, node]));
     const paths = edges.slice(0, 48).map((edge: any) => ({
       from_node_id: edge.from_node_id,
       from: nodeMap.get(edge.from_node_id)?.title || "concept",
@@ -874,7 +874,7 @@ export async function traverseSalesKnowledgeGraph(
       to_type: nodeMap.get(edge.to_node_id)?.node_type || "concept",
       confidence: edge.confidence,
     }));
-    const candidateSalesBrainIds = [...new Set((allNodes || [])
+    const candidateSalesBrainIds = [...new Set(((allNodes || []) as any[])
       .map((node: any) => node.sales_brain_id)
       .filter(Boolean))];
     return {

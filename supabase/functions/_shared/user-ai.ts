@@ -1,3 +1,4 @@
+declare const Deno: { env: { get(key: string): string | undefined } };
 // User-AI resolution: route every AI call through the user's OWN provider key
 // (OpenAI / Gemini / Anthropic) stored in `user_api_keys`. NO Lovable-AI fallback.
 //

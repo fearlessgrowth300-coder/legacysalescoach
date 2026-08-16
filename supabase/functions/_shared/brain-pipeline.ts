@@ -863,7 +863,7 @@ Rules:
   }
 
   if (selected.length === 0 && relevantPool.length > 0) {
-    const fallback = sourceRoundRobin(relevantPool, sourceKeyOf, 4, 2);
+    const fallback = sourceRoundRobin(relevantPool, sourceKeyOf, 4, 2) as any[];
     for (const cand of fallback) {
       selected.push({
         id: cand.id,
