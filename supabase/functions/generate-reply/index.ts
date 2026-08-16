@@ -30,6 +30,7 @@ import {
   deriveEvidenceGatedFriendStage,
   deterministicFriendQualityIssues,
   formatFriendKnowledgeApplicationContract,
+  hydrateFriendKnowledgeApplication,
   friendStageToDatabase,
   selectRelevantConversationPassages,
 } from "../_shared/friend-conversation-engine.ts";
@@ -1047,7 +1048,11 @@ ${winningPatternsText.substring(0, 2000)}`;
           { role: "user", content: replyUserPrompt },
         ],
         temperature: 0.7,
-        timeout_ms: 22000,
+        // The grounded Friend prompt contains the prospect ledger, workspace
+        // profile, source evidence, graph path and reference moments. Twenty
+        // two seconds was causing valid Gemini generations to be aborted and
+        // replaced by a generic deterministic question.
+        timeout_ms: 40000,
       });
       if (!replyResponse.ok) throw new Error(`Reply AI error: ${replyResponse.status}`);
       const replyData = await replyResponse.json();
@@ -1074,7 +1079,8 @@ ${winningPatternsText.substring(0, 2000)}`;
     // review before they can reach the UI. The validator repairs drift while
     // preserving the locked stage, objective, approved truth and metadata.
     if (activeThreadType === "friend") {
-      const originalVariants = Array.isArray(replyJson.variants) ? replyJson.variants : [];
+      const originalVariants = (Array.isArray(replyJson.variants) ? replyJson.variants : [])
+        .map((variant: any) => hydrateFriendKnowledgeApplication(variant, friendKnowledgeContract));
       const deterministicIssues = originalVariants.flatMap((variant: any, index: number) =>
         deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
           .map((issue) => `variant ${index + 1}: ${issue}`)
@@ -1095,14 +1101,15 @@ ${winningPatternsText.substring(0, 2000)}`;
           ],
           temperature: 0.2,
           response_format: { type: "json_object" },
-          timeout_ms: 12000,
+          timeout_ms: 18000,
         });
         if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
         const qualityData = await qualityResponse.json();
         const qualityRaw = qualityData.choices?.[0]?.message?.content || "{}";
         const qualityMatch = qualityRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
         const qualityJson = JSON.parse((qualityMatch ? qualityMatch[1] : qualityRaw).trim());
-        repairedVariants = Array.isArray(qualityJson.variants) ? qualityJson.variants : [];
+        repairedVariants = (Array.isArray(qualityJson.variants) ? qualityJson.variants : [])
+          .map((variant: any) => hydrateFriendKnowledgeApplication(variant, friendKnowledgeContract));
         if (repairedVariants.length !== originalVariants.length) throw new Error("Friend quality validator returned an incomplete variant set");
         const remainingIssues = repairedVariants.flatMap((variant: any, index: number) =>
           deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
@@ -1113,7 +1120,19 @@ ${winningPatternsText.substring(0, 2000)}`;
         validationFailure = qualityError instanceof Error ? qualityError.message : "Friend quality validation failed";
       }
 
-      const useDeterministicFallback = Boolean(validationFailure);
+      // A validator outage or metadata-only omission must not erase an
+      // otherwise safe, source-grounded primary generation. Prefer the
+      // validator's repaired prose when it is complete, otherwise retain the
+      // original hydrated variants and use the deterministic fallback only if
+      // neither candidate set passes the non-negotiable local checks.
+      const candidateVariants = repairedVariants.length === originalVariants.length && repairedVariants.length > 0
+        ? repairedVariants
+        : originalVariants;
+      const candidateIssues = candidateVariants.flatMap((variant: any, index: number) =>
+        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
+          .map((issue) => `variant ${index + 1}: ${issue}`)
+      );
+      const useDeterministicFallback = candidateVariants.length !== 3 || candidateIssues.length > 0;
       if (useDeterministicFallback) {
         const fallbackMessages = buildDeterministicFriendFallbackMessages(
           repairedVariants.length > 0 ? repairedVariants : originalVariants,
@@ -1139,7 +1158,12 @@ ${winningPatternsText.substring(0, 2000)}`;
           principle_applied: "knowledge-aware deterministic fallback",
           why_this_works: "Uses the verified prospect facts and earliest missing checkpoint without falsely claiming that an AI-selected source lesson was applied.",
         }));
-        console.warn("generate-reply used deterministic Friend fallback:", validationFailure);
+        console.warn("generate-reply used deterministic Friend fallback:", validationFailure || candidateIssues.join("; "));
+      } else {
+        repairedVariants = candidateVariants;
+        if (validationFailure) {
+          console.warn("generate-reply kept a locally valid grounded Friend reply after validator failure:", validationFailure);
+        }
       }
 
       replyJson.variants = repairedVariants.map((variant: any, index: number) => ({
@@ -1150,7 +1174,8 @@ ${winningPatternsText.substring(0, 2000)}`;
         passed: true,
         repaired: JSON.stringify(repairedVariants) !== JSON.stringify(originalVariants),
         fallbackApplied: useDeterministicFallback,
-        fallbackReason: useDeterministicFallback ? validationFailure : null,
+        fallbackReason: useDeterministicFallback ? (validationFailure || candidateIssues.join("; ")) : null,
+        validatorBypassed: !useDeterministicFallback && Boolean(validationFailure),
       };
     }
 

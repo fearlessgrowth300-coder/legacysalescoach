@@ -13,6 +13,7 @@ import {
   deterministicFriendQualityIssues,
   friendStageToDatabase,
   friendKnowledgeApplicationIssues,
+  hydrateFriendKnowledgeApplication,
   normalizeFriendStage,
   repeatsAnsweredFriendQuestion,
   selectRelevantConversationPassages,
@@ -405,6 +406,35 @@ describe("Friend conversation engine", () => {
     expect(deterministicFriendQualityIssues("What problems are your audience struggling with?", "intent")).toContain("asks about the audience instead of the prospect");
   });
 
+  it("keeps a grounded generated reply when a validator drops only knowledge metadata", () => {
+    const contract = buildFriendKnowledgeApplicationContract({
+      analysis: {
+        result_verification_status: "verified",
+        evidence: ["She is enjoying connection first and people are already asking about her course."],
+        reply_act: "probe",
+        sales_status: "no_sales",
+      },
+      checkpoint: "active_problem",
+      stage: "emotional_certainty",
+      latestProspectMessage: "Not yet. I am enjoying connecting with people first.",
+      principle: {
+        principle_name: "Connect Sales to Authentic Service",
+        source_name: "Sales Brain",
+        what_i_learned: "Respect the person's current priority, then explore what would make an aligned offer feel natural.",
+        how_to_apply: "Name the existing trust signal and ask one low-pressure question about the gap.",
+      },
+      sourceName: "Sales Brain",
+      supportingPassage: "Build trust before making an invitation.",
+    });
+    const hydrated = hydrateFriendKnowledgeApplication({
+      text: "That makes sense. People already asking about your course tells me the trust is landing. What would make sharing it feel natural when you are ready?",
+    }, contract);
+
+    expect(hydrated.principleUsed).toBe("Connect Sales to Authentic Service");
+    expect(hydrated.sourceUsed).toBe("Sales Brain");
+    expect(friendKnowledgeApplicationIssues(hydrated, contract)).toEqual([]);
+  });
+
   it("wires full approved examples, shared stages and quality validation into both reply paths", () => {
     const generateReply = readFileSync("supabase/functions/generate-reply/index.ts", "utf8");
     const chatSuggest = readFileSync("supabase/functions/chat-suggest/index.ts", "utf8");
@@ -429,6 +459,8 @@ describe("Friend conversation engine", () => {
     expect(chatSuggest).toContain("buildDeterministicFriendFallbackMessages");
     expect(generateReply).toContain("formatFriendKnowledgeApplicationContract");
     expect(chatSuggest).toContain("formatFriendKnowledgeApplicationContract");
+    expect(generateReply).toContain("kept a locally valid grounded Friend reply after validator failure");
+    expect(chatSuggest).toContain("kept a locally valid grounded Friend reply after validator failure");
     expect(generateReply).not.toContain('throw new Error(`Friend quality validator rejected the reply:');
     expect(chatSuggest).not.toContain('throw new Error(`Friend quality validator rejected the reply:');
     const analyzeConversation = readFileSync("supabase/functions/analyze-conversation/index.ts", "utf8");

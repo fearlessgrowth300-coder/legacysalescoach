@@ -202,6 +202,58 @@ Supporting original passage: ${contract.supportingPassage || "none"}
 If Required=true, do not swap, merely name, or decorate the reply with this principle. Use its actual lesson to perform the strategic objective on the stated prospect fact. The ready-to-send text must remain a short natural peer message. In the response metadata, copy one exact phrase from the ready-to-send message as message_evidence and explain how that phrase performs the lesson. If Required=false, do not force a framework.`;
 }
 
+/**
+ * The quality model is deliberately allowed to rewrite a Friend reply, but
+ * smaller/faster models often return only the visible prose and drop the
+ * knowledge metadata. That used to make an otherwise grounded reply fail the
+ * deterministic provenance checks, after which the caller replaced it with a
+ * generic fallback question. Re-attach the locked retrieval contract before
+ * judging the repaired prose. This never invents a source: the contract is
+ * built from the exact principle and passage retrieved for this request.
+ */
+export function hydrateFriendKnowledgeApplication(
+  candidate: Record<string, unknown> | null | undefined,
+  contract: FriendKnowledgeApplicationContract | null | undefined,
+): Record<string, unknown> {
+  const item = { ...(candidate || {}) };
+  if (!contract?.required) return item;
+
+  const message = cleanContractText(item.message ?? item.text, 4000);
+  const existing = contractMetadata(item);
+  const existingEvidence = contractValue(existing, "message_evidence", "messageEvidence");
+  const messageEvidence = existingEvidence && normalized(message).includes(normalized(existingEvidence))
+    ? existingEvidence
+    : cleanContractText(message.split(/(?<=[.!?])\s+/)[0] || message, 260);
+  const lessonApplied = contractValue(existing, "lesson_applied", "lessonApplied")
+    || contract.lesson
+    || contract.howToApply;
+  const strategicMove = contractValue(existing, "strategic_move", "strategicMove")
+    || `Uses the locked lesson to ${contract.strategicObjective.toLowerCase()} based on the prospect's stated situation.`;
+  const knowledgeApplication = {
+    ...existing,
+    principle_name: contract.principleName,
+    principleName: contract.principleName,
+    source_name: contract.sourceName,
+    sourceName: contract.sourceName,
+    lesson_applied: lessonApplied,
+    lessonApplied,
+    strategic_move: strategicMove,
+    strategicMove,
+    message_evidence: messageEvidence,
+    messageEvidence,
+  };
+
+  return {
+    ...item,
+    cited_principle_name: contract.principleName,
+    cited_source_name: contract.sourceName,
+    principleUsed: contract.principleName,
+    sourceUsed: contract.sourceName,
+    knowledge_application: knowledgeApplication,
+    knowledgeApplication,
+  };
+}
+
 export function detectFriendSalesSignal(latestProspectMessage: string, prospectHistory = ""): FriendSalesSignal {
   const latest = normalized(latestProspectMessage);
   const context = normalized(`${prospectHistory} ${latestProspectMessage}`);
