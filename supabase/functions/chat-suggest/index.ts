@@ -843,6 +843,13 @@ serve(async (req) => {
     // Build conversation memory: summarize older messages, keep recent ones verbatim
     const recentCount = 10;
     const recentMessages = history.slice(-recentCount);
+    // This history is needed by retrieval/ranking as well as by the generation
+    // prompt. Declare it before either path can consume it: the previous order
+    // read it during outcome-aware ranking and crashed every first-message call
+    // with a temporal-dead-zone ReferenceError.
+    const conversationHistory = recentMessages
+      .map((m: any) => `${m.direction === "outbound" ? "You" : m.direction === "context" ? "Salesperson note" : m.direction === "unknown" ? "Unknown speaker" : "Prospect"}: ${m.content}`)
+      .join("\n") || "";
     const olderMessages = history.slice(0, -recentCount);
     
     let conversationMemory = "";
@@ -1506,10 +1513,6 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
 
     const knowledgeContext = "";
     
-    const conversationHistory = recentMessages
-      .map((m: any) => `${m.direction === "outbound" ? "You" : m.direction === "context" ? "Salesperson note" : m.direction === "unknown" ? "Unknown speaker" : "Prospect"}: ${m.content}`)
-      .join("\n") || "";
-
     const systemPrompt = activeThreadType === "expert" ? buildExpertModeInstructions(workspaceForPrompt, brainChunksFormatted || undefined, personaData) : buildFriendModeInstructions(workspaceForPrompt, brainChunksFormatted || undefined, personaData);
 
     // Inject Layered Reasoning Protocol into the system prompt
