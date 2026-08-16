@@ -75,7 +75,7 @@ describe("Sales Superbrain ontology", () => {
       prospectText: "I had a previous financial loss and do not trust another company.",
     });
     expect(ranked[0].id).toBe("trust-fit");
-    expect(ranked[0]._strategyRankBreakdown.objectionCompatibility).toBe(8);
+    expect((ranked[0] as any)._strategyRankBreakdown.objectionCompatibility).toBe(8);
   });
 });
 
