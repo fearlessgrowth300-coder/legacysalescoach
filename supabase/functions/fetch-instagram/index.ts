@@ -17,14 +17,14 @@ const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 365 * 5;
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
   const configuredOrigins = [Deno.env.get("SITE_URL"), Deno.env.get("APP_URL")].filter(Boolean) as string[];
-  const isAllowed = origin.endsWith(".lovable.app") ||
+  const isAllowed = origin.endsWith(".vercel.app") || origin.endsWith(".lovable.app") ||
     origin.endsWith(".lovableproject.com") ||
     origin.startsWith("http://localhost:") ||
     origin.startsWith("http://127.0.0.1:") ||
     origin.startsWith("http://[::1]:") ||
     configuredOrigins.includes(origin);
   return {
-    "Access-Control-Allow-Origin": isAllowed ? origin : "https://legacysalescoach.lovable.app",
+    "Access-Control-Allow-Origin": isAllowed ? origin : "https://legacysalescoach.vercel.app",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
   };
 }
