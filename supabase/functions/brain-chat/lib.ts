@@ -1,6 +1,7 @@
 export function isAllowedBrainChatOrigin(origin: string, configuredOrigins: string[] = []): boolean {
   return origin.endsWith(".lovable.app") ||
     origin.endsWith(".lovableproject.com") ||
+    origin.endsWith(".vercel.app") ||
     origin.startsWith("http://localhost:") ||
     origin.startsWith("http://127.0.0.1:") ||
     origin.startsWith("http://[::1]:") ||
