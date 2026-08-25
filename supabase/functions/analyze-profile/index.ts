@@ -8,6 +8,7 @@ function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
   const isAllowed = origin.endsWith(".lovable.app") ||
     origin.endsWith(".lovableproject.com") ||
+    origin.endsWith(".vercel.app") ||
     origin.startsWith("http://localhost:") ||
     origin.startsWith("http://127.0.0.1:") ||
     origin.startsWith("http://[::1]:");

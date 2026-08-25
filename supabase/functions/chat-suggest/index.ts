@@ -1849,8 +1849,55 @@ ${jsonFormat}
       }
     } catch (replyError) {
       if (activeThreadType !== "friend") throw replyError;
-      replyGenerationFailure = replyError instanceof Error ? replyError.message : "Friend reply generation failed";
-      console.warn("[chat-suggest] Friend generation will use deterministic fallback", replyGenerationFailure);
+      // The full Friend prompt contains the evidence ledger, workspace
+      // examples, graph paths and source passages. A provider can reject that
+      // large request or time out even though the information is sound. Do not
+      // turn that temporary transport failure into the generic deterministic
+      // question cards. Retry once with the same locked facts and lesson in a
+      // deliberately compact prompt.
+      const primaryFailure = replyError instanceof Error ? replyError.message : "Friend reply generation failed";
+      try {
+        const compactFacts = JSON.stringify({
+          latest_prospect_message: message,
+          stage: friendDecisionAnalysis?.stage || prospect.conversation_stage || "intent",
+          checkpoint: friendDecisionAnalysis?.earliest_missing_checkpoint || "tangible_goal",
+          prospect_profile: friendDecisionAnalysis?.prospect_profile || {},
+          evidence: Array.isArray(friendDecisionAnalysis?.evidence)
+            ? friendDecisionAnalysis.evidence.slice(-6)
+            : [],
+          workspace_offer: workspace?.offer_truth || workspace?.products_detected || workspace?.expert_description || "",
+          selected_principle: lockedFriendPrinciple?.principle_name || "",
+          selected_source: lockedFriendSource || lockedFriendPrinciple?.source_name || "",
+          selected_lesson: lockedFriendPrinciple?.what_i_learned || lockedFriendPrinciple?.how_to_apply || "",
+          recent_turns: speakerMessages.slice(-8),
+        });
+        const recoveryResponse = await userChat(chat, {
+          model: chat.models.fast,
+          messages: [
+            {
+              role: "system",
+              content: `You write the next message in a genuine peer-to-peer Friend conversation. Return ONLY valid JSON: {"suggestions":[{"id":1,"type":"primary","text":"...","whyThisWorks":"..."},{"id":2,"type":"alternative","text":"...","whyThisWorks":"..."},{"id":3,"type":"softer","text":"...","whyThisWorks":"..."}]}. Use the known prospect facts and selected source lesson below. Do not invent results, pressure, sell, or ask more than one question per suggestion. Each reply must be short, warm, distinct, and move the stated checkpoint forward.`,
+            },
+            { role: "user", content: compactFacts },
+          ],
+          temperature: 0.45,
+          response_format: { type: "json_object" },
+          timeout_ms: 30000,
+        });
+        if (!recoveryResponse.ok) throw new Error(`Compact Friend recovery failed: ${recoveryResponse.status}`);
+        const recoveryData = await recoveryResponse.json();
+        const recoveryContent = recoveryData.choices?.[0]?.message?.content || "";
+        const recoveryMatch = recoveryContent.match(/\{[\s\S]*\}/);
+        const recoveryParsed = JSON.parse(recoveryMatch ? recoveryMatch[0] : recoveryContent);
+        if (!Array.isArray(recoveryParsed.suggestions) || recoveryParsed.suggestions.length !== 3) {
+          throw new Error("Compact Friend recovery returned an incomplete suggestion set");
+        }
+        parsed = { ...parsed, ...recoveryParsed };
+        console.warn("[chat-suggest] Full Friend generation recovered with compact grounded prompt:", primaryFailure);
+      } catch (recoveryError) {
+        replyGenerationFailure = `${primaryFailure}; ${recoveryError instanceof Error ? recoveryError.message : "Compact Friend recovery failed"}`;
+        console.warn("[chat-suggest] Friend generation and compact recovery failed", replyGenerationFailure);
+      }
     }
 
     // A brand-new Instagram/TikTok contact has not entered the certainty
@@ -2039,13 +2086,51 @@ ${jsonFormat}
       // second validator timed out or omitted metadata. The local checks still
       // enforce the stage, evidence and non-repetition rules; only a candidate
       // that fails those checks is replaced by the last-resort fallback.
-      const candidateSuggestions = repairedSuggestions.length === originalSuggestions.length && repairedSuggestions.length > 0
+      let candidateSuggestions = repairedSuggestions.length === originalSuggestions.length && repairedSuggestions.length > 0
         ? repairedSuggestions
         : originalSuggestions;
-      const candidateIssues = candidateSuggestions.flatMap((suggestion: any, index: number) =>
+      let candidateIssues = candidateSuggestions.flatMap((suggestion: any, index: number) =>
         deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {}, speakerMessages, suggestion, finalFriendKnowledgeContract)
           .map((issue) => `suggestion ${index + 1}: ${issue}`)
       );
+      // The validator can return prose that misses a narrow deterministic
+      // constraint (often a literal prospect-fact token). Give the model one
+      // short, fact-and-source-only repair chance before choosing the generic
+      // fallback. This makes the Sales Brain's selected lesson usable in the
+      // visible message instead of merely visible in the analysis panel.
+      if (candidateIssues.length > 0 && originalSuggestions.length === 3) {
+        try {
+          const repairResponse = await userChat(chat, {
+            model: chat.models.fast,
+            messages: [
+              { role: "system", content: "Return ONLY valid JSON with exactly three objects in suggestions. Rewrite each Friend reply so it is short, natural, grounded in the stated prospect fact, applies the selected lesson, asks at most one question, and does not repeat a previous question. Do not add claims, pressure, or a pitch." },
+              { role: "user", content: JSON.stringify({ stage: finalFriendStageResult.stage, checkpoint: finalFriendStageResult.checkpoint, prospect_fact: finalFriendKnowledgeContract.prospectFact, selected_principle: finalFriendKnowledgeContract.principleName, selected_source: finalFriendKnowledgeContract.sourceName, selected_lesson: finalFriendKnowledgeContract.lesson || finalFriendKnowledgeContract.howToApply, latest_message: message, issues: candidateIssues, drafts: candidateSuggestions }) },
+            ],
+            temperature: 0.25,
+            response_format: { type: "json_object" },
+            timeout_ms: 30000,
+          });
+          if (!repairResponse.ok) throw new Error(`Compact Friend repair failed: ${repairResponse.status}`);
+          const repairData = await repairResponse.json();
+          const repairContent = repairData.choices?.[0]?.message?.content || "";
+          const repairMatch = repairContent.match(/\{[\s\S]*\}/);
+          const repairJson = JSON.parse(repairMatch ? repairMatch[0] : repairContent);
+          const repaired = (Array.isArray(repairJson.suggestions) ? repairJson.suggestions : [])
+            .map((suggestion: any) => hydrateFriendKnowledgeApplication(suggestion, finalFriendKnowledgeContract));
+          if (repaired.length !== 3) throw new Error("Compact Friend repair returned an incomplete suggestion set");
+          const repairIssues = repaired.flatMap((suggestion: any, index: number) =>
+            deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {}, speakerMessages, suggestion, finalFriendKnowledgeContract)
+              .map((issue) => `suggestion ${index + 1}: ${issue}`)
+          );
+          if (repairIssues.length === 0) {
+            candidateSuggestions = repaired;
+            candidateIssues = [];
+            console.warn("[chat-suggest] Repaired Friend reply locally after validator issues");
+          }
+        } catch (repairError) {
+          console.warn("[chat-suggest] Compact Friend repair unavailable:", repairError instanceof Error ? repairError.message : repairError);
+        }
+      }
       const useDeterministicFallback = candidateSuggestions.length !== 3 || candidateIssues.length > 0;
       if (useDeterministicFallback) {
         const fallbackMessages = buildDeterministicFriendFallbackMessages(

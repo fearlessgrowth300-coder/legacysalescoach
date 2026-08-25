@@ -1071,8 +1071,44 @@ ${winningPatternsText.substring(0, 2000)}`;
       }
     } catch (replyError) {
       if (activeThreadType !== "friend") throw replyError;
-      replyGenerationFailure = replyError instanceof Error ? replyError.message : "Friend reply generation failed";
-      console.warn("[generate-reply] Friend generation will use deterministic fallback", replyGenerationFailure);
+      const primaryFailure = replyError instanceof Error ? replyError.message : "Friend reply generation failed";
+      try {
+        const compactFacts = JSON.stringify({
+          latest_prospect_message: message,
+          stage: friendStageResult.stage,
+          checkpoint: friendStageResult.checkpoint,
+          prospect_profile: analysisJson?.prospect_profile || {},
+          evidence: Array.isArray(analysisJson?.evidence) ? analysisJson.evidence.slice(-6) : [],
+          workspace_offer: workspace?.offer_truth || workspace?.products_detected || workspace?.expert_description || "",
+          selected_principle: lockedReplyPrinciple?.principle_name || "",
+          selected_source: lockedReplySource || lockedReplyPrinciple?.source_name || "",
+          selected_lesson: lockedReplyPrinciple?.what_i_learned || lockedReplyPrinciple?.how_to_apply || "",
+          recent_turns: speakerMessages.slice(-8),
+        });
+        const recoveryResponse = await userChat(chat, {
+          model: chat.models.fast,
+          messages: [
+            { role: "system", content: "You write the next message in a genuine peer-to-peer Friend conversation. Return ONLY valid JSON: {\"variants\":[{\"variant\":\"primary\",\"message\":\"...\",\"why_this_works\":\"...\"},{\"variant\":\"alternative\",\"message\":\"...\",\"why_this_works\":\"...\"},{\"variant\":\"casual\",\"message\":\"...\",\"why_this_works\":\"...\"}]}. Use the known facts and selected source lesson. Do not invent results, pressure, sell, or ask more than one question per variant. Keep each message short, warm, distinct, and focused on the stated checkpoint." },
+            { role: "user", content: compactFacts },
+          ],
+          temperature: 0.45,
+          response_format: { type: "json_object" },
+          timeout_ms: 30000,
+        });
+        if (!recoveryResponse.ok) throw new Error(`Compact Friend recovery failed: ${recoveryResponse.status}`);
+        const recoveryData = await recoveryResponse.json();
+        const recoveryContent = recoveryData.choices?.[0]?.message?.content || "";
+        const recoveryMatch = recoveryContent.match(/\{[\s\S]*\}/);
+        const recoveryParsed = JSON.parse(recoveryMatch ? recoveryMatch[0] : recoveryContent);
+        if (!Array.isArray(recoveryParsed.variants) || recoveryParsed.variants.length !== 3) {
+          throw new Error("Compact Friend recovery returned an incomplete variant set");
+        }
+        replyJson = { ...replyJson, ...recoveryParsed };
+        console.warn("[generate-reply] Full Friend generation recovered with compact grounded prompt:", primaryFailure);
+      } catch (recoveryError) {
+        replyGenerationFailure = `${primaryFailure}; ${recoveryError instanceof Error ? recoveryError.message : "Compact Friend recovery failed"}`;
+        console.warn("[generate-reply] Friend generation and compact recovery failed", replyGenerationFailure);
+      }
     }
 
     // Friend replies must pass a second, low-temperature conversion-quality
@@ -1125,13 +1161,46 @@ ${winningPatternsText.substring(0, 2000)}`;
       // validator's repaired prose when it is complete, otherwise retain the
       // original hydrated variants and use the deterministic fallback only if
       // neither candidate set passes the non-negotiable local checks.
-      const candidateVariants = repairedVariants.length === originalVariants.length && repairedVariants.length > 0
+      let candidateVariants = repairedVariants.length === originalVariants.length && repairedVariants.length > 0
         ? repairedVariants
         : originalVariants;
-      const candidateIssues = candidateVariants.flatMap((variant: any, index: number) =>
+      let candidateIssues = candidateVariants.flatMap((variant: any, index: number) =>
         deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
           .map((issue) => `variant ${index + 1}: ${issue}`)
       );
+      if (candidateIssues.length > 0 && originalVariants.length === 3) {
+        try {
+          const repairResponse = await userChat(chat, {
+            model: chat.models.fast,
+            messages: [
+              { role: "system", content: "Return ONLY valid JSON with exactly three objects in variants. Rewrite each Friend reply so it is short, natural, grounded in the stated prospect fact, applies the selected lesson, asks at most one question, and does not repeat a previous question. Do not add claims, pressure, or a pitch." },
+              { role: "user", content: JSON.stringify({ stage: friendStageResult.stage, checkpoint: friendStageResult.checkpoint, prospect_fact: friendKnowledgeContract?.prospectFact, selected_principle: friendKnowledgeContract?.principleName, selected_source: friendKnowledgeContract?.sourceName, selected_lesson: friendKnowledgeContract?.lesson || friendKnowledgeContract?.howToApply, latest_message: message, issues: candidateIssues, drafts: candidateVariants }) },
+            ],
+            temperature: 0.25,
+            response_format: { type: "json_object" },
+            timeout_ms: 30000,
+          });
+          if (!repairResponse.ok) throw new Error(`Compact Friend repair failed: ${repairResponse.status}`);
+          const repairData = await repairResponse.json();
+          const repairContent = repairData.choices?.[0]?.message?.content || "";
+          const repairMatch = repairContent.match(/\{[\s\S]*\}/);
+          const repairJson = JSON.parse(repairMatch ? repairMatch[0] : repairContent);
+          const repaired = (Array.isArray(repairJson.variants) ? repairJson.variants : [])
+            .map((variant: any) => hydrateFriendKnowledgeApplication(variant, friendKnowledgeContract));
+          if (repaired.length !== 3) throw new Error("Compact Friend repair returned an incomplete variant set");
+          const repairIssues = repaired.flatMap((variant: any, index: number) =>
+            deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
+              .map((issue) => `variant ${index + 1}: ${issue}`)
+          );
+          if (repairIssues.length === 0) {
+            candidateVariants = repaired;
+            candidateIssues = [];
+            console.warn("[generate-reply] Repaired Friend reply locally after validator issues");
+          }
+        } catch (repairError) {
+          console.warn("[generate-reply] Compact Friend repair unavailable:", repairError instanceof Error ? repairError.message : repairError);
+        }
+      }
       const useDeterministicFallback = candidateVariants.length !== 3 || candidateIssues.length > 0;
       if (useDeterministicFallback) {
         const fallbackMessages = buildDeterministicFriendFallbackMessages(
