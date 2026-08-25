@@ -2142,7 +2142,7 @@ ${jsonFormat}
           speakerMessages,
           finalFriendKnowledgeContract,
         );
-        repairedSuggestions = fallbackMessages.map((fallbackMessage, index) => ({
+        repairedSuggestions = fallbackMessages.map((fallbackMessage, index) => hydrateFriendKnowledgeApplication({
           ...(originalSuggestions[index] || {
             id: index + 1,
             type: index === 0 ? "primary" : index === 1 ? "alternative" : "softer",
@@ -2152,13 +2152,14 @@ ${jsonFormat}
             principleUsed: "truthful diagnosis",
           }),
           text: fallbackMessage,
-          frameworkUsed: "knowledge-aware deterministic fallback",
-          sourceUsed: "current conversation",
-          principleUsed: "verified prospect gap",
-          knowledgeApplication: null,
-          whyThisWorks: "Uses verified prospect facts and the earliest missing checkpoint without falsely claiming that an AI-selected source lesson was applied.",
-        }));
-        console.warn("chat-suggest used deterministic Friend fallback:", validationFailure || candidateIssues.join("; "));
+          frameworkUsed: finalFriendKnowledgeContract.required ? "source-backed Friend recovery" : "evidence-gated certainty funnel",
+          sourceUsed: finalFriendKnowledgeContract.required ? finalFriendKnowledgeContract.sourceName : "current conversation",
+          principleUsed: finalFriendKnowledgeContract.required ? finalFriendKnowledgeContract.principleName : "verified prospect gap",
+          whyThisWorks: finalFriendKnowledgeContract.required
+            ? `Applies ${finalFriendKnowledgeContract.principleName} to the verified prospect fact while keeping the ${finalFriendStageResult.checkpoint} checkpoint natural.`
+            : "Uses verified prospect facts and the earliest missing checkpoint without inventing facts.",
+        }, finalFriendKnowledgeContract));
+        console.warn("chat-suggest used source-backed Friend recovery:", validationFailure || candidateIssues.join("; "));
       } else {
         repairedSuggestions = candidateSuggestions;
         if (validationFailure) {

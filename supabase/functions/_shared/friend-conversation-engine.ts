@@ -882,9 +882,27 @@ export function buildDeterministicFriendFallbackMessages(
 ): string[] {
   const thanks = /\b(?:thanks?|thank you|appreciate|wishing you)\b/i.test(latestProspectMessage);
   const confident = /\b(?:intentional|happy with|know what works|working for me|direction)\b/i.test(latestProspectMessage);
+  const conversationText = conversation.map((turn) => String(turn.content || "")).join("\n");
+  const evidenceText = Array.isArray(analysis?.evidence) ? analysis.evidence.map((item) => String(item || "")).join("\n") : "";
+  const connectionFirst = /\b(?:not\s+(?:really\s+)?pushing|not\s+selling|connecting\s+with\s+people|building\s+(?:it|my|the)\b|setup\s+phase|long\s+game)\b/i
+    .test(`${latestProspectMessage}\n${conversationText}`);
+  const hasOfferInterest = /\b(?:people|someone|they)\s+(?:have\s+)?(?:been\s+)?(?:asking|ask(?:ed)?)\s+(?:me\s+)?about\s+(?:the\s+)?(?:course|offer|program)|\b(?:course|offer|program)\s+(?:questions?|interest)\b/i
+    .test(`${latestProspectMessage}\n${conversationText}\n${evidenceText}`);
   const salesStatus = normalized(analysis?.sales_status).replace(/[ -]+/g, "_");
   const knowledgeGroundedLeads = knowledgeContract?.required
-    ? salesStatus === "inconsistent_sales"
+    ? connectionFirst && hasOfferInterest
+      ? [
+        "I get that — building genuine connection first matters. The fact people are already asking about the course tells you the interest is there.",
+        "That makes sense. You are protecting the connection, and people asking about the course is already a real signal.",
+        "I understand not wanting to force it. You have interest already; it is just about finding a way to respond that still feels like you.",
+      ]
+      : connectionFirst
+        ? [
+          "I get that — building trust first matters, and it makes sense not to want it to feel forced.",
+          "That makes sense. Wanting to connect before selling can be a very intentional way to build.",
+          "I understand. You want the page to feel genuine, not like you are pushing people into something.",
+        ]
+      : salesStatus === "inconsistent_sales"
       ? [
         "So sales are starting, but making that result repeatable is still the real gap.",
         "That tells me the direction is working, but consistency has not caught up yet.",
@@ -1015,7 +1033,21 @@ export function buildDeterministicFriendFallbackMessages(
   const requestedQuestions = analysis?.result_verification_status === "unverified"
     ? commercialQuestions
     : checkpointQuestions[checkpoint];
-  const unansweredQuestions = requestedQuestions.filter((question) =>
+  const connectionFirstQuestions = hasOfferInterest
+    ? [
+      "Do you feel clear on how you want to respond when someone asks about the course without it feeling pushy?",
+      "What would make sharing the course feel helpful to you rather than salesy?",
+      "What part of turning that interest into a simple next step still feels unclear?",
+    ]
+    : [
+      "What would make talking about what you offer feel helpful rather than pushy to you?",
+      "What part of moving from connection to a simple next step feels least natural right now?",
+      "What would help you feel you could mention your offer without changing the tone you want to build?",
+    ];
+  const stageQuestions = connectionFirst && knowledgeContract?.required
+    ? connectionFirstQuestions
+    : requestedQuestions;
+  const unansweredQuestions = stageQuestions.filter((question) =>
     !repeatsAnsweredFriendQuestion(question, conversation)
   );
   const nextCheckpoint: Record<FriendQuestionIntent, FriendFunnelCheckpoint> = {
@@ -1033,7 +1065,7 @@ export function buildDeterministicFriendFallbackMessages(
     handoff_acceptance: "complete",
     other: checkpoint === "complete" ? "complete" : checkpoint,
   };
-  const answeredIntent = friendQuestionIntent(requestedQuestions[0]);
+  const answeredIntent = friendQuestionIntent(stageQuestions[0]);
   const recoveryQuestions = checkpointQuestions[nextCheckpoint[answeredIntent]];
   const questions = unansweredQuestions.length > 0 ? unansweredQuestions : recoveryQuestions;
 

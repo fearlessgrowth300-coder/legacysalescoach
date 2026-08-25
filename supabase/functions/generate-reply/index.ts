@@ -1212,7 +1212,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           history,
           friendKnowledgeContract,
         );
-        repairedVariants = fallbackMessages.map((fallbackMessage, index) => ({
+        repairedVariants = fallbackMessages.map((fallbackMessage, index) => hydrateFriendKnowledgeApplication({
           ...(originalVariants[index] || {
             variant: index === 0 ? "primary" : index === 1 ? "alternative" : "casual",
             move_used: analysisJson.reply_act || "probe",
@@ -1221,13 +1221,12 @@ ${winningPatternsText.substring(0, 2000)}`;
             warmth_prediction: analysisJson.warmth_score,
           }),
           message: fallbackMessage,
-          cited_principle_name: null,
-          cited_source_name: null,
-          knowledge_application: null,
-          principle_applied: "knowledge-aware deterministic fallback",
-          why_this_works: "Uses the verified prospect facts and earliest missing checkpoint without falsely claiming that an AI-selected source lesson was applied.",
-        }));
-        console.warn("generate-reply used deterministic Friend fallback:", validationFailure || candidateIssues.join("; "));
+          principle_applied: friendKnowledgeContract?.required ? friendKnowledgeContract.principleName : "evidence-gated certainty funnel",
+          why_this_works: friendKnowledgeContract?.required
+            ? `Applies ${friendKnowledgeContract.principleName} to the verified prospect fact while keeping the ${friendStageResult.checkpoint} checkpoint natural.`
+            : "Uses verified prospect facts and the earliest missing checkpoint without inventing facts.",
+        }, friendKnowledgeContract));
+        console.warn("generate-reply used source-backed Friend recovery:", validationFailure || candidateIssues.join("; "));
       } else {
         repairedVariants = candidateVariants;
         if (validationFailure) {
