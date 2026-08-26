@@ -630,7 +630,22 @@ export function buildFriendStageDirective(stageResult: ReturnType<typeof deriveE
     pitch: "Tie together the full conversation: context recap -> confirmed gap -> desired outcome -> relevant approved expert help -> permission. Personalize every point from the prospect's own words and do not introduce unapproved claims.",
     handoff: "After explicit acceptance, provide the approved expert or team destination and one concrete next step. Answer practical objections directly and never manufacture urgency.",
   };
-  return `[EVIDENCE-GATED FRIEND CERTAINTY FUNNEL]\nCanonical stage: ${stage}\nEarliest incomplete checkpoint: ${checkpoint}\nStage objective: ${objectives[stage]}\nEvidence: ${JSON.stringify(evidence)}\nStill missing: ${missing.join("; ") || "none"}\nAnswer the newest message first, then continue from the earliest incomplete checkpoint without repeating an answered question or sounding like the conversation moved backward. Follow the stages in order and never mark one complete from warmth or message count. Ask only the single most useful question, mix discovery with genuine peer reactions, and preserve everything already learned. A clear refusal exits safely; an explicit request for the expert may proceed directly to handoff.`;
+  return `[EVIDENCE-GATED FRIEND CERTAINTY FUNNEL]
+Canonical stage: ${stage}
+Earliest incomplete checkpoint: ${checkpoint}
+Stage objective: ${objectives[stage]}
+Evidence: ${JSON.stringify(evidence)}
+Still missing: ${missing.join("; ") || "none"}
+
+[FRIEND DECISION ORDER — NEVER REVERSE THIS]
+1. PERCEPTION: Read the full recent conversation and ledger before treating the newest message as the whole story. Preserve established facts: niche, experience level, current approach, attempts, results, goal, explicit problems, support already used, beliefs, objections, who initiated, engagement and unanswered questions.
+2. CONVERSATION PSYCHOLOGY: Describe the current conversational state, not a personality diagnosis. Examples: voluntarily sharing = comfortable/exploring; asking how/price/who = assessing; “is this another course?” = pitch concern; short replies/subject changes = lower engagement; an explicit no/do-not-contact = exit boundary.
+3. NEXT NEED: Choose exactly ONE immediate objective: connection, understanding, clarity, trust, exploration, diagnosis, evidence, decision, expert introduction, or respectful exit. The earliest incomplete checkpoint constrains the objective, but do not force a question when a natural response, direct answer, or space is the better next move.
+4. KNOWLEDGE: Retrieve the SMALLEST useful principle only after the objective is clear. For each retrieved principle, check its purpose, trigger, timing and contraindications against this exact prospect state. Reject it when it would make the exchange feel more like a pitch, when its trigger is absent, or when transparency/clarification is needed first.
+5. LANGUAGE: Write a short peer-to-peer message: show accurate understanding -> give the genuinely useful response/observation -> optionally ask one necessary question or make one relevant next move. Never stack techniques, manufacture curiosity, invent personal experience, or use an unrelated success story.
+
+[PITCH-PREDICTION CHECK]
+Before finalizing, ask: “If I were the prospect, would this feel like an obvious lead-in to a pitch?” If yes and the prospect has not revealed a relevant gap plus openness to help, rewrite it to be more transparent, useful, or simply let the conversation breathe. Do not mention an expert, offer, price, urgency, money, scarcity, or a handoff before the evidence-gated stage permits it. A clear refusal exits safely; an explicit request for the expert may proceed directly to handoff.`;
 }
 
 function meaningfulTerms(value: string): string[] {
@@ -698,6 +713,10 @@ Every ready-to-send message must pass all checks:
 14. Use earliest_missing_checkpoint as the locked next destination on every new message. Continue from that checkpoint after answering the newest message; never rely on the previously displayed UI stage, skip required evidence, or repeat a field already answered.
 15. Every qualified active prospect should eventually receive a permission-based pitch after the certainty checkpoints are complete. Never end with generic encouragement while a material checkpoint remains unknown. Explicit do-not-contact, not-a-fit, or refusal boundaries always override progression.
 16. When a LOCKED KNOWLEDGE APPLICATION CONTRACT says Required=true, use that exact principle's actual lesson on the stated prospect fact. Do not substitute a famous framework, merely cite the source, or attach a principle label to a generic question. knowledge_application.message_evidence must be copied exactly from the ready-to-send message and must be the phrase that performs the lesson.
+17. Apply the decision order: perception -> conversational psychology -> one next need -> smallest relevant knowledge -> natural language. A technique is never justified merely because it exists in the library. Its trigger must be present and it must make this exact exchange more natural, not more pitch-like.
+18. Choose ONE primary job for the message. Do not combine discovery, reframing, proof, future pacing, objection handling, and a close. A direct question from the prospect gets a direct, transparent answer before any next move.
+19. Use questions only when the answer will change the next decision. If the recent Friend turns already contain consecutive questions, prefer a grounded observation, an honest answer, or space unless the prospect has actively invited a question. Do not create an interrogation.
+20. Treat “is this another course?”, “I do not trust this”, “not interested”, short answers, ignored questions, or a subject change as a trust/engagement signal. Respond transparently and calmly; never disguise a pitch, manufacture mystery, argue with a boundary, or intensify pressure.
 
 The three items must pursue the same next objective with different natural wording. Preserve metadata fields, but correct them when the message changed.`;
 }
@@ -833,6 +852,22 @@ export function deterministicFriendQualityIssues(
   if (stage === "intent" && /\baudience\b/i.test(message) && /struggl|problem|intimidat|overwhelm/i.test(message)) issues.push("asks about the audience instead of the prospect");
   if ((stage === "logical_certainty" || stage === "emotional_certainty") && /(?:sales?|clients?|customers?)/i.test(message) && /what.*(?:journey|inspire|passionate)|how.*feel/i.test(message)) issues.push("ignores a concrete sales gap for generic rapport");
   if (repeatsAnsweredFriendQuestion(message, conversation)) issues.push("repeats an answered question");
+  const recentOutbound = conversation
+    .filter((turn) => turn.direction === "outbound" && Boolean(String(turn.content || "").trim()))
+    .slice(-2)
+    .map((turn) => String(turn.content || ""));
+  const recentInbound = conversation
+    .filter((turn) => turn.direction === "inbound" && Boolean(String(turn.content || "").trim()))
+    .slice(-2)
+    .map((turn) => String(turn.content || ""));
+  const prospectIsDisengaging = recentInbound.some((turn) => /\b(?:not interested|no thanks|don't contact|do not contact|leave me alone|stop|not buying)\b/i.test(turn))
+    || (recentInbound.length >= 2 && recentInbound.every((turn) => normalized(turn).split(" ").length <= 3));
+  if (message.includes("?") && recentOutbound.length === 2 && recentOutbound.every((turn) => turn.includes("?")) && !/\b(?:how|what|why|can you|could you|tell me)\b/i.test(String(analysis?.latest_question || ""))) {
+    issues.push("creates a predictable consecutive-question chain");
+  }
+  if (prospectIsDisengaging && /\b(?:expert|mentor|offer|program|course|price|buy|link|team|sales)\b/i.test(message)) {
+    issues.push("pushes commercial context while the prospect is disengaging or declining");
+  }
   if (analysis?.result_verification_status === "unverified") {
     const testsCommercialReality = /\b(?:sales?|leads?|clients?|customers?|buyers?|orders?|income|revenue|conversions?|traffic|content (?:growth|reach)|what (?:is|has been) working)\b/i.test(message) && message.includes("?");
     if (!testsCommercialReality) issues.push("closes or drifts without verifying the prospect's commercial result");
