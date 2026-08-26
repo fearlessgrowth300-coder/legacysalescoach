@@ -57,6 +57,18 @@ function providerModel(service: string): string {
   return "";
 }
 
+function usableTextFromCompletion(payload: any): string {
+  const content = payload?.choices?.[0]?.message?.content ?? payload?.choices?.[0]?.text;
+  if (typeof content === "string" && content.trim()) return content.trim();
+  if (Array.isArray(content)) {
+    const text = content.map((part: any) => typeof part === "string" ? part : part?.text || part?.content || "")
+      .filter(Boolean).join(" ").trim();
+    if (text) return text;
+  }
+  const reasoning = payload?.choices?.[0]?.message?.reasoning_content ?? payload?.choices?.[0]?.reasoning_content;
+  return typeof reasoning === "string" ? reasoning.trim() : "";
+}
+
 async function readProviderError(response: Response): Promise<string> {
   const raw = await response.text().catch(() => "");
   if (!raw) return `Provider returned HTTP ${response.status}`;
@@ -72,22 +84,16 @@ async function validateAiProviderKey(service: string, key: string): Promise<void
   let response: Response;
   let requireCompletionContent = false;
   if (service === "gemini") {
-    // Exercise the same OpenAI-compatible endpoint and model used by the app.
-    // A models-list request can succeed even when the selected model cannot.
-    response = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: GEMINI_CHAT_MODELS.balanced,
-        messages: [{ role: "user", content: "Reply OK" }],
-        max_tokens: 16,
-      }),
-      signal: AbortSignal.timeout(20000),
+    // Validate authentication and API access without consuming a generation
+    // request. The previous probe sent "Reply OK" through the selected
+    // preview model; Gemini 3 may return an empty visible content field after
+    // reasoning, causing a false failure and needlessly using free-tier quota.
+    response = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+        headers: {
+          Authorization: `Bearer ${key}`,
+        },
+        signal: AbortSignal.timeout(15000),
     });
-    requireCompletionContent = true;
   } else if (service === "openai") {
     response = await fetch("https://api.openai.com/v1/models/gpt-4o-mini", {
       headers: { Authorization: `Bearer ${key}` },
@@ -111,9 +117,30 @@ async function validateAiProviderKey(service: string, key: string): Promise<void
   }
   if (requireCompletionContent) {
     const payload = await response.json().catch(() => null);
-    const content = payload?.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) {
-      throw new Error("Gemini key validation failed: the selected model returned no usable text");
+    if (!usableTextFromCompletion(payload)) {
+      // Gemini 3 preview can spend the small completion budget on internal
+      // reasoning and return an empty visible content field. That is not a
+      // bad key. Verify the same key with the stable, low-cost model before
+      // rejecting it, so saving a valid key does not burn a user's request on
+      // a false validation failure.
+      const fallbackResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gemini-2.5-flash",
+          messages: [{ role: "user", content: "Reply OK" }],
+          max_tokens: 8,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!fallbackResponse.ok) {
+        const detail = await readProviderError(fallbackResponse);
+        throw new Error(`Gemini key validation failed (${fallbackResponse.status}): ${detail}`);
+      }
+      const fallbackPayload = await fallbackResponse.json().catch(() => null);
+      if (!usableTextFromCompletion(fallbackPayload)) {
+        throw new Error("Gemini key validation failed: no usable completion from the selected or stable model");
+      }
     }
   }
 }
