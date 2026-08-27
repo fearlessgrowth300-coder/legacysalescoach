@@ -88,11 +88,11 @@ async function validateAiProviderKey(service: string, key: string): Promise<void
     // request. The previous probe sent "Reply OK" through the selected
     // preview model; Gemini 3 may return an empty visible content field after
     // reasoning, causing a false failure and needlessly using free-tier quota.
-    response = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
-        headers: {
-          Authorization: `Bearer ${key}`,
-        },
-        signal: AbortSignal.timeout(15000),
+    // The native Gemini models endpoint authenticates API keys via the `key`
+    // query parameter. `Authorization: Bearer` is for OAuth access tokens and
+    // returns a misleading 401 for otherwise valid AI Studio API keys.
+    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`, {
+      signal: AbortSignal.timeout(15000),
     });
   } else if (service === "openai") {
     response = await fetch("https://api.openai.com/v1/models/gpt-4o-mini", {
