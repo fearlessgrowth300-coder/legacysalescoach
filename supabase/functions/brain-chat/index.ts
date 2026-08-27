@@ -78,6 +78,19 @@ async function validateGroundedBrainResponse(args: {
   durableMemory: string;
 }): Promise<{ response: string; repaired: boolean; issues: string[] }> {
   const { chat, intent, userRequest, draft, allowedSourceTitles, evidencePack, durableMemory } = args;
+  // Gemini free-tier users should receive the completed answer from their
+  // first request. Running a second full validator request per message can
+  // immediately exhaust the provider's small RPM allowance and makes a normal
+  // reply look as though it never arrived. Deterministic source checks still
+  // run below, while paid/built-in providers keep the AI validator.
+  if (chat.provider === "gemini") {
+    const unknownSources = responseMentionsUnknownSources(draft, allowedSourceTitles);
+    return {
+      response: draft,
+      repaired: false,
+      issues: unknownSources.length ? ["unknown source citation"] : ["gemini validator deferred to preserve request quota"],
+    };
+  }
   const unknownSources = responseMentionsUnknownSources(draft, allowedSourceTitles);
   const prompt = `You are the final grounding and answer-quality validator for a Knowledge-Base-powered AI Chat.
 

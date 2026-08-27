@@ -2,13 +2,13 @@
 // Keep these separate from Lovable Gateway model IDs: the gateway has its own
 // model catalogue and uses provider-prefixed names.
 export const GEMINI_CHAT_MODELS = {
-  // Keep classification cheap, but use the preview model for generation. The
-  // 3.5 model can consume a small completion budget on internal reasoning and
-  // return an empty content field even though the HTTP request succeeded.
-  fast: "gemini-3.1-flash-lite",
-  balanced: "gemini-3-flash-preview",
-  reasoning: "gemini-3-flash-preview",
-  vision: "gemini-3-flash-preview",
+  // Direct user keys should favour the stable Flash model. The preview model
+  // can consume a free-tier request without producing visible completion text
+  // and has much tighter preview quotas, which left AI Chat apparently stuck.
+  fast: "gemini-2.5-flash",
+  balanced: "gemini-2.5-flash",
+  reasoning: "gemini-2.5-flash",
+  vision: "gemini-2.5-flash",
 } as const;
 
 // Vision must not depend on a single preview model. Gemini 3 Flash can return
