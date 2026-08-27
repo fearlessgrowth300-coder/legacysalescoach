@@ -633,7 +633,11 @@ serve(async (req) => {
     const needsInitialMemory = !hasConversationMemory(durableMemory) && storedMessageCount >= 6;
     const needsMemoryRefresh = hasConversationMemory(durableMemory) &&
       storedMessageCount - rememberedMessageCount >= 12;
-    if (conversation_id && conversationRecord && (needsInitialMemory || needsMemoryRefresh)) {
+    // A durable-memory rewrite is useful, but it is a second large generation
+    // before the user sees an answer. Skip it for direct Gemini keys: the
+    // existing transcript and saved memory are still used, and the next turn
+    // can refresh it with a provider that has room for background work.
+    if (chat.provider !== "gemini" && conversation_id && conversationRecord && (needsInitialMemory || needsMemoryRefresh)) {
       const refreshed = await refreshDurableConversationMemory(
         chat,
         conversationRecord.title || "Untitled conversation",
@@ -834,7 +838,10 @@ serve(async (req) => {
       hasImageAttachment ? `${conversationText}\n${userInstruction}` : (lastUserText || ""),
       recentForBrief,
       hasConversationMemory(durableMemory) ? durableMemoryText : "",
-      4,
+      // Gemini free tier is intentionally one semantic search per turn. The
+      // full multi-query route can make four embedding requests before the
+      // first visible answer, which looks like a frozen chat and burns quota.
+      chat.provider === "gemini" ? 1 : 4,
     );
 
     // ─── Layers 1+2 (FAST path — keeps us under the 2s CPU budget) ───
@@ -844,7 +851,10 @@ serve(async (req) => {
       question: retrievalQuery,
       embedQuery,
       embedQueries: focusedRetrievalQueries,
-      chat,
+      // The local reranker is enough for direct Gemini. Model-based selection
+      // is another generation request before the answer and is preserved for
+      // other providers.
+      chat: chat.provider === "gemini" ? undefined : chat,
       session,
     });
 
