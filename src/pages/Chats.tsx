@@ -1902,7 +1902,7 @@ export default function Chats() {
 
             {/* Thread Type Header + Conversation Stage Progress Bar */}
             <div className={`px-4 py-2 border-b ${currentThreadType === "expert" ? "bg-blue-50 dark:bg-blue-950/20" : "bg-pink-50 dark:bg-pink-950/20"}`}>
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   {currentThreadType === "expert" ? (
                     <>
@@ -1915,6 +1915,11 @@ export default function Chats() {
                       <span className="text-sm font-medium text-pink-900 dark:text-pink-100">Friend Mode</span>
                     </>
                   )}
+                </div>
+                <div className="flex items-center gap-1.5 bg-background/90 border rounded-full px-2.5 py-0.5 text-[10px] text-muted-foreground shadow-sm">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0 animate-pulse" />
+                  <span className="font-semibold text-foreground/90">Gemini 3.5 Flash Lite</span>
+                  <span className="text-muted-foreground">· Instant Suggestions (463 tok/s)</span>
                 </div>
               </div>
               {/* Stage Progress Bar */}
@@ -2021,9 +2026,14 @@ export default function Chats() {
                 )}
 
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                  <p className="text-sm font-medium flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-primary" />Suggested Replies
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium flex items-center gap-1.5">
+                      <Sparkles className="h-4 w-4 text-primary" />Suggested Replies
+                    </p>
+                    <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-primary/5 text-primary border-primary/20">
+                      Gemini 3.5 Flash Lite · 463 tok/s
+                    </Badge>
+                  </div>
                   <div className="flex gap-1 flex-wrap">
                     <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => handleEmotionalReply("emotional with a personal story")} disabled={isAnalyzing}>
                       <Heart className="h-3 w-3 mr-1" />+ Story
