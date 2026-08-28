@@ -1,4 +1,3 @@
-declare const Deno: { env: { get(key: string): string | undefined } };
 // User-AI resolution: route every AI call through the user's OWN provider key
 // (OpenAI / Gemini / Anthropic) stored in `user_api_keys`. NO Lovable-AI fallback.
 //
@@ -12,14 +11,7 @@ declare const Deno: { env: { get(key: string): string | undefined } };
 // feature" error (e.g. vision-only flows).
 
 import { decryptStoredApiKey } from "./api-key-utils.ts";
-import { coerceEmbeddingDimensions } from "./embedding-vector.ts";
 import { toAnthropicContent } from "./anthropic-content.ts";
-import {
-  GEMINI_CHAT_MODELS,
-  GEMINI_EMBEDDING_MODEL,
-  GEMINI_VISION_FALLBACK_MODELS,
-  shouldOmitGeminiSamplingParameters,
-} from "./gemini-models.ts";
 
 export type UserAiProvider = "openai" | "gemini" | "anthropic" | "lovable";
 
@@ -62,14 +54,12 @@ function lovableChatTarget(): UserChatTarget | null {
       "Content-Type": "application/json",
     },
     models: {
-      // The built-in gateway uses the lightweight model for predictable
-      // latency. Direct Gemini keys use the richer preview model below.
-      fast: "google/gemini-3.1-flash-lite",
-      balanced: "google/gemini-3.1-flash-lite",
-      reasoning: "google/gemini-3.1-flash-lite",
-      vision: "google/gemini-3.1-flash-lite",
+      fast: "google/gemini-2.5-flash-lite",
+      balanced: "google/gemini-2.5-flash",
+      reasoning: "google/gemini-2.5-flash",
+      vision: "google/gemini-2.5-flash",
     },
-    visionFallbackModels: ["google/gemini-3.1-flash-lite"],
+    visionFallbackModels: ["google/gemini-2.5-pro"],
     isAnthropic: false,
   };
 }
@@ -135,8 +125,13 @@ export async function resolveUserChatTarget(
       provider: "gemini",
       url: `${GEMINI_BASE}/chat/completions`,
       headers: { Authorization: `Bearer ${found.key}`, "Content-Type": "application/json" },
-      models: { ...GEMINI_CHAT_MODELS },
-      visionFallbackModels: [...GEMINI_VISION_FALLBACK_MODELS],
+      models: {
+        fast: "gemini-2.0-flash",
+        balanced: "gemini-2.0-flash",
+        reasoning: "gemini-2.0-flash",
+        vision: "gemini-2.0-flash",
+      },
+      visionFallbackModels: ["gemini-1.5-flash", "gemini-1.5-pro"],
       isAnthropic: false,
     };
   }
@@ -184,7 +179,7 @@ export async function resolveUserEmbedTarget(
       provider: "gemini",
       url: `${GEMINI_BASE}/embeddings`,
       headers: { Authorization: `Bearer ${found.key}`, "Content-Type": "application/json" },
-      model: GEMINI_EMBEDDING_MODEL,
+      model: "text-embedding-004",
       dimensions: 768,
     };
   }
@@ -206,7 +201,6 @@ export type SimpleChatOpts = {
   tools?: any[];
   tool_choice?: any;
   stream?: boolean;
-  timeout_ms?: number;
 };
 
 export async function userChat(
@@ -214,24 +208,54 @@ export async function userChat(
   opts: SimpleChatOpts,
 ): Promise<Response> {
   if (!target.isAnthropic) {
-    const body: any = {
-      model: opts.model,
-      messages: opts.messages,
-    };
-    if (!shouldOmitGeminiSamplingParameters(target.provider, opts.model)) {
-      body.temperature = opts.temperature ?? 0.3;
+    const candidateModels = target.provider === "gemini"
+      ? [opts.model, "gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+          .filter((m, i, arr) => Boolean(m) && arr.indexOf(m) === i)
+      : [opts.model];
+
+    let lastResponse: Response | null = null;
+
+    for (const currentModel of candidateModels) {
+      const body: any = {
+        model: currentModel,
+        messages: opts.messages,
+      };
+      if (!shouldOmitGeminiSamplingParameters(target.provider, currentModel)) {
+        body.temperature = opts.temperature ?? 0.3;
+      }
+      if (opts.max_tokens) body.max_tokens = opts.max_tokens;
+      if (opts.response_format) body.response_format = opts.response_format;
+      if (opts.tools) body.tools = opts.tools;
+      if (opts.tool_choice) body.tool_choice = opts.tool_choice;
+      if (opts.stream) body.stream = true;
+
+      try {
+        const res = await fetch(target.url, {
+          method: "POST",
+          headers: target.headers,
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(opts.timeout_ms || 60000),
+        });
+
+        lastResponse = res;
+
+        if (res.ok) {
+          return res;
+        }
+
+        // On 429 (Rate Limit) or 503 (Overloaded) or 404 (Model Not Found), fail over to next model
+        if (res.status === 429 || res.status === 503 || res.status === 404) {
+          console.warn(`[user-ai] model ${currentModel} returned ${res.status}. Failing over to next Gemini fallback...`);
+          continue;
+        }
+
+        return res;
+      } catch (err: any) {
+        console.warn(`[user-ai] fetch exception on ${currentModel}:`, err);
+      }
     }
-    if (opts.max_tokens) body.max_tokens = opts.max_tokens;
-    if (opts.response_format) body.response_format = opts.response_format;
-    if (opts.tools) body.tools = opts.tools;
-    if (opts.tool_choice) body.tool_choice = opts.tool_choice;
-    if (opts.stream) body.stream = true;
-    return fetch(target.url, {
-      method: "POST",
-      headers: target.headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(opts.timeout_ms || 60000),
-    });
+
+    return lastResponse || new Response(JSON.stringify({ error: "AI rate limit reached on all models. Please try again shortly." }), { status: 429 });
   }
 
   // Anthropic translation — non-streaming only.
@@ -272,7 +296,6 @@ export async function userChat(
     method: "POST",
     headers: target.headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(opts.timeout_ms || 60000),
   });
 
   // Translate Anthropic response → OpenAI-shape so callers can keep using
@@ -315,25 +338,19 @@ export async function userEmbed(target: UserEmbedTarget, text: string): Promise<
   if (truncated.length < 1) return null;
   try {
     const body: any = { model: target.model, input: truncated };
-    // The Lovable gateway's Gemini embedding model defaults to 3,072 values,
-    // while this app's pgvector columns are vector(768). Both the gateway and
-    // Gemini's OpenAI-compatible API accept the dimensions parameter.
-    body.dimensions = target.dimensions;
+    if (target.provider === "openai") body.dimensions = target.dimensions;
     const res = await fetch(target.url, {
       method: "POST",
       headers: target.headers,
       body: JSON.stringify(body),
-      // A semantic lookup is optional. On Gemini it must fail quickly rather
-      // than blocking the user-visible response while the provider is rate
-      // limited; the retrieval pipeline has a database fallback.
-      signal: AbortSignal.timeout(target.provider === "gemini" ? 6000 : 30000),
+      signal: AbortSignal.timeout(30000),
     });
     if (!res.ok) {
       console.error(`[user-ai] embed ${target.provider} ${res.status}:`, await res.text().catch(() => ""));
       return null;
     }
     const data = await res.json();
-    return coerceEmbeddingDimensions(data.data?.[0]?.embedding, target.dimensions);
+    return data.data?.[0]?.embedding || null;
   } catch (e) {
     console.error("[user-ai] embed threw:", e);
     return null;
