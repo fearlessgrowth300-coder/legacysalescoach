@@ -9,7 +9,13 @@ import { toast } from "sonner";
 import { Settings as SettingsIcon, Key, Save, AlertTriangle, Bot, Trash2, Plus } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { PROVIDER_MODEL, type ActiveAi } from "@/hooks/useActiveAiModel";
+import {
+  PROVIDER_MODEL,
+  type ActiveAi,
+  GEMINI_AVAILABLE_MODELS,
+  getSelectedGeminiModel,
+  setSelectedGeminiModel,
+} from "@/hooks/useActiveAiModel";
 
 const AI_PROVIDERS = [
   { value: "gemini", label: "Google Gemini (free tier — recommended)", help: "Get a free key at aistudio.google.com/apikey", placeholder: "AIza..." },
@@ -27,6 +33,7 @@ export default function Settings() {
 
   // ─── Bring-your-own AI provider key ───
   const [aiProvider, setAiProvider] = useState<string>("gemini");
+  const [geminiModel, setGeminiModel] = useState<string>(() => getSelectedGeminiModel());
   const [aiKey, setAiKey] = useState("");
   const [aiSaving, setAiSaving] = useState(false);
   const [activeAi, setActiveAi] = useState<{ provider: string; masked: string } | null>(null);
@@ -153,33 +160,35 @@ export default function Settings() {
               AI Provider
             </CardTitle>
             <CardDescription>
-              Choose which AI powers the app. By default everything runs on the built-in <strong>Lovable AI</strong> (no key needed). Add your own OpenAI / Gemini / Anthropic key to switch processing to your account and remove the shared usage limit. Remove your key any time to switch back to Lovable AI.
+              Configure your Google Gemini, OpenAI, or Anthropic API key to power all AI sales coaching, conversations, and intelligence.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2">
               <div className="text-sm">
-                <span className="text-muted-foreground">Currently using: </span>
+                <span className="text-muted-foreground">Active Model Engine: </span>
                 {activeAi ? (
                   <>
                     <span className="font-medium">{AI_PROVIDERS.find((p) => p.value === activeAi.provider)?.label.split(" (")[0]}</span>
                     <code className="ml-2 bg-muted px-2 py-0.5 rounded text-xs">{activeAi.masked}</code>
                     <code className="ml-2 bg-primary/10 text-primary px-2 py-0.5 rounded text-xs font-medium">
-                      {PROVIDER_MODEL[activeAi.provider as ActiveAi["provider"]]?.model}
+                      {activeAi.provider === "gemini" ? geminiModel : PROVIDER_MODEL[activeAi.provider as ActiveAi["provider"]]?.model}
                     </code>
                   </>
                 ) : (
                   <>
-                    <span className="font-medium">Lovable AI (built-in)</span>
+                    <span className="font-medium">Google Gemini</span>
                     <code className="ml-2 bg-primary/10 text-primary px-2 py-0.5 rounded text-xs font-medium">
-                      {PROVIDER_MODEL.lovable.model}
+                      {geminiModel}
                     </code>
                   </>
                 )}
               </div>
-              <Button variant="ghost" size="sm" onClick={handleRemoveAiKey} disabled={aiSaving || !activeAi}>
-                Switch to Lovable AI
-              </Button>
+              {activeAi && (
+                <Button variant="ghost" size="sm" onClick={handleRemoveAiKey} disabled={aiSaving}>
+                  Remove Key
+                </Button>
+              )}
             </div>
 
 
@@ -195,6 +204,28 @@ export default function Settings() {
               </Select>
               <p className="text-xs text-muted-foreground">{selectedProvider.help}</p>
             </div>
+
+            {aiProvider === "gemini" && (
+              <div className="space-y-2">
+                <Label>AI Model Engine</Label>
+                <Select
+                  value={geminiModel}
+                  onValueChange={(val) => {
+                    setGeminiModel(val);
+                    setSelectedGeminiModel(val);
+                    toast.success(`AI Model Engine switched to ${val}`);
+                  }}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {GEMINI_AVAILABLE_MODELS.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Select your default Google Gemini reasoning & speed engine.</p>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="ai-key">API Key</Label>

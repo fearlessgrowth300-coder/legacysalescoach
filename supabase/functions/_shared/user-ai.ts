@@ -211,17 +211,54 @@ export async function userChat(
   opts: SimpleChatOpts,
 ): Promise<Response> {
   if (!target.isAnthropic) {
-    const body: any = {
-      model: opts.model,
-      messages: opts.messages,
-      temperature: opts.temperature ?? 0.3,
-    };
-    if (opts.max_tokens) body.max_tokens = opts.max_tokens;
-    if (opts.response_format) body.response_format = opts.response_format;
-    if (opts.tools) body.tools = opts.tools;
-    if (opts.tool_choice) body.tool_choice = opts.tool_choice;
-    if (opts.stream) body.stream = true;
-    return fetch(target.url, { method: "POST", headers: target.headers, body: JSON.stringify(body) });
+    const candidateModels = target.provider === "gemini"
+      ? [opts.model, "gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+          .filter((m, i, arr) => Boolean(m) && arr.indexOf(m) === i)
+      : [opts.model];
+
+    let lastResponse: Response | null = null;
+
+    for (const currentModel of candidateModels) {
+      const body: any = {
+        model: currentModel,
+        messages: opts.messages,
+      };
+      if (!shouldOmitGeminiSamplingParameters(target.provider, currentModel)) {
+        body.temperature = opts.temperature ?? 0.3;
+      }
+      if (opts.max_tokens) body.max_tokens = opts.max_tokens;
+      if (opts.response_format) body.response_format = opts.response_format;
+      if (opts.tools) body.tools = opts.tools;
+      if (opts.tool_choice) body.tool_choice = opts.tool_choice;
+      if (opts.stream) body.stream = true;
+
+      try {
+        const res = await fetch(target.url, {
+          method: "POST",
+          headers: target.headers,
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(opts.timeout_ms || 60000),
+        });
+
+        lastResponse = res;
+
+        if (res.ok) {
+          return res;
+        }
+
+        // On 429 (Rate Limit) or 503 (Overloaded) or 404 (Model Not Found), fail over to next model
+        if (res.status === 429 || res.status === 503 || res.status === 404) {
+          console.warn(`[user-ai] model ${currentModel} returned ${res.status}. Failing over to next Gemini fallback...`);
+          continue;
+        }
+
+        return res;
+      } catch (err: any) {
+        console.warn(`[user-ai] fetch exception on ${currentModel}:`, err);
+      }
+    }
+
+    return lastResponse || new Response(JSON.stringify({ error: "AI rate limit reached on all models. Please try again shortly." }), { status: 429 });
   }
 
   // Anthropic translation — non-streaming only.

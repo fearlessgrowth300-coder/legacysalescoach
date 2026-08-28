@@ -24,12 +24,12 @@ function getCorsHeaders(req: Request) {
 
 async function fetchInstagramProfile(username: string, apiKey: string): Promise<any | null> {
   const response = await fetch(
-    `https://api.apify.com/v2/acts/apify~instagram-profile-scraper/run-sync-get-dataset-items?token=${apiKey}`,
+    `https://api.apify.com/v2/acts/apify~instagram-profile-scraper/run-sync-get-dataset-items?token=${apiKey}&timeout=35&maxItems=1&limit=1&clean=true`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ usernames: [username], resultsLimit: 1 }),
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(40000),
     },
   );
   if (!response.ok) {
@@ -39,6 +39,60 @@ async function fetchInstagramProfile(username: string, apiKey: string): Promise<
   }
   const results = await response.json();
   return Array.isArray(results) && results.length > 0 ? results[0] : null;
+}
+
+async function startInstagramProfileRun(username: string, apiKey: string) {
+  const response = await fetch(
+    `https://api.apify.com/v2/acts/apify~instagram-profile-scraper/runs?token=${apiKey}&timeout=180&maxItems=1`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usernames: [username] }),
+      signal: AbortSignal.timeout(12000),
+    },
+  );
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error("Apify Instagram profile start error:", response.status, errText);
+    throw new Error(`Unable to start Instagram profile analysis: ${response.status}`);
+  }
+  const payload = await response.json();
+  const run = payload?.data;
+  if (!run?.id || !run?.defaultDatasetId) {
+    throw new Error("Instagram profile analysis did not return a run reference");
+  }
+  return { runId: run.id as string, datasetId: run.defaultDatasetId as string };
+}
+
+async function pollInstagramProfileRun(runId: string, datasetId: string, apiKey: string) {
+  const response = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${apiKey}`, {
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) throw new Error(`Unable to check Instagram analysis: ${response.status}`);
+
+  const payload = await response.json();
+  const run = payload?.data;
+  if (!run || run.defaultDatasetId !== datasetId) {
+    throw new Error("Instagram analysis run reference is invalid");
+  }
+
+  if (["READY", "RUNNING"].includes(run.status)) {
+    return { pending: true as const };
+  }
+  if (run.status !== "SUCCEEDED") {
+    throw new Error(`Instagram analysis ended with status ${run.status || "UNKNOWN"}`);
+  }
+
+  const datasetResponse = await fetch(
+    `https://api.apify.com/v2/datasets/${datasetId}/items?token=${apiKey}&clean=true&limit=1`,
+    { signal: AbortSignal.timeout(10000) },
+  );
+  if (!datasetResponse.ok) throw new Error(`Unable to read Instagram analysis: ${datasetResponse.status}`);
+  const results = await datasetResponse.json();
+  return {
+    pending: false as const,
+    profile: Array.isArray(results) && results.length > 0 ? results[0] : null,
+  };
 }
 
 async function cacheProfilePicture(supabaseAdmin: any, userId: string, username: string, sourceUrl: string): Promise<string> {
@@ -159,7 +213,10 @@ serve(async (req) => {
       });
     }
 
-    const { username: rawInput } = await req.json();
+    const requestBody = await req.json();
+    const rawInput = requestBody?.username;
+    const runId = requestBody?.runId;
+    const datasetId = requestBody?.datasetId;
     if (!rawInput) {
       return new Response(JSON.stringify({ error: "username or URL required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -176,6 +233,32 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
     const userId = String(claims.claims.sub);
+
+    if (runId || datasetId) {
+      if (!runId || !datasetId || isInstagramPostUrl(rawInput)) {
+        return new Response(JSON.stringify({ error: "Invalid Instagram analysis run reference" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const polled = await pollInstagramProfileRun(String(runId), String(datasetId), APIFY_API_KEY);
+      if (polled.pending) {
+        return new Response(JSON.stringify({ pending: true, runId, datasetId, retryAfterMs: 3000 }), {
+          status: 202, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (!polled.profile) {
+        return new Response(JSON.stringify({ error: "Profile not found", username }), {
+          status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const data = normalizeInstagramProfile(polled.profile, username);
+      data.profilePicUrl = await cacheProfilePicture(supabaseAdmin, userId, data.username, data.profilePicUrl);
+      return new Response(JSON.stringify({ ...data, summary: buildProfileSummary(data) }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     if (isInstagramPostUrl(rawInput)) {
       console.log(`Fetching Instagram post/reel for: ${rawInput}`);
@@ -236,19 +319,9 @@ serve(async (req) => {
 
     console.log(`Fetching Instagram profile for: ${username}`);
 
-    const profile = await fetchInstagramProfile(username, APIFY_API_KEY);
-
-    if (!profile) {
-      return new Response(JSON.stringify({ error: "Profile not found", username }), {
-        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const data = normalizeInstagramProfile(profile, username);
-    data.profilePicUrl = await cacheProfilePicture(supabaseAdmin, userId, data.username, data.profilePicUrl);
-    const summary = buildProfileSummary(data);
-
-    return new Response(JSON.stringify({ ...data, summary }), {
+    const run = await startInstagramProfileRun(username, APIFY_API_KEY);
+    return new Response(JSON.stringify({ pending: true, ...run, retryAfterMs: 3000 }), {
+      status: 202,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {

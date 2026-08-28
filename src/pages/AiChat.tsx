@@ -1224,14 +1224,16 @@ export default function AiChat() {
           </div>
           <div className="min-w-0 flex-1">
             <h2 className="font-bold text-sm flex items-center gap-1.5 truncate">
-              AI Brain <Zap className="h-3.5 w-3.5 text-primary shrink-0" />
+              AI Sales Brain <Zap className="h-3.5 w-3.5 text-primary shrink-0" />
             </h2>
-            <p className="text-[10px] md:text-xs text-muted-foreground truncate flex items-center gap-1">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
-              <span className="font-medium text-foreground/80">{activeAi.providerLabel}</span>
-              <span className="hidden sm:inline">·</span>
-              <code className="hidden sm:inline bg-primary/10 text-primary px-1.5 py-0.5 rounded text-[10px]">{activeAi.model}</code>
-            </p>
+            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground truncate">
+              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500 shrink-0 animate-pulse" />
+              <span className="font-semibold text-foreground/90">Gemini 3.7 Flash</span>
+              <span className="text-muted-foreground">·</span>
+              <span className="text-primary font-medium text-[10px] bg-primary/10 px-1.5 py-0.5 rounded">
+                Sales Strategy & Thinking (340 tok/s)
+              </span>
+            </div>
           </div>
 
           {/* Call Assistant Button */}
