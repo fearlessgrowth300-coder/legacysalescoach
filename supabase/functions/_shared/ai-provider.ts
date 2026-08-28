@@ -87,7 +87,7 @@ export async function resolveAiProvider(supabase: any, userId: string | null): P
       name: "gemini",
       chatUrl: `${GEMINI_BASE}/chat/completions`,
       key: found.key,
-      model: (t) => t === "reasoning" ? "gemini-2.5-flash" : t === "fast" ? "gemini-2.5-flash-lite" : "gemini-2.5-flash",
+      model: (t) => "gemini-2.0-flash",
       isAnthropic: false,
       embed: { url: `${GEMINI_BASE}/embeddings`, key: found.key, model: "text-embedding-004", provider: "gemini" },
     };

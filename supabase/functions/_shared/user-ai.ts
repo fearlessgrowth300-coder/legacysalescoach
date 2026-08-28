@@ -128,8 +128,13 @@ export async function resolveUserChatTarget(
       provider: "gemini",
       url: `${GEMINI_BASE}/chat/completions`,
       headers: { Authorization: `Bearer ${found.key}`, "Content-Type": "application/json" },
-      models: { fast: "gemini-2.5-flash-lite", balanced: "gemini-2.5-flash", reasoning: "gemini-2.5-flash", vision: "gemini-2.5-flash" },
-      visionFallbackModels: ["gemini-2.5-pro"],
+      models: {
+        fast: "gemini-2.0-flash",
+        balanced: "gemini-2.0-flash",
+        reasoning: "gemini-2.0-flash",
+        vision: "gemini-2.0-flash",
+      },
+      visionFallbackModels: ["gemini-1.5-flash", "gemini-1.5-pro"],
       isAnthropic: false,
     };
   }

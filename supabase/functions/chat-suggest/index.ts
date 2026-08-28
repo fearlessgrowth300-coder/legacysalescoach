@@ -1384,8 +1384,11 @@ ${jsonFormat}
 
     if (!response.ok) {
       const status = response.status;
+      const rawText = await response.text().catch(() => "");
+      console.error(`[chat-suggest] ${chat.provider} error:`, status, rawText);
+
       if (status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again shortly." }), {
+        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please check your Gemini / OpenAI quota in Settings." }), {
           status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
@@ -1394,7 +1397,19 @@ ${jsonFormat}
           status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      throw new Error(`AI gateway error: ${status}`);
+      if (status === 401 || status === 400 || status === 403) {
+        try {
+          const parsed = JSON.parse(rawText);
+          const errObj = Array.isArray(parsed) ? parsed[0]?.error : parsed?.error;
+          const msg = errObj?.message || (status === 401 ? "Invalid API key in Settings." : rawText.slice(0, 150));
+          return new Response(JSON.stringify({ error: `AI error (${status}): ${msg}` }), {
+            status, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        } catch {
+          // fall through
+        }
+      }
+      throw new Error(`AI provider error (${status}): ${rawText.slice(0, 150) || "service unavailable"}`);
     }
 
     const aiResponse = await response.json();

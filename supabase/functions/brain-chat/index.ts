@@ -682,13 +682,26 @@ serve(async (req) => {
 
 
         if (!aiResp.ok || !aiResp.body) {
-          let message = "AI gateway error";
-          if (aiResp.status === 429) message = "Rate limit exceeded. Please try again.";
-          else if (aiResp.status === 402) message = "Usage limit reached. Please add credits.";
-          else {
-            const t = await aiResp.text().catch(() => "");
-            console.error("AI gateway error:", aiResp.status, t);
+          let message = "AI provider error";
+          const rawText = await aiResp.text().catch(() => "");
+          console.error(`[brain-chat] ${chat.provider} error:`, aiResp.status, rawText);
+
+          if (aiResp.status === 429) {
+            message = "Rate limit exceeded. Please check your Gemini / OpenAI API key quota in Google AI Studio or Settings.";
+          } else if (aiResp.status === 402) {
+            message = "Usage limit reached. Please add credits to your AI provider.";
+          } else if (aiResp.status === 400 || aiResp.status === 401 || aiResp.status === 403) {
+            try {
+              const parsed = JSON.parse(rawText);
+              const errObj = Array.isArray(parsed) ? parsed[0]?.error : parsed?.error;
+              message = errObj?.message || (aiResp.status === 401 ? "Invalid API key. Please check your key in Settings." : "AI error: " + rawText.slice(0, 150));
+            } catch {
+              message = aiResp.status === 401 ? "Invalid API key. Please check your key in Settings." : `AI provider error (${aiResp.status}): ${rawText.slice(0, 150)}`;
+            }
+          } else {
+            message = `AI provider error (${aiResp.status}): ${rawText.slice(0, 120) || "Unable to reach AI service"}`;
           }
+
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
