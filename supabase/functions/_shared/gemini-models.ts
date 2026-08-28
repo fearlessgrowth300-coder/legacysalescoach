@@ -1,14 +1,17 @@
 // Current direct Google Gemini models used with a user's Gemini API key.
-// Keep these separate from Lovable Gateway model IDs: the gateway has its own
-// model catalogue and uses provider-prefixed names.
 export const GEMINI_CHAT_MODELS = {
-  fast: "gemini-2.0-flash",
-  balanced: "gemini-2.0-flash",
-  reasoning: "gemini-2.0-flash",
-  vision: "gemini-2.0-flash",
+  fast: "gemini-3.5-flash-lite",
+  balanced: "gemini-3.7-flash",
+  reasoning: "gemini-3.7-flash",
+  vision: "gemini-3.7-flash",
 } as const;
 
 export const GEMINI_VISION_FALLBACK_MODELS = [
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-pro",
+  "gemini-2.0-flash",
   "gemini-1.5-flash",
   "gemini-1.5-pro",
 ] as const;
