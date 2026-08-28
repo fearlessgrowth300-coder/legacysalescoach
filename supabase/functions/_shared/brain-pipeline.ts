@@ -936,6 +936,8 @@ export async function runPipelineFast(opts: {
    * local relevance+power selection if reasoning is slow or unavailable.
    */
   chat?: UserChatTarget;
+  /** Avoid an external embedding call when a provider is temporarily quota-limited. */
+  skipEmbedding?: boolean;
   session: SessionContext;
 }): Promise<PipelineOutput> {
   const { supabaseAdmin, userId, question, session } = opts;
@@ -952,9 +954,11 @@ export async function runPipelineFast(opts: {
   // Compound questions need more than one semantic angle. Generate up to four
   // embeddings in parallel, search both stores for each, and retain the best
   // similarity for every principle/passage encountered.
-  const embeddings = await Promise.all(
-    semanticQueries.map((query) => generateEmbedding(query, supabaseAdmin, userId)),
-  );
+  const embeddings = opts.skipEmbedding
+    ? []
+    : await Promise.all(
+      semanticQueries.map((query) => generateEmbedding(query, supabaseAdmin, userId)),
+    );
   const embeddingUsed = embeddings.some(Boolean);
 
   let semP: Principle[] = [];

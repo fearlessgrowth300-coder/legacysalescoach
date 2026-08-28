@@ -2,21 +2,15 @@
 // Keep these separate from Lovable Gateway model IDs: the gateway has its own
 // model catalogue and uses provider-prefixed names.
 export const GEMINI_CHAT_MODELS = {
-  // Direct user keys should favour the stable Flash model. The preview model
-  // can consume a free-tier request without producing visible completion text
-  // and has much tighter preview quotas, which left AI Chat apparently stuck.
-  fast: "gemini-2.5-flash",
-  balanced: "gemini-2.5-flash",
-  reasoning: "gemini-2.5-flash",
-  vision: "gemini-2.5-flash",
+  fast: "gemini-2.0-flash",
+  balanced: "gemini-2.0-flash",
+  reasoning: "gemini-2.0-flash",
+  vision: "gemini-2.0-flash",
 } as const;
 
-// Vision must not depend on a single preview model. Gemini 3 Flash can return
-// an empty content field after using a small completion budget for thinking,
-// and preview/free-tier availability can change independently of stable models.
 export const GEMINI_VISION_FALLBACK_MODELS = [
-  "gemini-3.1-flash-lite",
-  "gemini-2.5-flash",
+  "gemini-1.5-flash",
+  "gemini-1.5-pro",
 ] as const;
 
 export function buildVisionModelChain(
@@ -28,7 +22,7 @@ export function buildVisionModelChain(
     .filter((model, index, models) => Boolean(model) && models.indexOf(model) === index);
 }
 
-export const GEMINI_EMBEDDING_MODEL = "gemini-embedding-2";
+export const GEMINI_EMBEDDING_MODEL = "text-embedding-004";
 
 // Google deprecates temperature/top-p/top-k controls on Gemini 3.5+ models.
 // Omitting them keeps OpenAI-compatible requests forward-compatible.

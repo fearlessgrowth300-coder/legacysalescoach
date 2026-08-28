@@ -323,7 +323,10 @@ export async function userEmbed(target: UserEmbedTarget, text: string): Promise<
       method: "POST",
       headers: target.headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
+      // A semantic lookup is optional. On Gemini it must fail quickly rather
+      // than blocking the user-visible response while the provider is rate
+      // limited; the retrieval pipeline has a database fallback.
+      signal: AbortSignal.timeout(target.provider === "gemini" ? 6000 : 30000),
     });
     if (!res.ok) {
       console.error(`[user-ai] embed ${target.provider} ${res.status}:`, await res.text().catch(() => ""));

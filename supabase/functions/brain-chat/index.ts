@@ -855,6 +855,11 @@ serve(async (req) => {
       // is another generation request before the answer and is preserved for
       // other providers.
       chat: chat.provider === "gemini" ? undefined : chat,
+      // Gemini's embedding endpoint is separately rate-limited from chat
+      // generation. A rate-limited embedding must never leave AI Chat waiting
+      // before it can send an answer; the pipeline falls back to its stored
+      // Sales Brain ranking for this turn.
+      skipEmbedding: chat.provider === "gemini",
       session,
     });
 
