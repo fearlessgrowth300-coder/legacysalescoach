@@ -1,17 +1,39 @@
-// Current direct Google Gemini models used with a user's Gemini API key.
+// Real Google Gemini models used with the Google Generative Language API.
+export function normalizeGeminiModel(model?: string): string {
+  if (!model) return "gemini-2.5-flash";
+  const clean = model.trim().toLowerCase().replace(/^google\//, "");
+  if (clean.includes("3.7") || clean.includes("3.6") || clean.includes("2.5") || clean === "gemini-flash" || clean.includes("fast") || clean.includes("balanced")) {
+    return "gemini-2.5-flash";
+  }
+  if (clean.includes("3.5") || clean.includes("lite") || clean.includes("2.0-flash-lite")) {
+    return "gemini-2.0-flash-lite";
+  }
+  if (clean.includes("3.1") || clean.includes("pro") || clean.includes("reasoning")) {
+    return "gemini-2.5-pro";
+  }
+  if (clean.includes("2.0")) {
+    return "gemini-2.0-flash";
+  }
+  if (clean.includes("1.5-flash")) {
+    return "gemini-1.5-flash";
+  }
+  if (clean.includes("1.5-pro")) {
+    return "gemini-1.5-pro";
+  }
+  return "gemini-2.5-flash";
+}
+
 export const GEMINI_CHAT_MODELS = {
-  fast: "gemini-3.5-flash-lite",
-  balanced: "gemini-3.7-flash",
-  reasoning: "gemini-3.7-flash",
-  vision: "gemini-3.7-flash",
+  fast: "gemini-2.5-flash",
+  balanced: "gemini-2.5-flash",
+  reasoning: "gemini-2.5-pro",
+  vision: "gemini-2.5-flash",
 } as const;
 
 export const GEMINI_VISION_FALLBACK_MODELS = [
-  "gemini-3.7-flash",
-  "gemini-3.6-flash",
-  "gemini-3.5-flash-lite",
-  "gemini-3.1-pro",
+  "gemini-2.5-flash",
   "gemini-2.0-flash",
+  "gemini-2.5-pro",
   "gemini-1.5-flash",
   "gemini-1.5-pro",
 ] as const;
@@ -20,7 +42,10 @@ export function buildVisionModelChain(
   primary: string,
   fallbacks: readonly string[] = [],
 ): string[] {
-  return [primary, ...fallbacks]
+  const normPrimary = normalizeGeminiModel(primary);
+  const normFallbacks = fallbacks.map(normalizeGeminiModel);
+  const combined = [normPrimary, ...normFallbacks, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"];
+  return combined
     .map((model) => String(model || "").trim())
     .filter((model, index, models) => Boolean(model) && models.indexOf(model) === index);
 }

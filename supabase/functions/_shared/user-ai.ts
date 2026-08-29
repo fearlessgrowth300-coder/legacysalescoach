@@ -12,6 +12,7 @@
 
 import { decryptStoredApiKey } from "./api-key-utils.ts";
 import { toAnthropicContent } from "./anthropic-content.ts";
+import { normalizeGeminiModel, GEMINI_CHAT_MODELS, GEMINI_VISION_FALLBACK_MODELS, shouldOmitGeminiSamplingParameters } from "./gemini-models.ts";
 
 export type UserAiProvider = "openai" | "gemini" | "anthropic" | "lovable";
 
@@ -125,13 +126,8 @@ export async function resolveUserChatTarget(
       provider: "gemini",
       url: `${GEMINI_BASE}/chat/completions`,
       headers: { Authorization: `Bearer ${found.key}`, "Content-Type": "application/json" },
-      models: {
-        fast: "gemini-2.0-flash",
-        balanced: "gemini-2.0-flash",
-        reasoning: "gemini-2.0-flash",
-        vision: "gemini-2.0-flash",
-      },
-      visionFallbackModels: ["gemini-1.5-flash", "gemini-1.5-pro"],
+      models: { ...GEMINI_CHAT_MODELS },
+      visionFallbackModels: [...GEMINI_VISION_FALLBACK_MODELS],
       isAnthropic: false,
     };
   }
@@ -209,8 +205,14 @@ export async function userChat(
 ): Promise<Response> {
   if (!target.isAnthropic) {
     const candidateModels = target.provider === "gemini"
-      ? [opts.model, "gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
-          .filter((m, i, arr) => Boolean(m) && arr.indexOf(m) === i)
+      ? [
+          normalizeGeminiModel(opts.model),
+          "gemini-2.5-flash",
+          "gemini-2.0-flash",
+          "gemini-2.5-pro",
+          "gemini-1.5-flash",
+          "gemini-1.5-pro",
+        ].filter((m, i, arr) => Boolean(m) && arr.indexOf(m) === i)
       : [opts.model];
 
     let lastResponse: Response | null = null;
