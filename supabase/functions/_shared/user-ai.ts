@@ -122,10 +122,15 @@ export async function resolveUserChatTarget(
     };
   }
   if (found.provider === "gemini") {
+    const cleanKey = found.key.replace(/^Bearer\s+/i, "").trim();
     return {
       provider: "gemini",
       url: `${GEMINI_BASE}/chat/completions`,
-      headers: { Authorization: `Bearer ${found.key}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${cleanKey}`,
+        "x-goog-api-key": cleanKey,
+        "Content-Type": "application/json",
+      },
       models: { ...GEMINI_CHAT_MODELS },
       visionFallbackModels: [...GEMINI_VISION_FALLBACK_MODELS],
       isAnthropic: false,
@@ -171,10 +176,15 @@ export async function resolveUserEmbedTarget(
     };
   }
   if (found.provider === "gemini") {
+    const cleanKey = found.key.replace(/^Bearer\s+/i, "").trim();
     return {
       provider: "gemini",
       url: `${GEMINI_BASE}/embeddings`,
-      headers: { Authorization: `Bearer ${found.key}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${cleanKey}`,
+        "x-goog-api-key": cleanKey,
+        "Content-Type": "application/json",
+      },
       model: "text-embedding-004",
       dimensions: 768,
     };

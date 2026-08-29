@@ -101,7 +101,11 @@ export async function callGeminiNativeVision(
 
       const resp = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": cleanKey,
+          "Authorization": `Bearer ${cleanKey}`,
+        },
         body: JSON.stringify({
           contents: [{ parts }],
           generationConfig: {

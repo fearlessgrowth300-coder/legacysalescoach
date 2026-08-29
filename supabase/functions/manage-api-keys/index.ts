@@ -84,16 +84,19 @@ async function validateAiProviderKey(service: string, key: string): Promise<void
   let response: Response;
   let requireCompletionContent = false;
   if (service === "gemini") {
-    // Validate authentication and API access without consuming a generation
-    // request. The previous probe sent "Reply OK" through the selected
-    // preview model; Gemini 3 may return an empty visible content field after
-    // reasoning, causing a false failure and needlessly using free-tier quota.
-    // The native Gemini models endpoint authenticates API keys via the `key`
-    // query parameter. `Authorization: Bearer` is for OAuth access tokens and
-    // returns a misleading 401 for otherwise valid AI Studio API keys.
-    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`, {
+    const cleanKey = key.replace(/^Bearer\s+/i, "").trim();
+    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models`, {
+      headers: {
+        "x-goog-api-key": cleanKey,
+        "Authorization": `Bearer ${cleanKey}`,
+      },
       signal: AbortSignal.timeout(15000),
     });
+    if (!response.ok) {
+      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`, {
+        signal: AbortSignal.timeout(15000),
+      });
+    }
   } else if (service === "openai") {
     response = await fetch("https://api.openai.com/v1/models/gpt-4o-mini", {
       headers: { Authorization: `Bearer ${key}` },
