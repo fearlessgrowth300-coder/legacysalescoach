@@ -185,7 +185,7 @@ export async function resolveUserEmbedTarget(
         "x-goog-api-key": cleanKey,
         "Content-Type": "application/json",
       },
-      model: "text-embedding-004",
+      model: GEMINI_EMBEDDING_MODEL,
       dimensions: 768,
     };
   }
@@ -217,11 +217,10 @@ export async function userChat(
     const candidateModels = target.provider === "gemini"
       ? [
           normalizeGeminiModel(opts.model),
-          "gemini-2.5-flash",
-          "gemini-2.0-flash",
-          "gemini-2.5-pro",
-          "gemini-1.5-flash",
-          "gemini-1.5-pro",
+          "gemini-3.7-flash",
+          "gemini-3.6-flash",
+          "gemini-3.5-flash-lite",
+          "gemini-3.1-pro-preview",
         ].filter((m, i, arr) => Boolean(m) && arr.indexOf(m) === i)
       : [opts.model];
 

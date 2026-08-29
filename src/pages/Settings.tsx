@@ -18,7 +18,7 @@ import {
 } from "@/hooks/useActiveAiModel";
 
 const AI_PROVIDERS = [
-  { value: "gemini", label: "Google Gemini (free tier — recommended)", help: "Get a free key at aistudio.google.com/apikey", placeholder: "AIza..." },
+  { value: "gemini", label: "Google Gemini (free tier — recommended)", help: "Get a free key at aistudio.google.com/apikey", placeholder: "AQ..." },
   { value: "openai", label: "OpenAI (ChatGPT)", help: "Get a key at platform.openai.com/api-keys", placeholder: "sk-..." },
   { value: "anthropic", label: "Anthropic (Claude)", help: "Get a key at console.anthropic.com", placeholder: "sk-ant-..." },
 ] as const;

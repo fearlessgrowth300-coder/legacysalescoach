@@ -1,41 +1,27 @@
 // Real Google Gemini models used with the Google Generative Language API.
 export function normalizeGeminiModel(model?: string): string {
-  if (!model) return "gemini-2.5-flash";
+  if (!model) return "gemini-3.7-flash";
   const clean = model.trim().toLowerCase().replace(/^google\//, "");
-  if (clean.includes("3.7") || clean.includes("3.6") || clean.includes("2.5") || clean === "gemini-flash" || clean.includes("fast") || clean.includes("balanced")) {
-    return "gemini-2.5-flash";
-  }
-  if (clean.includes("3.5") || clean.includes("lite") || clean.includes("2.0-flash-lite")) {
-    return "gemini-2.0-flash-lite";
-  }
-  if (clean.includes("3.1") || clean.includes("pro") || clean.includes("reasoning")) {
-    return "gemini-2.5-pro";
-  }
-  if (clean.includes("2.0")) {
-    return "gemini-2.0-flash";
-  }
-  if (clean.includes("1.5-flash")) {
-    return "gemini-1.5-flash";
-  }
-  if (clean.includes("1.5-pro")) {
-    return "gemini-1.5-pro";
-  }
-  return "gemini-2.5-flash";
+  if (clean.includes("3.7")) return "gemini-3.7-flash";
+  if (clean.includes("3.6")) return "gemini-3.6-flash";
+  if (clean.includes("3.5") || clean.includes("lite")) return "gemini-3.5-flash-lite";
+  if (clean.includes("3.1") || clean.includes("pro")) return "gemini-3.1-pro-preview";
+  if (clean.includes("flash")) return "gemini-3.7-flash";
+  return clean || "gemini-3.7-flash";
 }
 
 export const GEMINI_CHAT_MODELS = {
-  fast: "gemini-2.5-flash",
-  balanced: "gemini-2.5-flash",
-  reasoning: "gemini-2.5-pro",
-  vision: "gemini-2.5-flash",
+  fast: "gemini-3.6-flash",
+  balanced: "gemini-3.7-flash",
+  reasoning: "gemini-3.1-pro-preview",
+  vision: "gemini-3.7-flash",
 } as const;
 
 export const GEMINI_VISION_FALLBACK_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-2.0-flash",
-  "gemini-2.5-pro",
-  "gemini-1.5-flash",
-  "gemini-1.5-pro",
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-pro-preview",
 ] as const;
 
 export function buildVisionModelChain(
@@ -44,13 +30,13 @@ export function buildVisionModelChain(
 ): string[] {
   const normPrimary = normalizeGeminiModel(primary);
   const normFallbacks = fallbacks.map(normalizeGeminiModel);
-  const combined = [normPrimary, ...normFallbacks, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"];
+  const combined = [normPrimary, ...normFallbacks, "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview"];
   return combined
     .map((model) => String(model || "").trim())
     .filter((model, index, models) => Boolean(model) && models.indexOf(model) === index);
 }
 
-export const GEMINI_EMBEDDING_MODEL = "text-embedding-004";
+export const GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 
 // Google deprecates temperature/top-p/top-k controls on Gemini 3.5+ models.
 // Omitting them keeps OpenAI-compatible requests forward-compatible.
@@ -77,10 +63,10 @@ export async function callGeminiNativeVision(
 ): Promise<string | null> {
   const modelsToTry = [
     modelName,
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-2.5-pro",
-    "gemini-1.5-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-pro-preview",
   ].filter((m, idx, arr) => arr.indexOf(m) === idx);
 
   for (const model of modelsToTry) {
