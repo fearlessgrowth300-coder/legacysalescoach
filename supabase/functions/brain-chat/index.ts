@@ -3,8 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import {
   runPipelineFast, buildSessionContext, buildPrinciplesBlock, buildChunksBlock, buildEvidenceBlock,
 } from "../_shared/brain-pipeline.ts";
-import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
-import { buildVisionModelChain } from "../_shared/gemini-models.ts";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError, getUserAiKey } from "../_shared/user-ai.ts";
+import { buildVisionModelChain, callGeminiNativeVision } from "../_shared/gemini-models.ts";
 import { BRAIN_PERSONA } from "../_shared/persona.ts";
 import { loadKnowledgeGraphContext, traverseSalesKnowledgeGraph } from "../_shared/sales-superbrain.ts";
 import {
@@ -686,29 +686,63 @@ serve(async (req) => {
         try {
           const imageParts = lastUserImages.slice(0, 8).map((url) => ({ type: "image_url", image_url: { url } }));
           const visionPrompt = `You are a sales coach's eyes. Read the image(s) COMPLETELY and carefully — top to bottom, every message.${lastUserText ? ` The user also wrote: "${lastUserText}"` : ""}\n\nReturn plain text with these labeled sections:\nTRANSCRIPT: If it shows a conversation/DM/chat, transcribe the ENTIRE thread VERBATIM from the very FIRST message to the last — every line, in order, labeling who said what (Prospect vs You). Do NOT summarize or skip the earlier messages. Otherwise write "none".\nWHAT I SEE: Describe exactly what is in the image(s) — people, product, screen, profile/bio, captions, numbers, charts, context. Be concrete.\nSITUATION: 2-3 sentences on the full arc of the conversation (how it started, where it is now) and what the user needs help with right now.`;
-          const visionModels = buildVisionModelChain(chat.models.vision, chat.visionFallbackModels);
-          for (const model of visionModels) {
-            const vResp = await userChat(chat, {
-              model,
-              temperature: 0.2,
-              max_tokens: 2400,
-              messages: [{
-                role: "user",
-                content: [{ type: "text", text: visionPrompt }, ...imageParts],
-              }],
-            });
-            if (vResp.ok) {
-              const vd = await vResp.json();
-              analysis = (vd.choices?.[0]?.message?.content || "").trim();
-              console.log("[brain-chat] vision model success:", model, "chars:", analysis.length);
-              if (analysis.length >= 5) break;
-              const reason = `empty response (${vd.choices?.[0]?.finish_reason || "unknown finish reason"})`;
-              visionFailures.push(`${model}: ${reason}`);
-              console.warn("[brain-chat] vision model empty:", model, reason);
-            } else {
-              const providerError = (await vResp.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
-              visionFailures.push(`${model}: HTTP ${vResp.status}${providerError ? ` ${providerError}` : ""}`);
-              console.warn("[brain-chat] vision call non-2xx:", model, vResp.status, providerError);
+
+          // If provider is Gemini, try native generateContent with inline_data first (most reliable)
+          if (chat.provider === "gemini") {
+            const parsedImages: Array<{ mimeType: string; base64: string }> = [];
+            for (const img of lastUserImages.slice(0, 8)) {
+              let imageBase64 = "";
+              let mimeType = "image/jpeg";
+              if (img.startsWith("data:")) {
+                const m = img.match(/^data:([^;]+);base64,(.+)$/);
+                if (m) { mimeType = m[1]; imageBase64 = m[2]; }
+              } else {
+                const dataUrl = await imageToBase64(img);
+                if (dataUrl) {
+                  const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+                  if (m) { mimeType = m[1]; imageBase64 = m[2]; }
+                }
+              }
+              if (imageBase64) parsedImages.push({ mimeType, base64: imageBase64 });
+            }
+
+            if (parsedImages.length > 0) {
+              const userAiKey = await getUserAiKey(supabaseAdmin, user.id);
+              if (userAiKey?.key) {
+                const nativeResult = await callGeminiNativeVision(userAiKey.key, visionPrompt, parsedImages, chat.models.vision);
+                if (nativeResult && nativeResult.length >= 5) {
+                  analysis = nativeResult;
+                  console.log("[brain-chat] native Gemini vision success, chars:", analysis.length);
+                }
+              }
+            }
+          }
+
+          if (analysis.length < 5) {
+            const visionModels = buildVisionModelChain(chat.models.vision, chat.visionFallbackModels);
+            for (const model of visionModels) {
+              const vResp = await userChat(chat, {
+                model,
+                temperature: 0.2,
+                max_tokens: 2400,
+                messages: [{
+                  role: "user",
+                  content: [{ type: "text", text: visionPrompt }, ...imageParts],
+                }],
+              });
+              if (vResp.ok) {
+                const vd = await vResp.json();
+                analysis = (vd.choices?.[0]?.message?.content || "").trim();
+                console.log("[brain-chat] vision model success:", model, "chars:", analysis.length);
+                if (analysis.length >= 5) break;
+                const reason = `empty response (${vd.choices?.[0]?.finish_reason || "unknown finish reason"})`;
+                visionFailures.push(`${model}: ${reason}`);
+                console.warn("[brain-chat] vision model empty:", model, reason);
+              } else {
+                const providerError = (await vResp.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
+                visionFailures.push(`${model}: HTTP ${vResp.status}${providerError ? ` ${providerError}` : ""}`);
+                console.warn("[brain-chat] vision call non-2xx:", model, vResp.status, providerError);
+              }
             }
           }
         } catch (e) {

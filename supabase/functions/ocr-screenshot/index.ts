@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-import { resolveUserChatTarget, NoUserAiKeyError } from "../_shared/user-ai.ts";
-import { buildVisionModelChain } from "../_shared/gemini-models.ts";
+import { resolveUserChatTarget, NoUserAiKeyError, getUserAiKey } from "../_shared/user-ai.ts";
+import { buildVisionModelChain, callGeminiNativeVision } from "../_shared/gemini-models.ts";
 
 
 const corsHeaders = {
@@ -124,38 +124,57 @@ Rules:
 - Do not merge separate bubbles into one message.
 - Capture reactions, quoted replies, timestamps, read/seen state, attachments, and who sent the latest message.
 - Do not give sales advice. Return JSON only.`;
-    const visionModels = buildVisionModelChain(chat.models.vision, chat.visionFallbackModels);
     let extractedText = "";
     let lastError = "";
 
-    for (const model of visionModels) {
-      const aiResponse = await fetch(chat.url, {
-        method: "POST",
-        headers: chat.headers,
-        body: JSON.stringify({
-          model,
-          messages: [{
-            role: "user",
-            content: [
-              { type: "text", text: visionPrompt },
-              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
-            ],
-          }],
-          temperature: 0.1,
-          max_tokens: 4000,
-          response_format: { type: "json_object" },
-        }),
-      });
-
-      if (!aiResponse.ok) {
-        lastError = await aiResponse.text().catch(() => "");
-        console.warn("ocr-screenshot vision failed:", model, aiResponse.status, lastError);
-        continue;
+    // Direct native Gemini vision execution if Gemini provider
+    if (chat.provider === "gemini") {
+      const userAiKey = await getUserAiKey(supabaseAdmin, user.id);
+      if (userAiKey?.key) {
+        const nativeText = await callGeminiNativeVision(
+          userAiKey.key,
+          visionPrompt,
+          [{ mimeType, base64 }],
+          chat.models.vision,
+        );
+        if (nativeText && nativeText.length >= 5) {
+          extractedText = nativeText;
+          console.log("[ocr-screenshot] native Gemini vision success, length:", extractedText.length);
+        }
       }
+    }
 
-      const aiData = await aiResponse.json();
-      extractedText = (aiData.choices?.[0]?.message?.content || "").trim();
-      if (extractedText) break;
+    if (!extractedText) {
+      const visionModels = buildVisionModelChain(chat.models.vision, chat.visionFallbackModels);
+      for (const model of visionModels) {
+        const aiResponse = await fetch(chat.url, {
+          method: "POST",
+          headers: chat.headers,
+          body: JSON.stringify({
+            model,
+            messages: [{
+              role: "user",
+              content: [
+                { type: "text", text: visionPrompt },
+                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
+              ],
+            }],
+            temperature: 0.1,
+            max_tokens: 4000,
+            response_format: { type: "json_object" },
+          }),
+        });
+
+        if (!aiResponse.ok) {
+          lastError = await aiResponse.text().catch(() => "");
+          console.warn("ocr-screenshot vision failed:", model, aiResponse.status, lastError);
+          continue;
+        }
+
+        const aiData = await aiResponse.json();
+        extractedText = (aiData.choices?.[0]?.message?.content || "").trim();
+        if (extractedText) break;
+      }
     }
 
     if (!extractedText) throw new Error(`AI OCR failed across vision models${lastError ? `: ${lastError}` : ""}`);

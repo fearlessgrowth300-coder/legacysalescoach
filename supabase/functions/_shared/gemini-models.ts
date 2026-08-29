@@ -68,3 +68,60 @@ export function shouldOmitGeminiSamplingParameters(
   const minor = Number(match[2] || 0);
   return major > 3 || (major === 3 && minor >= 5);
 }
+
+export async function callGeminiNativeVision(
+  apiKey: string,
+  prompt: string,
+  images: Array<{ mimeType: string; base64: string }>,
+  modelName = "gemini-2.5-flash",
+): Promise<string | null> {
+  const modelsToTry = [
+    modelName,
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.5-pro",
+    "gemini-1.5-flash",
+  ].filter((m, idx, arr) => arr.indexOf(m) === idx);
+
+  for (const model of modelsToTry) {
+    try {
+      const cleanKey = apiKey.replace(/^Bearer\s+/i, "").trim();
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
+      const parts: any[] = [{ text: prompt }];
+      for (const img of images) {
+        if (img.base64) {
+          parts.push({
+            inline_data: {
+              mime_type: img.mimeType || "image/jpeg",
+              data: img.base64,
+            },
+          });
+        }
+      }
+
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 3000,
+          },
+        }),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        if (text && text.length >= 5) {
+          return text;
+        }
+      }
+    } catch (e) {
+      console.warn(`[gemini-native-vision] error on ${model}:`, e);
+    }
+  }
+  return null;
+}
+
