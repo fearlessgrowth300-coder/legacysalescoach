@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -9,25 +9,27 @@ import Home from "./pages/Home";
 import Install from "./pages/Install";
 import Login from "./pages/Login";
 import SignUp from "./pages/SignUp";
-import Chats from "./pages/Chats";
-import KnowledgeBase from "./pages/KnowledgeBase";
-import Workspaces from "./pages/Workspaces";
-import Analytics from "./pages/Analytics";
-import BrainStats from "./pages/BrainStats";
-import PracticeCall from "./pages/PracticeCall";
-import AiChat from "./pages/AiChat";
 import DashboardLayout from "./components/DashboardLayout";
-import Settings from "./pages/Settings";
-import Company from "./pages/Company";
 import NotFound from "./pages/NotFound";
 import OAuthConsent from "./pages/OAuthConsent";
 import AppLaunchScreen, { shouldShowAppLaunch } from "./components/AppLaunchScreen";
+
+const Chats = lazy(() => import("./pages/Chats"));
+const KnowledgeBase = lazy(() => import("./pages/KnowledgeBase"));
+const Workspaces = lazy(() => import("./pages/Workspaces"));
+const Analytics = lazy(() => import("./pages/Analytics"));
+const BrainStats = lazy(() => import("./pages/BrainStats"));
+const PracticeCall = lazy(() => import("./pages/PracticeCall"));
+const AiChat = lazy(() => import("./pages/AiChat"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Company = lazy(() => import("./pages/Company"));
+const Evaluations = lazy(() => import("./pages/Evaluations"));
 
 
 const queryClient = new QueryClient();
 
 function AuthenticatedRoute({ children }: { children: React.ReactNode }) {
-  return <DashboardLayout>{children}</DashboardLayout>;
+  return <DashboardLayout><Suspense fallback={<div className="flex min-h-[60vh] items-center justify-center text-sm text-muted-foreground">Loading feature…</div>}>{children}</Suspense></DashboardLayout>;
 }
 
 const App = () => {
@@ -76,6 +78,7 @@ const App = () => {
             <Route path="/knowledge-base" element={<AuthenticatedRoute><KnowledgeBase /></AuthenticatedRoute>} />
             <Route path="/workspaces" element={<AuthenticatedRoute><Workspaces /></AuthenticatedRoute>} />
             <Route path="/analytics" element={<AuthenticatedRoute><Analytics /></AuthenticatedRoute>} />
+            <Route path="/evaluations" element={<AuthenticatedRoute><Evaluations /></AuthenticatedRoute>} />
             <Route path="/brain" element={<AuthenticatedRoute><BrainStats /></AuthenticatedRoute>} />
             <Route path="/practice" element={<AuthenticatedRoute><PracticeCall /></AuthenticatedRoute>} />
             <Route path="/ai-chat" element={<AuthenticatedRoute><AiChat /></AuthenticatedRoute>} />

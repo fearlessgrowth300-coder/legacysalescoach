@@ -19,7 +19,7 @@ const PATTERN_LABELS: Record<string, string> = {
 export default function Analytics() {
   const { user } = useAuth();
 
-  const { data: workspaces } = useQuery({
+  const { data: workspaces, isLoading: workspacesLoading } = useQuery({
     queryKey: ["workspaces"],
     queryFn: async () => {
       const { data, error } = await supabase.from("workspaces").select("*");
@@ -40,12 +40,16 @@ export default function Analytics() {
     enabled: !!activeWorkspace?.id,
   });
 
-  const { data: chunks } = useQuery({
-    queryKey: ["analytics-chunks"],
+  const { data: chunkCounts } = useQuery({
+    queryKey: ["analytics-chunk-counts", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase.from("knowledge_chunks").select("category, source_type");
-      if (error) throw error;
-      return data;
+      const [allResult, conversationResult] = await Promise.all([
+        supabase.from("knowledge_chunks").select("id", { count: "exact", head: true }).eq("user_id", user!.id),
+        supabase.from("knowledge_chunks").select("id", { count: "exact", head: true }).eq("user_id", user!.id).eq("source_type", "conversation"),
+      ]);
+      if (allResult.error) throw allResult.error;
+      if (conversationResult.error) throw conversationResult.error;
+      return { total: allResult.count || 0, conversations: conversationResult.count || 0 };
     },
     enabled: !!user,
   });
@@ -62,6 +66,10 @@ export default function Analytics() {
     },
     enabled: !!activeWorkspace?.id,
   });
+
+  if (workspacesLoading) {
+    return <div className="px-4 py-6"><div className="h-40 animate-pulse rounded-lg bg-muted" /></div>;
+  }
 
   if (!activeWorkspace) {
     return (
@@ -84,8 +92,8 @@ export default function Analytics() {
   const conversionRate = won + lost > 0 ? Math.round((won / (won + lost)) * 100) : 0;
   const friendMode = prospects?.filter((p) => p.reply_mode === "friend") || [];
   const expertMode = prospects?.filter((p) => p.reply_mode === "expert") || [];
-  const totalInsights = chunks?.length || 0;
-  const fromConversations = chunks?.filter((c) => c.source_type === "conversation").length || 0;
+  const totalInsights = chunkCounts?.total || 0;
+  const fromConversations = chunkCounts?.conversations || 0;
 
   // Compute pattern win rates from analytics
   const wonAnalytics = (analytics || []).filter((a) => a.outcome === "won");

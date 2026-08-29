@@ -12,7 +12,8 @@
 
 import { decryptStoredApiKey } from "./api-key-utils.ts";
 import { toAnthropicContent } from "./anthropic-content.ts";
-import { normalizeGeminiModel, GEMINI_CHAT_MODELS, GEMINI_VISION_FALLBACK_MODELS, shouldOmitGeminiSamplingParameters } from "./gemini-models.ts";
+import { normalizeGeminiModel, GEMINI_CHAT_MODELS, GEMINI_EMBEDDING_MODEL, GEMINI_VISION_FALLBACK_MODELS, shouldOmitGeminiSamplingParameters } from "./gemini-models.ts";
+import { coerceEmbeddingDimensions } from "./embedding-vector.ts";
 
 export type UserAiProvider = "openai" | "gemini" | "anthropic" | "lovable";
 
@@ -104,6 +105,7 @@ export async function getUserAiKey(
 export async function resolveUserChatTarget(
   supabase: any,
   userId: string | null,
+  preferredModel?: string | null,
 ): Promise<UserChatTarget> {
   const found = await getUserAiKey(supabase, userId);
   if (!found) {
@@ -123,6 +125,7 @@ export async function resolveUserChatTarget(
   }
   if (found.provider === "gemini") {
     const cleanKey = found.key.replace(/^Bearer\s+/i, "").trim();
+    const selectedModel = normalizeGeminiModel(preferredModel || GEMINI_CHAT_MODELS.balanced);
     return {
       provider: "gemini",
       url: `${GEMINI_BASE}/chat/completions`,
@@ -131,7 +134,15 @@ export async function resolveUserChatTarget(
         "x-goog-api-key": cleanKey,
         "Content-Type": "application/json",
       },
-      models: { ...GEMINI_CHAT_MODELS },
+      // The user's Settings choice is the primary model for every AI Chat
+      // reasoning tier. userChat still supplies bounded fallbacks when the
+      // selected model is temporarily unavailable.
+      models: {
+        fast: selectedModel,
+        balanced: selectedModel,
+        reasoning: selectedModel,
+        vision: selectedModel,
+      },
       visionFallbackModels: [...GEMINI_VISION_FALLBACK_MODELS],
       isAnthropic: false,
     };
@@ -207,6 +218,8 @@ export type SimpleChatOpts = {
   tools?: any[];
   tool_choice?: any;
   stream?: boolean;
+  /** Total wall-clock budget across the primary model and all fallbacks. */
+  timeout_ms?: number;
 };
 
 export async function userChat(
@@ -217,19 +230,19 @@ export async function userChat(
     const candidateModels = target.provider === "gemini"
       ? [
           normalizeGeminiModel(opts.model),
-          "gemini-3.7-flash",
+          normalizeGeminiModel(target.models.balanced),
           "gemini-3.5-flash-lite",
-          "gemini-flash-latest",
-          "gemini-3.1-flash-lite",
           "gemini-3.6-flash",
-          "gemini-3.1-pro-preview",
-          "gemini-pro-latest",
         ].filter((m, i, arr) => Boolean(m) && arr.indexOf(m) === i)
       : [opts.model];
 
     let lastResponse: Response | null = null;
+    const totalTimeoutMs = Math.max(5_000, opts.timeout_ms || 60_000);
+    const deadline = Date.now() + totalTimeoutMs;
 
     for (const currentModel of candidateModels) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 1_000) break;
       const body: any = {
         model: currentModel,
         messages: opts.messages,
@@ -248,7 +261,7 @@ export async function userChat(
           method: "POST",
           headers: target.headers,
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(opts.timeout_ms || 60000),
+          signal: AbortSignal.timeout(Math.min(18_000, remainingMs)),
         });
 
         lastResponse = res;
@@ -351,8 +364,14 @@ export async function userEmbed(target: UserEmbedTarget, text: string): Promise<
   const truncated = (text || "").substring(0, 32000);
   if (truncated.length < 1) return null;
   try {
-    const body: any = { model: target.model, input: truncated };
-    if (target.provider === "openai") body.dimensions = target.dimensions;
+    const body: any = {
+      model: target.model,
+      input: truncated,
+      // Gemini's OpenAI-compatible endpoint accepts `dimensions`. Request the
+      // pgvector column size explicitly, then still coerce defensively in case
+      // a provider returns its larger native vector.
+      dimensions: target.dimensions,
+    };
     const res = await fetch(target.url, {
       method: "POST",
       headers: target.headers,
@@ -364,7 +383,7 @@ export async function userEmbed(target: UserEmbedTarget, text: string): Promise<
       return null;
     }
     const data = await res.json();
-    return data.data?.[0]?.embedding || null;
+    return coerceEmbeddingDimensions(data.data?.[0]?.embedding, target.dimensions);
   } catch (e) {
     console.error("[user-ai] embed threw:", e);
     return null;

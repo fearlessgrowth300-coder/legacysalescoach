@@ -217,7 +217,7 @@ export default function Chats() {
   };
 
   // Get active workspace
-  const { data: workspaces } = useQuery({
+  const { data: workspaces, isLoading: workspacesLoading } = useQuery({
     queryKey: ["workspaces"],
     queryFn: async () => {
       const { data, error } = await supabase.from("workspaces").select("*").order("created_at");
@@ -1331,6 +1331,14 @@ export default function Chats() {
       navigate("/chats");
     },
   });
+
+  if (workspacesLoading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center" aria-label="Loading workspace">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   if (!activeWorkspace) {
     return (

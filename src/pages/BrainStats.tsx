@@ -36,9 +36,19 @@ export default function BrainStats() {
   const { data: chunks, isLoading } = useQuery({
     queryKey: ["brain-chunks", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase.from("knowledge_chunks").select("*").eq("user_id", user!.id);
-      if (error) throw error;
-      return data;
+      const pageSize = 1000;
+      const rows: Array<{ id: string; category: string; brain_type: string; source_type: string }> = [];
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+          .from("knowledge_chunks")
+          .select("id, category, brain_type, source_type")
+          .eq("user_id", user!.id)
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+        rows.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+      return rows;
     },
     enabled: !!user,
   });
@@ -95,7 +105,11 @@ export default function BrainStats() {
 
   const totalChunks = chunks?.length || 0;
   const totalItems = items?.filter((i) => i.status === "ready").length || 0;
-  const intelligenceLevel = Math.min(100, Math.round((totalChunks / 100) * 100));
+  // Use a gradual log scale: 100 chunks is still "Learning" while a vault in
+  // the several-thousand range reaches Expert/Genius territory.
+  const intelligenceLevel = totalChunks === 0
+    ? 0
+    : Math.min(100, Math.round((Math.log10(totalChunks + 1) / 4) * 100));
 
   const getIntelligenceTier = (level: number) => {
     if (level >= 90) return { name: "Genius", color: "text-purple-500", bg: "bg-purple-500/10" };

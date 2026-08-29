@@ -461,7 +461,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { messages, conversation_id } = await req.json();
+    const { messages, conversation_id, selected_model } = await req.json();
 
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return new Response(JSON.stringify({ error: "Missing authorization" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -620,7 +620,7 @@ serve(async (req) => {
 
     let chat;
     try {
-      chat = await resolveUserChatTarget(supabaseAdmin, user.id);
+      chat = await resolveUserChatTarget(supabaseAdmin, user.id, selected_model);
     } catch (e) {
       if (e instanceof NoUserAiKeyError) {
         return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -889,11 +889,10 @@ serve(async (req) => {
       // is another generation request before the answer and is preserved for
       // other providers.
       chat: chat.provider === "gemini" ? undefined : chat,
-      // Gemini's embedding endpoint is separately rate-limited from chat
-      // generation. A rate-limited embedding must never leave AI Chat waiting
-      // before it can send an answer; the pipeline falls back to its stored
-      // Sales Brain ranking for this turn.
-      skipEmbedding: chat.provider === "gemini",
+      // Semantic retrieval is provider-independent. If Gemini embeddings are
+      // unavailable or rate-limited, generateEmbedding returns null and the
+      // pipeline immediately retains its full-vault static fallback.
+      skipEmbedding: false,
       session,
     });
 
@@ -1056,6 +1055,17 @@ serve(async (req) => {
 
     const transformed = new ReadableStream({
       async start(controller) {
+        // Keep the SSE connection alive while Gemini is generating or failing
+        // over. Some gateways close an otherwise-idle stream after ~20 seconds,
+        // which previously made the browser report a network error even though
+        // the Edge Function was still working.
+        const heartbeatId = setInterval(() => {
+          try {
+            controller.enqueue(encoder.encode(": keepalive\n\n"));
+          } catch {
+            // The controller may already be closed by a client disconnect.
+          }
+        }, 8_000);
         try {
           controller.enqueue(encoder.encode(loadingEvent));
           const aiResp = await userChat(chat, {
@@ -1064,6 +1074,7 @@ serve(async (req) => {
             temperature: 0.35,
             messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
             stream: false,
+            timeout_ms: 58_000,
           });
 
           if (!aiResp.ok || !aiResp.body) {
@@ -1139,6 +1150,8 @@ serve(async (req) => {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "The AI response could not be completed. Please try again." })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
+        } finally {
+          clearInterval(heartbeatId);
         }
       },
     });

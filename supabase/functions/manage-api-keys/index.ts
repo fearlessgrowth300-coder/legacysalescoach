@@ -82,7 +82,7 @@ async function readProviderError(response: Response): Promise<string> {
 
 async function validateAiProviderKey(service: string, key: string): Promise<void> {
   let response: Response;
-  let requireCompletionContent = false;
+  const requireCompletionContent = false;
   if (service === "gemini") {
     const cleanKey = key.replace(/^Bearer\s+/i, "").trim();
     response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models`, {

@@ -40,6 +40,7 @@ function sliceRecentChatContext(history: Msg[], limit = CHAT_CONTEXT_LIMIT) {
 async function streamChat({
   messages,
   conversationId,
+  selectedModel,
   onDelta,
   onDone,
   onError,
@@ -47,6 +48,7 @@ async function streamChat({
 }: {
   messages: { role: string; content: string | any[] }[];
   conversationId?: string | null;
+  selectedModel?: string;
   onDelta: (text: string) => void;
   onDone: (wasTruncated: boolean) => void;
   onError: (err: string) => void;
@@ -56,7 +58,10 @@ async function streamChat({
   const token = session?.access_token;
   if (!token) { onError("Not authenticated"); return; }
 
-  const MAX_RETRIES = 2;
+  // Retrying a long-running generation several times can leave the UI waiting
+  // for minutes and can duplicate provider work. Retry once, and only when the
+  // request failed before an HTTP response was received.
+  const MAX_RETRIES = 1;
   let resp: Response | null = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -68,10 +73,14 @@ async function streamChat({
           Authorization: `Bearer ${token}`,
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
         },
-        body: JSON.stringify({ messages, conversation_id: conversationId || null }),
+        body: JSON.stringify({
+          messages,
+          conversation_id: conversationId || null,
+          selected_model: selectedModel || null,
+        }),
         // The edge function does retrieval, generation, and a quality check.
         // Do not leave the composer disabled indefinitely if the stream stalls.
-        signal: AbortSignal.timeout(90000),
+        signal: AbortSignal.timeout(75000),
       });
       break; // success
     } catch (networkErr) {
@@ -798,11 +807,16 @@ export default function AiChat() {
       await streamChat({
         messages: aiMessages,
         conversationId: convId,
+        selectedModel: activeAi.provider === "gemini" ? activeAi.model : undefined,
         onDelta: upsert,
         onBrainMeta: (meta) => {
           lastBrainMeta = meta;
-          setIsTyping(false);
-          if (meta.loading) return;
+          // The first backend event means retrieval/generation is in progress.
+          // Keep the visible typing indicator alive until text or an error arrives.
+          if (meta.loading) {
+            setIsTyping(true);
+            return;
+          }
           if (meta.selected_principles?.length) {
             setMessages(prev => {
               const last = prev[prev.length - 1];
@@ -1019,11 +1033,14 @@ export default function AiChat() {
       await streamChat({
         messages: aiMessages,
         conversationId: activeConvId,
+        selectedModel: activeAi.provider === "gemini" ? activeAi.model : undefined,
         onDelta: upsert,
         onBrainMeta: (meta) => {
           lastBrainMeta2 = meta;
-          setIsTyping(false);
-          if (meta.loading) return;
+          if (meta.loading) {
+            setIsTyping(true);
+            return;
+          }
           if (meta.selected_principles?.length) {
             setMessages(prev => {
               const last = prev[prev.length - 1];

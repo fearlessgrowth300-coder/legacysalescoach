@@ -6,7 +6,7 @@ const FIRST_MESSAGE_STOP_TERMS = new Set([
 
 function cleanObservation(value: unknown): string {
   return String(value || "")
-    .replace(/^\s*(?:target\s+(?:video|post)|instagram\s+(?:post|reel))(?:\s*caption)?\s*[:\-]?\s*/i, "")
+    .replace(/^\s*(?:target\s+(?:video|post)|instagram\s+(?:post|reel))(?:\s*caption)?\s*[:-]?\s*/i, "")
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/(?:followers?|following|posts?)\s*:\s*[\d,.kKmM]+/gi, "")
     .replace(/\s*\([\d,.kKmM]+\s+likes?(?:,\s*[\d,.kKmM]+\s+comments?)?\)\s*$/i, "")
