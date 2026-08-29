@@ -64,15 +64,17 @@ export async function callGeminiNativeVision(
   const modelsToTry = [
     modelName,
     "gemini-3.7-flash",
-    "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
     "gemini-3.1-pro-preview",
+    "gemini-flash-latest",
+    "gemini-2.5-flash-lite",
   ].filter((m, idx, arr) => arr.indexOf(m) === idx);
 
   for (const model of modelsToTry) {
     try {
       const cleanKey = apiKey.replace(/^Bearer\s+/i, "").trim();
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
       const parts: any[] = [{ text: prompt }];
       for (const img of images) {
         if (img.base64) {
