@@ -1536,7 +1536,7 @@ export default function AiChat() {
                   className="flex items-center gap-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <Zap className="h-3 w-3" />
-                  <span>Brain Stats: {retrievalStats.chunksRetrieved} chunks from {retrievalStats.uniqueSources} sources</span>
+                  <span>Brain Stats: {retrievalStats.chunksRetrieved} knowledge items from {retrievalStats.uniqueSources} sources</span>
                   <span className="text-[9px]">{showRetrievalStats ? "▲" : "▼"}</span>
                 </button>
                 {showRetrievalStats && (

@@ -67,13 +67,27 @@ export function responseMentionsUnknownSources(content: string, allowedTitles: s
 }
 
 export function buildBrainRetrievalMeta(pipeline: any) {
+  const retrievedItems = [
+    ...(pipeline.selected || []),
+    ...(pipeline.evidence_principles || []),
+    ...(pipeline.supporting_chunks || []),
+  ];
+  const uniqueRetrievedItems = new Set(
+    retrievedItems.map((item: any, index: number) =>
+      String(item.id || item.chunk_id || `${item.source_title || item.source_name || "unknown"}:${item.principle_name || index}`),
+    ),
+  );
   const sourceTitles = [...new Set([
     ...(pipeline.selected || []).map((item: any) => item.source_title),
+    ...(pipeline.evidence_principles || []).map((item: any) => item.source_title || item.source_name),
     ...(pipeline.supporting_chunks || []).map((item: any) => item.source_title),
   ].filter((title): title is string => typeof title === "string" && title.trim().length > 0))];
 
   return {
-    chunksRetrieved: (pipeline.supporting_chunks || []).length,
+    // Kept as `chunksRetrieved` for API compatibility. It now represents every
+    // unique retrieved knowledge item (principles, evidence, and raw passages)
+    // so the UI does not report zero after principles were actually applied.
+    chunksRetrieved: uniqueRetrievedItems.size,
     uniqueSources: sourceTitles.length,
     sources: sourceTitles.slice(0, 12),
     semanticMatches: (pipeline.debug?.semantic_principles_count || 0) + (pipeline.supporting_chunks || []).length,

@@ -55,7 +55,7 @@ describe("AI Chat connection helpers", () => {
         embedding_used: true,
       },
     })).toEqual({
-      chunksRetrieved: 2,
+      chunksRetrieved: 3,
       uniqueSources: 2,
       sources: ["Never Split the Difference", "SPIN Selling"],
       semanticMatches: 10,
