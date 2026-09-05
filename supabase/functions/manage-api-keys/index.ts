@@ -88,7 +88,6 @@ async function validateAiProviderKey(service: string, key: string): Promise<void
     response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models`, {
       headers: {
         "x-goog-api-key": cleanKey,
-        "Authorization": `Bearer ${cleanKey}`,
       },
       signal: AbortSignal.timeout(15000),
     });

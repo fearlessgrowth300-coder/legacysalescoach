@@ -99,7 +99,6 @@ export async function callGeminiNativeVision(
         headers: {
           "Content-Type": "application/json",
           "x-goog-api-key": cleanKey,
-          "Authorization": `Bearer ${cleanKey}`,
         },
         body: JSON.stringify({
           contents: [{ parts }],

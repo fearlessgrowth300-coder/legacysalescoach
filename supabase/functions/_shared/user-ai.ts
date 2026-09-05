@@ -195,7 +195,6 @@ export async function resolveUserEmbedTarget(
       provider: "gemini",
       url: `${GEMINI_BASE}/embeddings`,
       headers: {
-        Authorization: `Bearer ${cleanKey}`,
         "x-goog-api-key": cleanKey,
         "Content-Type": "application/json",
       },

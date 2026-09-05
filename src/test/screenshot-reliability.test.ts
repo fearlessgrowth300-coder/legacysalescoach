@@ -58,6 +58,8 @@ describe("screenshot OCR repair", () => {
       .toBe('{"messages":[]}');
     const options = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(options[0]).toContain("gemini-3.8-flash:generateContent");
+    expect(options[1].headers).toMatchObject({ "x-goog-api-key": "synthetic" });
+    expect(options[1].headers).not.toHaveProperty("Authorization");
     expect(JSON.parse(String(options[1].body)).generationConfig.temperature).toBeUndefined();
   });
   it("stops quota retry loops and reports a usable error", async () => {
