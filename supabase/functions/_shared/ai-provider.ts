@@ -14,7 +14,9 @@
 //   reasoning → hardest selection/strategy steps
 
 import { getLatestUserApiKey } from "./api-key-utils.ts";
-import { coerceEmbeddingDimensions, SEARCH_EMBEDDING_DIMENSIONS } from "./embedding-vector.ts";
+import { SEARCH_EMBEDDING_DIMENSIONS } from "./embedding-vector.ts";
+import { embedBatch } from "./embedding-batch.ts";
+declare const Deno: { env: { get(name: string): string | undefined } };
 import {
   GEMINI_CHAT_MODELS,
   GEMINI_EMBEDDING_MODEL,
@@ -246,26 +248,18 @@ export async function aiEmbed(provider: AiProvider, text: string): Promise<numbe
   const target = provider.embed;
   if (!target?.key) return null;
   try {
-    const body: any = {
-      model: target.model,
-      input: (text || "").substring(0, 32000),
-      // OpenAI and Gemini's OpenAI-compatible embedding endpoints both accept
-      // this field. Request the database's native vector size instead of
-      // truncating Gemini's larger default after generation.
-      dimensions: SEARCH_EMBEDDING_DIMENSIONS,
-    };
-    const res = await fetch(target.url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${target.key}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!res.ok) {
-      console.warn(`[ai-provider] embed ${provider.name} ${res.status}`);
-      return null;
-    }
-    const data = await res.json();
-    return coerceEmbeddingDimensions(data.data?.[0]?.embedding, SEARCH_EMBEDDING_DIMENSIONS);
+      const key = target.key.replace(/^Bearer\s+/i, "").trim();
+      return (await embedBatch({
+        provider: provider.name === "lovable" ? "lovable" : target.provider,
+        url: target.url,
+        model: target.model,
+        dimensions: SEARCH_EMBEDDING_DIMENSIONS,
+        headers: {
+          Authorization: `Bearer ${key}`, "Content-Type": "application/json",
+          ...(target.provider === "gemini" ? { "x-goog-api-key": key } : {}),
+          ...(provider.name === "lovable" ? { "Lovable-API-Key": key } : {}),
+        },
+      }, [text]))[0];
   } catch (e) {
     console.error("[ai-provider] embed threw:", e);
     return null;

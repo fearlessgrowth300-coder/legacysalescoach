@@ -1,11 +1,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import {
-  runPipelineFast, buildSessionContext, buildPrinciplesBlock, buildChunksBlock, buildEvidenceBlock,
+  runPipelineFast, buildSessionContext,
 } from "../_shared/brain-pipeline.ts";
+import { buildBrainEvidencePack } from "./evidence.ts";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError, getUserAiKey } from "../_shared/user-ai.ts";
 import { buildVisionModelChain, callGeminiNativeVision } from "../_shared/gemini-models.ts";
 import { BRAIN_PERSONA } from "../_shared/persona.ts";
+import { readGroundingVerdict } from "../_shared/knowledge-grounding.ts";
 import { loadKnowledgeGraphContext, traverseSalesKnowledgeGraph } from "../_shared/sales-superbrain.ts";
 import {
   buildBrainRetrievalMeta,
@@ -76,21 +78,11 @@ async function validateGroundedBrainResponse(args: {
   allowedSourceTitles: string[];
   evidencePack: string;
   durableMemory: string;
+  recentContext: string;
 }): Promise<{ response: string; repaired: boolean; issues: string[] }> {
-  const { chat, intent, userRequest, draft, allowedSourceTitles, evidencePack, durableMemory } = args;
-  // Gemini free-tier users should receive the completed answer from their
-  // first request. Running a second full validator request per message can
-  // immediately exhaust the provider's small RPM allowance and makes a normal
-  // reply look as though it never arrived. Deterministic source checks still
-  // run below, while paid/built-in providers keep the AI validator.
-  if (chat.provider === "gemini") {
-    const unknownSources = responseMentionsUnknownSources(draft, allowedSourceTitles);
-    return {
-      response: draft,
-      repaired: false,
-      issues: unknownSources.length ? ["unknown source citation"] : ["gemini validator deferred to preserve request quota"],
-    };
-  }
+  const { chat, intent, userRequest, draft, allowedSourceTitles, evidencePack, durableMemory, recentContext } = args;
+  // Every provider gets the same evidence check. Never mark an unchecked draft
+  // as validated when the provider has no quota for source verification.
   const unknownSources = responseMentionsUnknownSources(draft, allowedSourceTitles);
   const prompt = `You are the final grounding and answer-quality validator for a Knowledge-Base-powered AI Chat.
 
@@ -106,6 +98,9 @@ ${clampText(evidencePack, 15000)}
 
 DURABLE CONVERSATION MEMORY:
 ${clampText(durableMemory, 5000)}
+
+RECENT AI CHAT CONVERSATION (user statements are context, not independently verified results):
+${clampText(recentContext, 6000)}
 
 DRAFT RESPONSE:
 ${clampText(draft, 16000)}
@@ -133,21 +128,15 @@ or
       max_tokens: BRAIN_VALIDATION_MAX_TOKENS,
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: prompt }],
-      timeout_ms: 60000,
+      timeout_ms: 16000,
     });
-    if (!response.ok) return { response: draft, repaired: false, issues: ["validator unavailable"] };
+    if (!response.ok) throw new Error("Source verification temporarily unavailable");
     const data = await response.json();
     const raw = String(data.choices?.[0]?.message?.content || "").trim();
-    const match = raw.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(match ? match[0] : raw);
-    const issues = Array.isArray(parsed.issues) ? parsed.issues.map(String).slice(0, 12) : [];
-    const corrected = String(parsed.corrected_response || "").trim();
-    if (parsed.pass === false && corrected) return { response: corrected, repaired: true, issues };
-    if (unknownSources.length && !corrected) return { response: draft, repaired: false, issues: [...issues, "unknown source citation"] };
-    return { response: draft, repaired: false, issues };
+    return readGroundingVerdict(raw, draft, text => responseMentionsUnknownSources(text, allowedSourceTitles));
   } catch (error) {
     console.warn("[brain-chat] response validator failed", error);
-    return { response: draft, repaired: false, issues: ["validator unavailable"] };
+    throw new Error("I could not verify this answer against the retrieved sources. Please retry; no unchecked reply was published.");
   }
 }
 
@@ -164,7 +153,7 @@ function evaluateBrainChatAnswer(args: {
   const unknownSourceTitles = responseMentionsUnknownSources(response, sourceTitles);
   const hasAnswer = response.trim().length >= 24;
   const evidenceCount = (pipeline.selected?.length || 0) + (pipeline.evidence_principles?.length || 0) + (pipeline.supporting_chunks?.length || 0);
-  const grounded = unknownSourceTitles.length === 0 && !validationIssues.includes("unknown source citation");
+  const grounded = evidenceCount > 0 && unknownSourceTitles.length === 0 && validationIssues.length === 0;
   const score = Math.max(0, Math.min(100,
     (hasAnswer ? 30 : 0) +
     (grounded ? 25 : 0) +
@@ -212,7 +201,7 @@ async function persistAiChatBrainTrace(args: {
         ...(pipeline.evidence_principles || []).map((item: any) => item.id),
       ].filter(Boolean))],
       graph_paths: graphPaths,
-      evaluation,
+      evaluation: { ...evaluation, retrieval: pipeline.debug, supporting_passage_ids: (pipeline.supporting_chunks || []).map((c: any) => c.id) },
     });
     if (error) console.warn("[brain-chat] trace persistence skipped:", error.message);
   } catch (error) {
@@ -990,18 +979,19 @@ serve(async (req) => {
       console.warn("[brain-chat] chapter label resolution failed:", e);
     }
 
-    // Collect every source title the model is allowed to name (selected + evidence)
-    const sourceTitles = [...new Set([
-      ...pipeline.selected.map((s) => s.source_title),
-      ...pipeline.evidence_principles.map((p) => p.source_title || p.source_name),
-      ...pipeline.supporting_chunks.map((chunk) => chunk.source_title),
-    ].filter((x): x is string => !!x))];
+    // The generator, validator, citations and trace must share the exact same
+    // evidence, not a source list wider than the truncated prompt context.
+    const evidencePack = buildBrainEvidencePack(pipeline);
+    pipeline.selected = evidencePack.selected;
+    pipeline.evidence_principles = evidencePack.evidence_principles;
+    pipeline.supporting_chunks = evidencePack.supporting_chunks;
+    const sourceTitles = evidencePack.sourceTitles;
 
     let systemPrompt = buildSystemPrompt({
       responseMode: responseFormatForIntent(responseIntent),
-      selectedBlock: buildPrinciplesBlock(pipeline.selected),
-      evidenceBlock: buildEvidenceBlock(pipeline.evidence_principles),
-      chunksBlock: buildChunksBlock(pipeline.supporting_chunks),
+      selectedBlock: evidencePack.selectedBlock,
+      evidenceBlock: evidencePack.evidenceBlock,
+      chunksBlock: evidencePack.chunksBlock,
       principleApplicationMap: buildPrincipleApplicationMap(pipeline.selected),
       userInput: hasImageAttachment ? clampText(`${userInstruction}\n\n${conversationText}`, USER_INPUT_CHAR_LIMIT) : clampText(lastUserText || retrievalQuery, USER_INPUT_CHAR_LIMIT),
       businessContext,
@@ -1106,8 +1096,9 @@ serve(async (req) => {
             userRequest: hasImageAttachment ? `${userInstruction}\n\n${conversationText}` : (lastUserText || retrievalQuery),
             draft: clampText(draft, VALIDATION_DRAFT_CHAR_LIMIT),
             allowedSourceTitles: sourceTitles,
-            evidencePack: [buildPrinciplesBlock(pipeline.selected), buildEvidenceBlock(pipeline.evidence_principles), buildChunksBlock(pipeline.supporting_chunks)].join("\n\n"),
+            evidencePack: evidencePack.text,
             durableMemory: durableMemoryText,
+            recentContext: recentForBrief,
           });
           const finalResponse = sanitize(validation.response).trim();
           const evaluation = evaluateBrainChatAnswer({
@@ -1147,7 +1138,14 @@ serve(async (req) => {
           // Exceptions inside an async ReadableStream start callback otherwise
           // leave the browser waiting forever with its composer disabled.
           console.error("brain-chat stream error:", error);
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "The AI response could not be completed. Please try again." })}\n\n`));
+          await persistAiChatBrainTrace({ supabase: supabaseAdmin, userId: user.id,
+            conversationId: conversation_id, intent: responseIntent, request: lastUserText || retrievalQuery,
+            pipeline, graphPaths: combinedGraphPaths, evaluation: { version: 2, passed: false,
+              answer_complete: false, source_grounded: false,
+              validation_issues: [error instanceof Error ? error.message : "Response failed"] } });
+          const detail = error instanceof Error && error.message.startsWith("I could not verify")
+            ? error.message : "The AI response could not be completed. Please try again.";
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: detail })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
         } finally {

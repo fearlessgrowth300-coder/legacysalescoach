@@ -132,6 +132,8 @@ export type RetrievalDebug = {
   chunk_source_count?: number;
   best_semantic_similarity?: number;
   evidence_confidence?: "strong" | "moderate" | "weak" | "none";
+  retrieval_errors?: string[];
+  semantic_chunks_count?: number;
 };
 
 export function selectBalancedSupportingChunks(chunks: Chunk[], limit = 12): Chunk[] {
@@ -963,6 +965,7 @@ export async function runPipelineFast(opts: {
 
   let semP: Principle[] = [];
   let semC: Chunk[] = [];
+  const retrievalErrors: string[] = [];
   if (embeddingUsed) {
     // Search the user's uploaded vault first. The previous null-user search let
     // broad/global sources dominate, which made replies keep citing the same books.
@@ -984,10 +987,10 @@ export async function runPipelineFast(opts: {
         }),
       ]);
       return {
-        principles: (userPRes.data || [])
+        principles: (userPRes.error ? (retrievalErrors.push(`principle search: ${userPRes.error.message}`), []) : userPRes.data || [])
           .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
           .map((p: any) => ({ ...p, _semantic: true, _matched_query: index, relevance_score: Math.round((p.similarity || 0) * 100) })),
-        chunks: (userCRes.data || [])
+        chunks: (userCRes.error ? (retrievalErrors.push(`passage search: ${userCRes.error.message}`), []) : userCRes.data || [])
           .map((c: any) => ({ ...c, _semantic: true, _matched_query: index, relevance_score: Math.round((c.similarity || 0) * 100) })),
       };
     }));
@@ -1023,17 +1026,22 @@ export async function runPipelineFast(opts: {
     semP = mergeByIdPriority(semP, (sourcePrinciples || []) as Principle[]);
   }
 
-  // Fallback if pgvector returned nothing: small static top-by-relevance pull (no full paging)
-  if (semP.length === 0) {
-    const { data } = await supabaseAdmin.from("sales_brain")
-      .select(PRINCIPLE_SELECT)
-      .eq("user_id", userId)
-      .is("workspace_id", null)
-      .in("source_type", ALLOWED_SOURCE_TYPES)
-      .order("relevance_score", { ascending: false, nullsFirst: false })
-      .limit(120);
-    semP = (data || []) as Principle[];
-  }
+  const semanticPrincipleCount = semP.filter(p => p._semantic).length;
+  const semanticChunkCount = semC.filter(c => c._semantic).length;
+  // Search exact terms and unembedded material across the entire tenant vault.
+  const lexicalTerms = [...new Set(embedText.toLowerCase().match(/[a-z]{3,}/g) || [])]
+    .filter(term => !STOP_WORDS.has(term)).slice(0, 24);
+  const lexical = lexicalTerms.length ? await supabaseAdmin.rpc("search_sales_knowledge", {
+    search_query: lexicalTerms.join(" OR "), p_user_id: userId, match_count: 160,
+  }) : { data: [], error: null };
+  if (lexical.error) retrievalErrors.push(`keyword search: ${lexical.error.message}`);
+  const lexicalPrinciples = (lexical.data || []).filter((row: any) => row.kind === "principle")
+    .map((row: any) => row.record).filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type));
+  const lexicalChunks = (lexical.data || []).filter((row: any) => row.kind === "passage")
+    .map((row: any) => row.record);
+  semP = mergeByIdPriority(semP, lexicalPrinciples);
+  semC = mergeByIdPriority(semC, lexicalChunks);
+  if (retrievalErrors.length) console.warn("[brain-pipeline] retrieval degraded", retrievalErrors);
 
   // Hydrate source titles for selected pool only
   const ids = [...new Set([...semP.map((p) => p.source_id), ...semC.map((c) => c.source_id)].filter((x): x is string => !!x))];
@@ -1147,10 +1155,12 @@ export async function runPipelineFast(opts: {
       candidate_count: top.length,
       reranked_count: top.length,
       top_score: topScore,
-      embedding_used: embeddingUsed,
+      embedding_used: semanticPrincipleCount + semanticChunkCount > 0,
       empty_vault: selected.length === 0 && semC.length === 0,
-      semantic_principles_count: semP.length,
-      static_principles_count: 0,
+      semantic_principles_count: semanticPrincipleCount,
+      semantic_chunks_count: semanticChunkCount,
+      static_principles_count: semP.filter(p => !p._semantic).length,
+      retrieval_errors: retrievalErrors,
       candidate_source_count: candidateSourceTitles.length,
       reranked_source_count: candidateSourceTitles.length,
       selected_source_count: new Set(selected.map((s) => s.source_title)).size,

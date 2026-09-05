@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 export const GEMINI_MODEL_STORAGE_KEY = "legacy_sales:gemini_model";
-export const DEFAULT_GEMINI_MODEL = "gemini-3.7-flash";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+const GEMINI_38_MIGRATION_KEY = "legacy_sales:gemini_38_migrated";
 
 export const GEMINI_AVAILABLE_MODELS = [
-  { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash (Recommended, Ultra Fast & Stable · 340 tok/s)" },
+  { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Recommended)" },
+  { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash" },
   { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash (Fast & Reliable · 210 tok/s)" },
   { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash Lite (Lightweight · 463 tok/s)" },
   { id: "gemini-3.1-pro", label: "Gemini 3.1 Pro (Deep Reasoning & Long Documents)" },
@@ -13,12 +15,23 @@ export const GEMINI_AVAILABLE_MODELS = [
 
 export function getSelectedGeminiModel(): string {
   if (typeof window === "undefined") return DEFAULT_GEMINI_MODEL;
-  return localStorage.getItem(GEMINI_MODEL_STORAGE_KEY) || DEFAULT_GEMINI_MODEL;
+  let saved = localStorage.getItem(GEMINI_MODEL_STORAGE_KEY);
+  // Upgrade the previous default once, without preventing a later deliberate
+  // choice of an older model in Settings.
+  if (!localStorage.getItem(GEMINI_38_MIGRATION_KEY)) {
+    if (saved === "gemini-3.7-flash" || saved === "google/gemini-3.7-flash") {
+      saved = DEFAULT_GEMINI_MODEL;
+      localStorage.setItem(GEMINI_MODEL_STORAGE_KEY, saved);
+    }
+    localStorage.setItem(GEMINI_38_MIGRATION_KEY, "1");
+  }
+  return saved || DEFAULT_GEMINI_MODEL;
 }
 
 export function setSelectedGeminiModel(model: string) {
   if (typeof window === "undefined") return;
   localStorage.setItem(GEMINI_MODEL_STORAGE_KEY, model.trim());
+  localStorage.setItem(GEMINI_38_MIGRATION_KEY, "1");
 }
 
 export type ActiveAi = {

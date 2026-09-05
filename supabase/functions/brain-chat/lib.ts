@@ -90,7 +90,7 @@ export function buildBrainRetrievalMeta(pipeline: any) {
     chunksRetrieved: uniqueRetrievedItems.size,
     uniqueSources: sourceTitles.length,
     sources: sourceTitles.slice(0, 12),
-    semanticMatches: (pipeline.debug?.semantic_principles_count || 0) + (pipeline.supporting_chunks || []).length,
+    semanticMatches: (pipeline.debug?.semantic_principles_count || 0) + (pipeline.debug?.semantic_chunks_count ?? (pipeline.supporting_chunks || []).filter((c: any) => c._semantic).length),
     staticMatches: pipeline.debug?.static_principles_count || 0,
     dedupSavings: Math.max(0, (pipeline.debug?.candidate_count || 0) - (pipeline.debug?.reranked_count || 0)),
     embeddingUsed: !!pipeline.debug?.embedding_used,

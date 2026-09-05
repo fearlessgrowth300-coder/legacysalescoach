@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-import { resolveUserChatTarget, NoUserAiKeyError, getUserAiKey } from "../_shared/user-ai.ts";
+import { resolveUserChatTarget, userChat, NoUserAiKeyError, getUserAiKey } from "../_shared/user-ai.ts";
 import { buildVisionModelChain, callGeminiNativeVision } from "../_shared/gemini-models.ts";
 
 
@@ -40,6 +40,11 @@ serve(async (req) => {
       base64 = imageBase64;
       mimeType = inputMimeType || "image/png";
     } else if (filePath) {
+      if (typeof filePath !== "string" || !filePath.startsWith(`${user.id}/`) || filePath.includes("..")) {
+        return new Response(JSON.stringify({ error: "Screenshot does not belong to this account" }), {
+          status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       // Download from storage (used by chat screenshots)
       const { data: fileData, error: fileError } = await supabase.storage
         .from("chat-screenshots")
@@ -79,9 +84,6 @@ serve(async (req) => {
         return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
       throw e;
-    }
-    if (chat.isAnthropic) {
-      return new Response(JSON.stringify({ error: "Anthropic doesn't support vision via this endpoint. Add an OpenAI or Gemini key in Settings for screenshot OCR." }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const visionPrompt = `You are the visual-intelligence stage of a sales conversation coach. Read this chat screenshot COMPLETELY from top to bottom.
@@ -129,13 +131,14 @@ Rules:
 
     // Direct native Gemini vision execution if Gemini provider
     if (chat.provider === "gemini") {
-      const userAiKey = await getUserAiKey(supabaseAdmin, user.id);
+      const userAiKey = await getUserAiKey(supabase, user.id);
       if (userAiKey?.key) {
         const nativeText = await callGeminiNativeVision(
           userAiKey.key,
           visionPrompt,
           [{ mimeType, base64 }],
           chat.models.vision,
+          { strict: true, json: true, timeoutMs: 55000 },
         );
         if (nativeText && nativeText.length >= 5) {
           extractedText = nativeText;
@@ -145,12 +148,11 @@ Rules:
     }
 
     if (!extractedText) {
-      const visionModels = buildVisionModelChain(chat.models.vision, chat.visionFallbackModels);
+      const visionModels = chat.provider === "gemini"
+        ? buildVisionModelChain(chat.models.vision, chat.visionFallbackModels).slice(0, 2)
+        : [chat.models.vision];
       for (const model of visionModels) {
-        const aiResponse = await fetch(chat.url, {
-          method: "POST",
-          headers: chat.headers,
-          body: JSON.stringify({
+        const aiResponse = await userChat(chat, {
             model,
             messages: [{
               role: "user",
@@ -162,12 +164,13 @@ Rules:
             temperature: 0.1,
             max_tokens: 4000,
             response_format: { type: "json_object" },
-          }),
+            timeout_ms: 25000,
         });
 
         if (!aiResponse.ok) {
-          lastError = await aiResponse.text().catch(() => "");
-          console.warn("ocr-screenshot vision failed:", model, aiResponse.status, lastError);
+          lastError = `Screenshot provider returned HTTP ${aiResponse.status}. Check model access or retry later.`;
+          console.warn("ocr-screenshot vision failed:", model, aiResponse.status);
+          if ([401, 403, 429].includes(aiResponse.status)) break;
           continue;
         }
 

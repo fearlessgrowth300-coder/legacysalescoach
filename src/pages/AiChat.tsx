@@ -80,7 +80,7 @@ async function streamChat({
         }),
         // The edge function does retrieval, generation, and a quality check.
         // Do not leave the composer disabled indefinitely if the stream stalls.
-        signal: AbortSignal.timeout(75000),
+        signal: AbortSignal.timeout(120000),
       });
       break; // success
     } catch (networkErr) {

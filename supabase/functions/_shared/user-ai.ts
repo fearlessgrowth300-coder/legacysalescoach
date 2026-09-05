@@ -13,7 +13,7 @@
 import { decryptStoredApiKey } from "./api-key-utils.ts";
 import { toAnthropicContent } from "./anthropic-content.ts";
 import { normalizeGeminiModel, GEMINI_CHAT_MODELS, GEMINI_EMBEDDING_MODEL, GEMINI_VISION_FALLBACK_MODELS, shouldOmitGeminiSamplingParameters } from "./gemini-models.ts";
-import { coerceEmbeddingDimensions } from "./embedding-vector.ts";
+import { embedBatch } from "./embedding-batch.ts";
 
 declare const Deno: { env: { get(name: string): string | undefined } };
 
@@ -79,7 +79,8 @@ function lovableEmbedTarget(): UserEmbedTarget | null {
       "Lovable-API-Key": key,
       "Content-Type": "application/json",
     },
-    model: "google/gemini-embedding-001",
+    // Keep ingestion, query, and repair embeddings in the same vector space.
+    model: "openai/text-embedding-3-small",
     dimensions: 768,
   };
 }
@@ -366,26 +367,7 @@ export async function userEmbed(target: UserEmbedTarget, text: string): Promise<
   const truncated = (text || "").substring(0, 32000);
   if (truncated.length < 1) return null;
   try {
-    const body: any = {
-      model: target.model,
-      input: truncated,
-      // Gemini's OpenAI-compatible endpoint accepts `dimensions`. Request the
-      // pgvector column size explicitly, then still coerce defensively in case
-      // a provider returns its larger native vector.
-      dimensions: target.dimensions,
-    };
-    const res = await fetch(target.url, {
-      method: "POST",
-      headers: target.headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!res.ok) {
-      console.error(`[user-ai] embed ${target.provider} ${res.status}:`, await res.text().catch(() => ""));
-      return null;
-    }
-    const data = await res.json();
-    return coerceEmbeddingDimensions(data.data?.[0]?.embedding, target.dimensions);
+    return (await embedBatch(target, [truncated]))[0];
   } catch (e) {
     console.error("[user-ai] embed threw:", e);
     return null;

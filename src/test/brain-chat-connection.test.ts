@@ -49,6 +49,7 @@ describe("AI Chat connection helpers", () => {
       ],
       debug: {
         semantic_principles_count: 8,
+        semantic_chunks_count: 2,
         static_principles_count: 0,
         candidate_count: 20,
         reranked_count: 18,
@@ -74,12 +75,13 @@ describe("AI Chat connection helpers", () => {
   it("routes direct Gemini calls through current chat and embedding models", () => {
     expect(GEMINI_CHAT_MODELS).toEqual({
       fast: "gemini-3.6-flash",
-      balanced: "gemini-3.7-flash",
+      balanced: "gemini-3.8-flash",
       reasoning: "gemini-3.1-pro-preview",
-      vision: "gemini-3.7-flash",
+      vision: "gemini-3.8-flash",
     });
     expect(GEMINI_EMBEDDING_MODEL).toBe("gemini-embedding-001");
     expect(GEMINI_VISION_FALLBACK_MODELS).toEqual([
+      "gemini-3.8-flash",
       "gemini-3.7-flash",
       "gemini-3.6-flash",
       "gemini-3.5-flash-lite",
@@ -89,6 +91,7 @@ describe("AI Chat connection helpers", () => {
       GEMINI_CHAT_MODELS.vision,
       [GEMINI_CHAT_MODELS.vision, ...GEMINI_VISION_FALLBACK_MODELS],
     )).toEqual([
+      "gemini-3.8-flash",
       "gemini-3.7-flash",
       "gemini-3.6-flash",
       "gemini-3.5-flash-lite",

@@ -507,21 +507,32 @@ export default function Chats() {
     const { error: uploadError } = await supabase.storage.from("chat-screenshots").upload(filePath, file);
     if (uploadError) {
       console.error("Screenshot upload error:", uploadError);
-      return null;
+      throw new Error(`Screenshot ${index + 1} could not be uploaded: ${uploadError.message}`);
     }
 
     const { data, error } = await supabase.functions.invoke("ocr-screenshot", {
       body: { filePath, userContext },
     });
-    if (error || !data?.text) {
+    if (error || data?.error || !data?.text) {
       console.error("Screenshot analysis error:", error || "No text returned");
-      return null;
+      const { screenshotErrorMessage } = await import("@/lib/screenshot-errors");
+      throw new Error(`Screenshot ${index + 1}: ${data?.error || await screenshotErrorMessage(error, "No readable text returned. Upload a clearer screenshot.")}`);
     }
     return {
       filePath,
       text: data.text,
       analysis: (data.analysis || null) as ScreenshotAnalysis | null,
     };
+  };
+
+  const analyzeSelectedScreenshots = async () => {
+    const processed: ProcessedScreenshot[] = [];
+    for (let index = 0; index < screenshotFiles.length; index++) {
+      const screenshot = await uploadAndAnalyzeScreenshot(screenshotFiles[index], index, screenshotContextNote);
+      if (screenshot) processed.push(screenshot);
+    }
+    if (!processed.length) throw new Error("No screenshot text was returned. Please sign in and retry with a readable screenshot.");
+    return processed;
   };
 
   const saveScreenshotConversation = async (prospectId: string, screenshots: ProcessedScreenshot[], userNote = "") => {
@@ -594,7 +605,10 @@ export default function Chats() {
     setUploadStep("processing");
 
     try {
-      // 1. Create the prospect first
+      // OCR must succeed before creating a prospect; failed retries must not
+      // create empty duplicate chats or silently omit part of the conversation.
+      const processedScreenshots = await analyzeSelectedScreenshots();
+      // 1. Create the prospect once screenshots are usable.
       const { data: prospect, error: prospectError } = await supabase
         .from("prospects")
         .insert({
@@ -633,12 +647,6 @@ export default function Chats() {
 
       // 3. Upload and visually analyze all screenshots sequentially so their
       // chronological order is preserved and overlapping screens can be merged.
-      const processedScreenshots: ProcessedScreenshot[] = [];
-      for (let i = 0; i < screenshotFiles.length; i++) {
-        const processed = await uploadAndAnalyzeScreenshot(screenshotFiles[i], i, screenshotContextNote);
-        if (processed) processedScreenshots.push(processed);
-      }
-      if (processedScreenshots.length === 0) throw new Error("None of the screenshots could be analyzed");
 
       const fullConversation = processedScreenshots
         .map((screenshot, index) => `[Screenshot ${index + 1}]:\n${screenshot.text}`)
@@ -663,6 +671,9 @@ export default function Chats() {
       if (!suggestError && suggestData?.suggestions) {
         setFirstMessageSuggestions(suggestData.suggestions);
         if (suggestData.conversationStage) setConversationStage(suggestData.conversationStage);
+      } else {
+        const { screenshotErrorMessage } = await import("@/lib/screenshot-errors");
+        toast.error(`Conversation imported, but reply generation failed: ${suggestData?.error || await screenshotErrorMessage(suggestError, "Please retry in the chat.")}`);
       }
 
       setUploadStep("done");
@@ -690,6 +701,7 @@ export default function Chats() {
     setUploadStep("processing");
 
     try {
+      const processedScreenshots = await analyzeSelectedScreenshots();
       const { data: prospect, error: prospectError } = await supabase
         .from("prospects")
         .insert({
@@ -724,12 +736,6 @@ export default function Chats() {
         } catch (e) { console.error("IG fetch error:", e); }
       }
 
-      const processedScreenshots: ProcessedScreenshot[] = [];
-      for (let i = 0; i < screenshotFiles.length; i++) {
-        const processed = await uploadAndAnalyzeScreenshot(screenshotFiles[i], i, screenshotContextNote);
-        if (processed) processedScreenshots.push(processed);
-      }
-      if (processedScreenshots.length === 0) throw new Error("None of the screenshots could be analyzed");
 
       const fullConversation = processedScreenshots
         .map((screenshot, index) => `[Screenshot ${index + 1}]:\n${screenshot.text}`)
@@ -751,6 +757,9 @@ export default function Chats() {
       if (!suggestError && suggestData?.suggestions) {
         setFirstMessageSuggestions(suggestData.suggestions);
         if (suggestData.conversationStage) setConversationStage(suggestData.conversationStage);
+      } else {
+        const { screenshotErrorMessage } = await import("@/lib/screenshot-errors");
+        toast.error(`Conversation imported, but reply generation failed: ${suggestData?.error || await screenshotErrorMessage(suggestError, "Please retry in the chat.")}`);
       }
 
       setUploadStep("done");
