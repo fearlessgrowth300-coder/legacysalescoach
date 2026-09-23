@@ -1290,10 +1290,14 @@ export default function AiChat() {
             </h2>
             <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground truncate">
               <span className="inline-block h-2 w-2 rounded-full bg-emerald-500 shrink-0 animate-pulse" />
-              <span className="font-semibold text-foreground/90">Gemini 3.7 Flash</span>
+              <span className="font-semibold text-foreground/90">
+                {`Selected: ${activeAi.provider === "gemini"
+                  ? activeAi.model.replace(/^gemini-/, "Gemini ").replace(/-flash-lite$/, " Flash Lite").replace(/-flash$/, " Flash").replace(/-pro(?:-preview)?$/, " Pro")
+                  : `${activeAi.providerLabel} · ${activeAi.model}`}`}
+              </span>
               <span className="text-muted-foreground">·</span>
               <span className="text-primary font-medium text-[10px] bg-primary/10 px-1.5 py-0.5 rounded">
-                Sales Strategy & Thinking (340 tok/s)
+                Sales Strategy & Thinking
               </span>
             </div>
           </div>
