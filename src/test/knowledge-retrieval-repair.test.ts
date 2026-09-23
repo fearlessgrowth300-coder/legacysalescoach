@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { runPipelineFast, type Principle, type SelectedPrinciple } from "../../supabase/functions/_shared/brain-pipeline";
+import { requestedSourceTitles, runPipelineFast, type Principle, type SelectedPrinciple } from "../../supabase/functions/_shared/brain-pipeline";
 import { buildBrainEvidencePack } from "../../supabase/functions/brain-chat/evidence";
+import { buildBrainRetrievalMeta } from "../../supabase/functions/brain-chat/lib";
 
 vi.mock("../../supabase/functions/_shared/embeddings.ts", () => ({ generateEmbedding: vi.fn(async () => [1, 0, 0]) }));
 
@@ -27,6 +28,43 @@ function database(missingVectorRpc = false) {
 }
 
 describe("retrieval repair", () => {
+  it("recognizes a named uploaded source despite punctuation differences", () => {
+    const sources = [{ id: "training", title: "32 Minutes of Advanced 1-on-1 Sales Training" }];
+    expect(requestedSourceTitles("What does 32 Minutes of Advanced 1 on 1 Sales Training teach?", sources)).toEqual(sources);
+  });
+
+  it("prioritizes the named source's principles and original passages over generic keyword hits", async () => {
+    const named = { ...principle("named"), source_id: "training", source_name: "32 Minutes of Advanced 1-on-1 Sales Training",
+      source_type: "video", principle_name: "Ask discovery questions before presenting an offer" };
+    const generic = { ...principle("generic"), source_id: "other", source_name: "Other Sales Book" };
+    const db = {
+      rpc: vi.fn(async () => ({ data: [{ kind: "principle", record: generic }], error: null })),
+      from: vi.fn((table: string) => {
+        const query = {
+          select: () => query, eq: () => query, is: () => query, in: () => query,
+          order: () => query, limit: () => query,
+          then: (resolve: (value: unknown) => unknown) => Promise.resolve({
+            data: table === "knowledge_base_items" ? [{ id: "training", title: named.source_name }]
+              : table === "sales_brain" ? [named]
+                : [{ id: "passage", source_id: "training", source_type: "video", category: "discovery",
+                  content: "Ask what the prospect has tried and what outcome they want before recommending a solution.",
+                  chunk_kind: "source_passage", relevance_score: 80 }],
+            error: null,
+          }).then(resolve),
+        };
+        return query;
+      }),
+    };
+    const result = await runPipelineFast({ supabaseAdmin: db, userId: "owner", skipEmbedding: true,
+      question: "Latest request and old memory: generic trust concerns",
+      embedQuery: "What does 32 Minutes of Advanced 1-on-1 Sales Training teach about discovery questions?",
+      session: { recent_exchanges: [], active_principle_ids: [], active_framework_name: null } });
+    expect(result.selected[0].source_id).toBe("training");
+    expect(result.supporting_chunks.some((chunk) => chunk.source_id === "training")).toBe(true);
+    expect(result.debug.requested_source_titles).toEqual([named.source_name]);
+    expect(buildBrainRetrievalMeta(result).staticMatches).toBeGreaterThan(0);
+  });
+
   it("uses a vault-wide keyword RPC for unembedded records and reports missing vector functions", async () => {
     const db = database(true);
     const result = await runPipelineFast({ supabaseAdmin: db, userId: "owner", question: "Help me diagnose trust concerns",

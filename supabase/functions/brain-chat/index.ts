@@ -76,11 +76,12 @@ async function validateGroundedBrainResponse(args: {
   userRequest: string;
   draft: string;
   allowedSourceTitles: string[];
+  requestedSourceTitles: string[];
   evidencePack: string;
   durableMemory: string;
   recentContext: string;
 }): Promise<{ response: string; repaired: boolean; issues: string[] }> {
-  const { chat, intent, userRequest, draft, allowedSourceTitles, evidencePack, durableMemory, recentContext } = args;
+  const { chat, intent, userRequest, draft, allowedSourceTitles, requestedSourceTitles, evidencePack, durableMemory, recentContext } = args;
   // Every provider gets the same evidence check. Never mark an unchecked draft
   // as validated when the provider has no quota for source verification.
   const unknownSources = responseMentionsUnknownSources(draft, allowedSourceTitles);
@@ -92,6 +93,9 @@ ${clampText(userRequest, 4000)}
 
 ALLOWED SOURCE TITLES:
 ${allowedSourceTitles.map((title) => `- ${title}`).join("\n") || "- none"}
+
+VERIFIED USER-NAMED SOURCES PRESENT IN THE VAULT:
+${requestedSourceTitles.map((title) => `- ${title}`).join("\n") || "- none"}
 
 RETRIEVED EVIDENCE:
 ${clampText(evidencePack, 15000)}
@@ -116,6 +120,7 @@ Validate all of these:
 5. Buyer/client facts agree with memory or visible request; no invented facts, payments, results, guarantees, relationships, or promises.
 6. It distinguishes weak evidence from certainty.
 7. It is concise enough for the request and does not expose hidden reasoning.
+8. It does not claim a verified user-named source is absent, and it uses that source's actual evidence when relevant.
 
 Return JSON only:
 {"pass":true,"issues":[],"corrected_response":""}
@@ -343,8 +348,9 @@ function buildSystemPrompt(opts: {
   priorSummary: string;
   durableMemory: string;
   sourceTitles: string[];
+  requestedSourceTitles: string[];
 }) {
-  const { responseMode, selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, businessContext, knowledgeGraph, recentExchanges, priorSummary, durableMemory, sourceTitles } = opts;
+  const { responseMode, selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, businessContext, knowledgeGraph, recentExchanges, priorSummary, durableMemory, sourceTitles, requestedSourceTitles } = opts;
   const sourceList = sourceTitles.length ? sourceTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n") : "  (none)";
   return `You are AI Chat, a capable general Sales Brain. You help with business, marketing, offers, funnels, strategy, sales, mindset, copywriting, troubleshooting, planning, and pasted conversations. Your knowledge base is the user's uploaded books, PDFs, videos, transcripts, and structured insights.
 
@@ -362,7 +368,9 @@ SILENT QUALITY PROCESS (never reveal private reasoning):
 
 SOURCE RULES:
 - Cite a source inline only when you make an attributed claim. Use (Source: "Title") or include the chapter when it is supplied.
-- Use one or more sources when they fit. Never require a fixed number of sources, never fabricate citations, and never add a source dump at the end.
+- When retrieved evidence fits the request, apply at least one specific teaching or passage to the actual task and cite it inline. Do not merely name a source while giving generic advice.
+- If the user names a source listed under VERIFIED USER-NAMED SOURCES, answer from that source first. Never claim it is missing from the vault. If its retrieved passages do not support the precise question, say that narrower limitation instead.
+- Never require a fixed number of sources, never fabricate citations, and never add a source dump at the end.
 - If the vault does not support a claim strongly, say what is uncertain instead of pretending.
 - Do not expose source passages as long quotes. Summarize and apply them.
 
@@ -385,6 +393,9 @@ ${knowledgeGraph || "(no additional graph relationship was needed)"}
 
 === AVAILABLE SOURCE TITLES ===
 ${sourceList}
+
+=== VERIFIED USER-NAMED SOURCES ===
+${requestedSourceTitles.length ? requestedSourceTitles.map((title) => `- ${title}`).join("\n") : "(none)"}
 
 === STRUCTURED KNOWLEDGE ===
 ${selectedBlock}
@@ -1000,6 +1011,7 @@ serve(async (req) => {
       priorSummary,
       durableMemory: durableMemoryText,
       sourceTitles,
+      requestedSourceTitles: pipeline.debug.requested_source_titles || [],
     });
     systemPrompt += weakEvidenceNote;
 
@@ -1096,6 +1108,7 @@ serve(async (req) => {
             userRequest: hasImageAttachment ? `${userInstruction}\n\n${conversationText}` : (lastUserText || retrievalQuery),
             draft: clampText(draft, VALIDATION_DRAFT_CHAR_LIMIT),
             allowedSourceTitles: sourceTitles,
+            requestedSourceTitles: pipeline.debug.requested_source_titles || [],
             evidencePack: evidencePack.text,
             durableMemory: durableMemoryText,
             recentContext: recentForBrief,

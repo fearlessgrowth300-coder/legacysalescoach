@@ -73,6 +73,7 @@ export type Principle = {
   common_mistake?: string | null;
   real_example_or_story?: string | null;
   _semantic?: boolean;
+  _explicit_source?: boolean;
   _retrieval_score?: number;
 };
 
@@ -90,6 +91,8 @@ export type Chunk = {
   relevance_score?: number;
   similarity?: number;
   _semantic?: boolean;
+  _explicit_source?: boolean;
+  _explicit_match_score?: number;
 };
 
 type VaultCacheEntry<T> = { expiresAt: number; rows: T[] };
@@ -124,11 +127,13 @@ export type RetrievalDebug = {
   empty_vault: boolean;
   semantic_principles_count?: number;
   static_principles_count?: number;
+  static_chunks_count?: number;
   candidate_source_count?: number;
   reranked_source_count?: number;
   selected_source_count?: number;
   candidate_source_titles?: string[];
   selected_source_titles?: string[];
+  requested_source_titles?: string[];
   chunk_source_count?: number;
   best_semantic_similarity?: number;
   evidence_confidence?: "strong" | "moderate" | "weak" | "none";
@@ -136,10 +141,16 @@ export type RetrievalDebug = {
   semantic_chunks_count?: number;
 };
 
-export function selectBalancedSupportingChunks(chunks: Chunk[], limit = 12): Chunk[] {
+export function selectBalancedSupportingChunks(chunks: Chunk[], limit = 12, query = ""): Chunk[] {
+  const queryTokens = [...new Set(tokenize(query))];
+  const queryFit = (chunk: Chunk) => {
+    if (!queryTokens.length) return 0;
+    const passageTokens = new Set(tokenize(chunk.content || ""));
+    return queryTokens.filter((token) => passageTokens.has(token)).length / queryTokens.length;
+  };
   const ranked = [...chunks].sort((a, b) => {
-    const aScore = (a.similarity || 0) + (a.chunk_kind === "source_passage" ? 0.025 : 0);
-    const bScore = (b.similarity || 0) + (b.chunk_kind === "source_passage" ? 0.025 : 0);
+    const aScore = (a.similarity || 0) + (a._explicit_source ? 1 : 0) + (a._explicit_match_score || 0) + queryFit(a) * 0.4 + (a.relevance_score || 0) / 1000 + (a.chunk_kind === "source_passage" ? 0.025 : 0);
+    const bScore = (b.similarity || 0) + (b._explicit_source ? 1 : 0) + (b._explicit_match_score || 0) + queryFit(b) * 0.4 + (b.relevance_score || 0) / 1000 + (b.chunk_kind === "source_passage" ? 0.025 : 0);
     return bScore - aScore;
   });
   const sourcePassages = ranked.filter((chunk) => chunk.chunk_kind === "source_passage");
@@ -182,6 +193,18 @@ function sourceTitleOf(item: { source_title?: string | null; source_name?: strin
 
 function sourceKeyOf(item: { source_title?: string | null; source_name?: string | null; source_id?: string | null }): string {
   return sourceTitleOf(item).trim().toLowerCase() || "unknown";
+}
+
+function normalizedSourceText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+export function requestedSourceTitles(query: string, sources: Array<{ id: string; title: string }>) {
+  const normalizedQuery = ` ${normalizedSourceText(query)} `;
+  return sources.filter((source) => {
+    const title = normalizedSourceText(source.title || "");
+    return title.length >= 12 && normalizedQuery.includes(` ${title} `);
+  });
 }
 
 const STOP_WORDS = new Set([
@@ -1041,6 +1064,41 @@ export async function runPipelineFast(opts: {
     .map((row: any) => row.record);
   semP = mergeByIdPriority(semP, lexicalPrinciples);
   semC = mergeByIdPriority(semC, lexicalChunks);
+
+  // A user naming an uploaded book or video is a stronger retrieval signal
+  // than a vector comparison (especially when old rows were embedded with a
+  // different provider). Fetch that source directly instead of letting a
+  // generic high-scoring source answer a question about the named one.
+  const { data: sourceCatalog, error: sourceCatalogError } = await supabaseAdmin
+    .from("knowledge_base_items").select("id, title").eq("user_id", userId).limit(1000);
+  if (sourceCatalogError) retrievalErrors.push(`source title search: ${sourceCatalogError.message}`);
+  const requestedSources = requestedSourceTitles(embedText, sourceCatalog || []).slice(0, 3);
+  const requestedSourceIds = requestedSources.map((source) => source.id);
+  if (requestedSourceIds.length) {
+    const titleTokens = new Set(requestedSources.flatMap((source) => tokenize(source.title)));
+    const focusTokens = [...new Set(tokenize(embedText))].filter((token) => !titleTokens.has(token));
+    const [directPrinciples, directChunks] = await Promise.all([
+      supabaseAdmin.from("sales_brain").select(PRINCIPLE_SELECT)
+        .eq("user_id", userId).is("workspace_id", null)
+        .in("source_id", requestedSourceIds).limit(200),
+      supabaseAdmin.from("knowledge_chunks").select(CHUNK_SELECT)
+        .eq("user_id", userId).is("workspace_id", null)
+        .in("source_id", requestedSourceIds).limit(300),
+    ]);
+    if (directPrinciples.error) retrievalErrors.push(`named source principles: ${directPrinciples.error.message}`);
+    if (directChunks.error) retrievalErrors.push(`named source passages: ${directChunks.error.message}`);
+    semP = mergeByIdPriority(
+      (directPrinciples.data || []).filter((p: Principle) => ALLOWED_SOURCE_TYPES.includes(p.source_type))
+        .map((p: Principle) => ({ ...p, _explicit_source: true })), semP,
+    );
+    semC = mergeByIdPriority(
+      (directChunks.data || []).map((c: Chunk) => {
+        const passageTokens = new Set(tokenize(c.content || ""));
+        const matches = focusTokens.filter((token) => passageTokens.has(token)).length;
+        return { ...c, _explicit_source: true, _explicit_match_score: focusTokens.length ? matches / focusTokens.length : 0 };
+      }), semC,
+    );
+  }
   if (retrievalErrors.length) console.warn("[brain-pipeline] retrieval degraded", retrievalErrors);
 
   // Hydrate source titles for selected pool only
@@ -1057,10 +1115,12 @@ export async function runPipelineFast(opts: {
   // Power lifts principles the books/videos rated highly (8-10/10) without ever
   // overriding relevance — it only nudges already-relevant matches up.
   const scoreOf = (p: Principle): number => {
-    const base = localRelevanceScore(question, p);
+    // The question also contains boilerplate and older memory. Rank against
+    // the current request, which is the same clean text used for embedding.
+    const base = localRelevanceScore(embedText, p);
     const power = typeof p.power_level === "number" ? p.power_level : 6;
     const powerBoost = clamp(power - 5, 0, 5) * 2; // +0 (avg) … +10 (10/10)
-    return clamp(base + powerBoost, 0, 100);
+    return clamp(base + powerBoost + (p._explicit_source ? 45 : 0), 0, 100);
   };
   const scored = semP.map((p) => ({ p, score: scoreOf(p) }))
     .sort((a, b) => b.score - a.score);
@@ -1136,8 +1196,10 @@ export async function runPipelineFast(opts: {
     ...semP.map((item) => Number(item.similarity || 0)),
     ...semC.map((item) => Number(item.similarity || 0)),
   );
-  const evidenceConfidence: RetrievalDebug["evidence_confidence"] = !embeddingUsed
-    ? "none"
+  const evidenceConfidence: RetrievalDebug["evidence_confidence"] = requestedSourceIds.length && (semP.some((p) => p._explicit_source) || semC.some((c) => c._explicit_source))
+    ? "moderate"
+    : !embeddingUsed
+      ? "none"
     : bestSemanticSimilarity >= 0.42
       ? "strong"
       : bestSemanticSimilarity >= 0.24
@@ -1148,7 +1210,7 @@ export async function runPipelineFast(opts: {
     selected,
     contradictions: [],
     framework_name,
-    supporting_chunks: selectBalancedSupportingChunks(semC, 12),
+    supporting_chunks: selectBalancedSupportingChunks(semC, 12, embedText),
     evidence_principles: evidence,
     debug: {
       subqueries: semanticQueries.map((query) => query.substring(0, 160)),
@@ -1160,12 +1222,14 @@ export async function runPipelineFast(opts: {
       semantic_principles_count: semanticPrincipleCount,
       semantic_chunks_count: semanticChunkCount,
       static_principles_count: semP.filter(p => !p._semantic).length,
+      static_chunks_count: semC.filter(c => !c._semantic).length,
       retrieval_errors: retrievalErrors,
       candidate_source_count: candidateSourceTitles.length,
       reranked_source_count: candidateSourceTitles.length,
       selected_source_count: new Set(selected.map((s) => s.source_title)).size,
       candidate_source_titles: candidateSourceTitles.slice(0, 25),
       selected_source_titles: [...new Set(selected.map((s) => s.source_title))],
+      requested_source_titles: requestedSources.map((source) => source.title),
       chunk_source_count: new Set(semC.map((c) => c.source_id)).size,
       best_semantic_similarity: bestSemanticSimilarity,
       evidence_confidence: evidenceConfidence,
