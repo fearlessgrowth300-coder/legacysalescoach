@@ -233,8 +233,9 @@ export async function userChat(
       ? [
           normalizeGeminiModel(opts.model),
           normalizeGeminiModel(target.models.balanced),
-          "gemini-3.5-flash-lite",
+          "gemini-3.7-flash",
           "gemini-3.6-flash",
+          "gemini-3.5-flash-lite",
         ].filter((m, i, arr) => Boolean(m) && arr.indexOf(m) === i)
       : [opts.model];
 
@@ -258,29 +259,40 @@ export async function userChat(
       if (opts.tool_choice) body.tool_choice = opts.tool_choice;
       if (opts.stream) body.stream = true;
 
-      try {
-        const res = await fetch(target.url, {
-          method: "POST",
-          headers: target.headers,
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(Math.min(18_000, remainingMs)),
-        });
+      // A 503 is transient, not evidence that the key or model is invalid.
+      // Retry once with a short backoff before trying a different model, while
+      // respecting the caller's total deadline (important for Friend replies).
+      for (let attempt = 0; attempt < (target.provider === "gemini" ? 2 : 1); attempt++) {
+        const requestBudgetMs = deadline - Date.now();
+        if (requestBudgetMs <= 1_000) break;
+        try {
+          const res = await fetch(target.url, {
+            method: "POST",
+            headers: target.headers,
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(Math.min(18_000, requestBudgetMs)),
+          });
 
-        lastResponse = res;
+          lastResponse = res;
+          if (res.ok) return res;
 
-        if (res.ok) {
+          if (res.status === 503 && attempt === 0 && deadline - Date.now() > 3_500) {
+            const backoffMs = 800 + Math.floor(Math.random() * 400);
+            console.warn(`[user-ai] model ${currentModel} returned 503; retrying once after backoff`);
+            await new Promise((resolve) => setTimeout(resolve, backoffMs));
+            continue;
+          }
+          // Quota, overload, or unavailable model: try the next supported
+          // model, but never silently switch to another provider/account.
+          if (res.status === 429 || res.status === 503 || res.status === 404) {
+            console.warn(`[user-ai] model ${currentModel} returned ${res.status}; trying Gemini fallback`);
+            break;
+          }
           return res;
+        } catch (err: any) {
+          console.warn(`[user-ai] fetch exception on ${currentModel}:`, err);
+          break;
         }
-
-        // On 429 (Rate Limit) or 503 (Overloaded) or 404 (Model Not Found), fail over to next model
-        if (res.status === 429 || res.status === 503 || res.status === 404) {
-          console.warn(`[user-ai] model ${currentModel} returned ${res.status}. Failing over to next Gemini fallback...`);
-          continue;
-        }
-
-        return res;
-      } catch (err: any) {
-        console.warn(`[user-ai] fetch exception on ${currentModel}:`, err);
       }
     }
 

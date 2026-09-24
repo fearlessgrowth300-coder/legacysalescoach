@@ -1037,6 +1037,19 @@ export function buildDeterministicFriendFallbackMessages(
       : `${response} ${questions[index]}`);
   }
 
+  // A direct social question needs a direct, ordinary answer. In particular,
+  // do not turn "How is everything going for you?" into an unrelated funnel
+  // question when the AI provider is temporarily unavailable.
+  const asksHowYouAre = /\b(?:how(?:'s| is) (?:everything|it|things) going for you|how are you doing|how about you|and you)\s*\?/i
+    .test(latestProspectMessage);
+  if (asksHowYouAre && /\b(?:adjustments?|time wisely|balanc(?:e|ing)|get everything done)\b/i.test(latestProspectMessage)) {
+    return [
+      "I'm doing well, thanks for asking! It sounds like you've found a way to make the time work for you. What adjustment has helped most?",
+      "Doing well, thank you 😊 I hear you—it's about using the time you have intentionally. What has made the biggest difference?",
+      "I'm good, thanks for asking! I like that you found a rhythm that works. What changed in how you plan your time?",
+    ];
+  }
+
   const checkpointQuestions: Record<FriendFunnelCheckpoint, string[]> = {
     tangible_goal: [
       "What concrete result are you working toward most right now?",

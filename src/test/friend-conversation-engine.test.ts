@@ -290,6 +290,27 @@ describe("Friend conversation engine", () => {
     expect(contract.required).toBe(false);
   });
 
+  it("answers a direct social question during provider fallback instead of asking a funnel question", () => {
+    const latest = "I wouldn't say it's tricky, but I've made a few adjustments and use my time wisely. How is everything going for you?";
+    const replies = buildDeterministicFriendFallbackMessages(
+      [],
+      "intent",
+      "tangible_goal",
+      { result_verification_status: "unverified" },
+      latest,
+      [
+        { direction: "outbound", content: "Are you finding it tricky balancing this with your main job?" },
+        { direction: "inbound", content: latest },
+      ],
+    );
+    expect(replies).toHaveLength(3);
+    for (const reply of replies) {
+      expect(reply).toMatch(/(?:doing well|i'm good)/i);
+      expect(reply).toMatch(/(?:time|rhythm)/i);
+      expect(reply).not.toMatch(/(?:sales|what concrete result)/i);
+    }
+  });
+
   it("lets a connection-first prospect set the pace without forcing a sales lesson or question", () => {
     const latest = "Not yet😊 I'm not really pushing for sales with this page right now. I'm just enjoying building it and connecting with people first.";
     const analysis = { reply_act: "probe", sales_status: "unknown", result_verification_status: "unverified" };
