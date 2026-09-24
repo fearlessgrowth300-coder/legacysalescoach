@@ -37,6 +37,7 @@ import {
   deterministicFriendQualityIssues,
   formatFriendKnowledgeApplicationContract,
   hydrateFriendKnowledgeApplication,
+  selectBestFriendCandidates,
   friendStageToDatabase,
   selectRelevantConversationPassages,
 } from "../_shared/friend-conversation-engine.ts";
@@ -2086,12 +2087,16 @@ ${jsonFormat}
       // second validator timed out or omitted metadata. The local checks still
       // enforce the stage, evidence and non-repetition rules; only a candidate
       // that fails those checks is replaced by the last-resort fallback.
-      let candidateSuggestions = repairedSuggestions.length === originalSuggestions.length && repairedSuggestions.length > 0
-        ? repairedSuggestions
-        : originalSuggestions;
-      let candidateIssues = candidateSuggestions.flatMap((suggestion: any, index: number) =>
-        deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {}, speakerMessages, suggestion, finalFriendKnowledgeContract)
-          .map((issue) => `suggestion ${index + 1}: ${issue}`)
+      const issuesForSuggestion = (suggestion: any) => deterministicFriendQualityIssues(
+        suggestion?.text || "", finalFriendStageResult.stage,
+        combinedFriendLearning || parsed.prospectLearning || {}, speakerMessages,
+        suggestion, finalFriendKnowledgeContract,
+      );
+      let selected = selectBestFriendCandidates(originalSuggestions, repairedSuggestions, issuesForSuggestion);
+      let candidateSuggestions = selected.candidates;
+      let candidateIssuesByIndex = selected.issues;
+      let candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
+        issues.map((issue) => `suggestion ${index + 1}: ${issue}`)
       );
       // The validator can return prose that misses a narrow deterministic
       // constraint (often a literal prospect-fact token). Give the model one
@@ -2118,23 +2123,23 @@ ${jsonFormat}
           const repaired = (Array.isArray(repairJson.suggestions) ? repairJson.suggestions : [])
             .map((suggestion: any) => hydrateFriendKnowledgeApplication(suggestion, finalFriendKnowledgeContract));
           if (repaired.length !== 3) throw new Error("Compact Friend repair returned an incomplete suggestion set");
-          const repairIssues = repaired.flatMap((suggestion: any, index: number) =>
-            deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {}, speakerMessages, suggestion, finalFriendKnowledgeContract)
-              .map((issue) => `suggestion ${index + 1}: ${issue}`)
-          );
-          if (repairIssues.length === 0) {
-            candidateSuggestions = repaired;
-            candidateIssues = [];
+          selected = selectBestFriendCandidates(candidateSuggestions, repaired, issuesForSuggestion);
+          if (selected.issues.flat().length < candidateIssuesByIndex.flat().length) {
+            candidateSuggestions = selected.candidates;
+            candidateIssuesByIndex = selected.issues;
+            candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
+              issues.map((issue) => `suggestion ${index + 1}: ${issue}`)
+            );
             console.warn("[chat-suggest] Repaired Friend reply locally after validator issues");
           }
         } catch (repairError) {
           console.warn("[chat-suggest] Compact Friend repair unavailable:", repairError instanceof Error ? repairError.message : repairError);
         }
       }
-      const useDeterministicFallback = candidateSuggestions.length !== 3 || candidateIssues.length > 0;
+      const useDeterministicFallback = candidateIssues.length > 0;
       if (useDeterministicFallback) {
         const fallbackMessages = buildDeterministicFriendFallbackMessages(
-          repairedSuggestions.length > 0 ? repairedSuggestions : originalSuggestions,
+          candidateSuggestions,
           finalFriendStageResult.stage,
           finalFriendStageResult.checkpoint,
           combinedFriendLearning || parsed.prospectLearning || {},
@@ -2142,24 +2147,19 @@ ${jsonFormat}
           speakerMessages,
           finalFriendKnowledgeContract,
         );
-        repairedSuggestions = fallbackMessages.map((fallbackMessage, index) => hydrateFriendKnowledgeApplication({
-          ...(originalSuggestions[index] || {
+        repairedSuggestions = fallbackMessages.map((fallbackMessage, index) => {
+          if (candidateIssuesByIndex[index]?.length === 0) return candidateSuggestions[index];
+          return {
             id: index + 1,
             type: index === 0 ? "primary" : index === 1 ? "alternative" : "softer",
-            whyThisWorks: "Continues from the earliest unverified checkpoint without inventing facts.",
-            frameworkUsed: "evidence-gated certainty funnel",
+            whyThisWorks: "Responds to the verified conversation without inventing facts or implying a source lesson was applied.",
+            frameworkUsed: "conversation-grounded recovery",
             sourceUsed: "current conversation",
-            principleUsed: "truthful diagnosis",
-          }),
-          text: fallbackMessage,
-          frameworkUsed: finalFriendKnowledgeContract.required ? "source-backed Friend recovery" : "evidence-gated certainty funnel",
-          sourceUsed: finalFriendKnowledgeContract.required ? finalFriendKnowledgeContract.sourceName : "current conversation",
-          principleUsed: finalFriendKnowledgeContract.required ? finalFriendKnowledgeContract.principleName : "verified prospect gap",
-          whyThisWorks: finalFriendKnowledgeContract.required
-            ? `Applies ${finalFriendKnowledgeContract.principleName} to the verified prospect fact while keeping the ${finalFriendStageResult.checkpoint} checkpoint natural.`
-            : "Uses verified prospect facts and the earliest missing checkpoint without inventing facts.",
-        }, finalFriendKnowledgeContract));
-        console.warn("chat-suggest used source-backed Friend recovery:", validationFailure || candidateIssues.join("; "));
+            principleUsed: "verified conversation context",
+            text: fallbackMessage,
+          };
+        });
+        console.warn("chat-suggest used Friend recovery for invalid variants:", validationFailure || candidateIssues.join("; "));
       } else {
         repairedSuggestions = candidateSuggestions;
         if (validationFailure) {
@@ -2167,15 +2167,17 @@ ${jsonFormat}
         }
       }
 
-      parsed.suggestions = repairedSuggestions.map((suggestion: any, index: number) => ({
-        ...originalSuggestions[index],
-        ...suggestion,
-      }));
+      parsed.suggestions = repairedSuggestions.map((suggestion: any, index: number) =>
+        useDeterministicFallback && candidateIssuesByIndex[index]?.length > 0
+          ? suggestion
+          : { ...originalSuggestions[index], ...suggestion }
+      );
       parsed.qualityValidation = {
         passed: true,
         repaired: JSON.stringify(repairedSuggestions) !== JSON.stringify(originalSuggestions),
         fallbackApplied: useDeterministicFallback,
         fallbackReason: useDeterministicFallback ? (validationFailure || candidateIssues.join("; ")) : null,
+        fallbackVariantCount: candidateIssuesByIndex.filter((issues) => issues.length > 0).length,
         validatorBypassed: !useDeterministicFallback && Boolean(validationFailure),
       };
     }
@@ -2440,6 +2442,8 @@ ${jsonFormat}
           retrieval_query: decisionSearchQuery,
           outcome_performance: strategyPerformance,
           knowledge_contract_required: friendKnowledgeContract?.required || false,
+          fallback_reason: parsed.qualityValidation?.fallbackReason || null,
+          fallback_variant_count: parsed.qualityValidation?.fallbackVariantCount || 0,
         },
         modelProvider: chat.provider,
         modelName: chat.models.balanced,

@@ -16,6 +16,7 @@ import {
   hydrateFriendKnowledgeApplication,
   normalizeFriendStage,
   repeatsAnsweredFriendQuestion,
+  selectBestFriendCandidates,
   selectRelevantConversationPassages,
 } from "../../supabase/functions/_shared/friend-conversation-engine";
 
@@ -289,6 +290,46 @@ describe("Friend conversation engine", () => {
     expect(contract.required).toBe(false);
   });
 
+  it("lets a connection-first prospect set the pace without forcing a sales lesson or question", () => {
+    const latest = "Not yet😊 I'm not really pushing for sales with this page right now. I'm just enjoying building it and connecting with people first.";
+    const analysis = { reply_act: "probe", sales_status: "unknown", result_verification_status: "unverified" };
+    const contract = buildFriendKnowledgeApplicationContract({
+      analysis,
+      checkpoint: "commercial_result",
+      stage: "logical_certainty",
+      latestProspectMessage: latest,
+      principle: { principle_name: "Diagnose the sales gap", source_name: "Sales Course", what_i_learned: "Ask about sales results." },
+    });
+    expect(contract.required).toBe(false);
+    expect(deterministicFriendQualityIssues(
+      "That makes sense. Enjoying the page and getting to know people sounds important to you.",
+      "logical_certainty", analysis, [{ direction: "inbound", content: latest }],
+    )).toEqual([]);
+    const fallbacks = buildDeterministicFriendFallbackMessages(
+      [], "logical_certainty", "commercial_result", analysis, latest,
+      [
+        { direction: "outbound", content: "How is the page going?" },
+        { direction: "inbound", content: "It's been fun." },
+        { direction: "outbound", content: "Are you making sales yet?" },
+        { direction: "inbound", content: latest },
+      ],
+    );
+    expect(fallbacks).toHaveLength(3);
+    expect(fallbacks.every((reply) => !reply.includes("?") && !/sales|offer|expert/i.test(reply))).toBe(true);
+  });
+
+  it("preserves a sound original reply when the validator damages it or a sibling reply fails", () => {
+    const selected = selectBestFriendCandidates(
+      [{ text: "Good primary" }, { text: "Bad alternative" }, { text: "Good softer" }],
+      [{ text: "Bad primary" }, { text: "Good alternative" }, { text: "Bad softer" }],
+      (item) => item.text.startsWith("Good") ? [] : ["invalid"],
+    );
+    expect(selected.candidates.map((item) => item.text)).toEqual([
+      "Good primary", "Good alternative", "Good softer",
+    ]);
+    expect(selected.issues).toEqual([[], [], []]);
+  });
+
   it("rejects good-vibes endings when commercial results are still unverified", () => {
     const analysis = { result_verification_status: "unverified" };
     expect(deterministicFriendQualityIssues("Keep crushing it, I'm always here if you want to chat!", "intent", analysis))
@@ -416,7 +457,7 @@ describe("Friend conversation engine", () => {
       },
       checkpoint: "active_problem",
       stage: "emotional_certainty",
-      latestProspectMessage: "Not yet. I am enjoying connecting with people first.",
+      latestProspectMessage: "Sales are not consistent yet, and people are asking about my course.",
       principle: {
         principle_name: "Connect Sales to Authentic Service",
         source_name: "Sales Brain",

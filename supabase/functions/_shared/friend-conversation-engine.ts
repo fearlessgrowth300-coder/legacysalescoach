@@ -155,9 +155,12 @@ export function buildFriendKnowledgeApplicationContract(input: {
   const strategicAct = ["probe", "reframe", "transition", "ask_permission", "refer"].includes(replyAct);
   const activeSalesGap = salesSignal.activeSalesGap === true
     || includesAny(analysis.sales_status, ["no_sales", "first_sale", "inconsistent_sales", "wants_more_sales"]);
+  const connectionFirst = /\b(?:not\s+(?:really\s+)?pushing\s+(?:for\s+)?sales|not\s+selling|just\s+enjoying\s+building|connecting\s+with\s+people\s+first)\b/i
+    .test(input.latestProspectMessage || "");
   const requested = contactStatus !== "do_not_contact"
     && contactStatus !== "not_a_fit"
     && input.checkpoint !== "complete"
+    && !connectionFirst
     && (input.stage !== "intent" || activeSalesGap || strategicAct || (known(knowledgeNeed) && knowledgeNeed !== "none"));
 
   const principleName = cleanContractText(input.principle?.principle_name, 220);
@@ -168,7 +171,10 @@ export function buildFriendKnowledgeApplicationContract(input: {
   const evidence = Array.isArray(analysis.evidence)
     ? [...analysis.evidence].reverse().find((item) => known(item))
     : "";
-  const prospectFact = cleanContractText(evidence || input.latestProspectMessage, 420);
+  // The newest prospect bubble is the authoritative fact for this turn. Older
+  // evidence can be relevant retrieval context, but requiring a literal token
+  // from it rejected natural replies to the message actually being answered.
+  const prospectFact = cleanContractText(input.latestProspectMessage || evidence, 420);
 
   return {
     requested,
@@ -862,18 +868,49 @@ export function deterministicFriendQualityIssues(
     .map((turn) => String(turn.content || ""));
   const prospectIsDisengaging = recentInbound.some((turn) => /\b(?:not interested|no thanks|don't contact|do not contact|leave me alone|stop|not buying)\b/i.test(turn))
     || (recentInbound.length >= 2 && recentInbound.every((turn) => normalized(turn).split(" ").length <= 3));
-  if (message.includes("?") && recentOutbound.length === 2 && recentOutbound.every((turn) => turn.includes("?")) && !/\b(?:how|what|why|can you|could you|tell me)\b/i.test(String(analysis?.latest_question || ""))) {
+  const latestInbound = recentInbound.at(-1) || "";
+  const prospectAskedQuestion = latestInbound.includes("?");
+  if (message.includes("?") && recentOutbound.length === 2 && recentOutbound.every((turn) => turn.includes("?")) && !prospectAskedQuestion && !/\b(?:how|what|why|can you|could you|tell me)\b/i.test(String(analysis?.latest_question || ""))) {
     issues.push("creates a predictable consecutive-question chain");
   }
   if (prospectIsDisengaging && /\b(?:expert|mentor|offer|program|course|price|buy|link|team|sales)\b/i.test(message)) {
     issues.push("pushes commercial context while the prospect is disengaging or declining");
   }
-  if (analysis?.result_verification_status === "unverified") {
+  const connectionFirst = /\b(?:not\s+(?:really\s+)?pushing\s+(?:for\s+)?sales|not\s+selling|just\s+enjoying\s+building|connecting\s+with\s+people\s+first)\b/i.test(latestInbound);
+  if (analysis?.result_verification_status === "unverified" && !connectionFirst && !prospectIsDisengaging) {
     const testsCommercialReality = /\b(?:sales?|leads?|clients?|customers?|buyers?|orders?|income|revenue|conversions?|traffic|content (?:growth|reach)|what (?:is|has been) working)\b/i.test(message) && message.includes("?");
-    if (!testsCommercialReality) issues.push("closes or drifts without verifying the prospect's commercial result");
+    // Unknown sales results are not permission to interrogate on every turn.
+    // Only block a vague sign-off that abandons an active exchange; a specific
+    // answer or acknowledgment may legitimately precede the result question.
+    const vagueSignoff = /\b(?:keep crushing it|always here if you want to chat|just good vibes|wishing you all the best)\b/i.test(message);
+    if (!testsCommercialReality && vagueSignoff) issues.push("closes or drifts without verifying the prospect's commercial result");
   }
   issues.push(...friendKnowledgeApplicationIssues(knowledgeCandidate, knowledgeContract));
   return issues;
+}
+
+/** Keep a valid generated variant even when another variant (or the validator) fails. */
+export function selectBestFriendCandidates<T>(
+  original: T[],
+  repaired: T[],
+  issuesFor: (candidate: T) => string[],
+  expectedCount = 3,
+): { candidates: T[]; issues: string[][] } {
+  const candidates: T[] = [];
+  const issues: string[][] = [];
+  for (let index = 0; index < expectedCount; index += 1) {
+    const options = [repaired[index], original[index]].filter((item): item is T => item !== undefined);
+    if (!options.length) {
+      candidates.push({} as T);
+      issues.push(["missing reply"]);
+      continue;
+    }
+    const ranked = options.map((candidate) => ({ candidate, problems: issuesFor(candidate) }))
+      .sort((left, right) => left.problems.length - right.problems.length);
+    candidates.push(ranked[0].candidate);
+    issues.push(ranked[0].problems);
+  }
+  return { candidates, issues };
 }
 
 function fallbackLeadFromDraft(value: unknown, stage: FriendStage): string {
@@ -976,6 +1013,29 @@ export function buildDeterministicFriendFallbackMessages(
         "That is fair, and I appreciate you being honest.",
         "I get what you mean.",
       ];
+
+  // If the prospect has explicitly chosen connection over sales, a provider
+  // outage must not turn that boundary into a templated offer-discovery pitch.
+  const latestIsConnectionFirst = /\b(?:not\s+(?:really\s+)?pushing\s+(?:for\s+)?sales|not\s+selling|just\s+enjoying\s+building|connecting\s+with\s+people\s+first)\b/i
+    .test(latestProspectMessage);
+  if (latestIsConnectionFirst && !latestProspectMessage.includes("?")) {
+    const recentOutbound = conversation.filter((turn) => turn.direction === "outbound").slice(-2);
+    const avoidAnotherQuestion = recentOutbound.length === 2
+      && recentOutbound.every((turn) => String(turn.content || "").includes("?"));
+    const responses = [
+      "That makes sense. Enjoying the page and getting to know people is worthwhile in its own right.",
+      "I get that. You are building something you enjoy and letting the connections grow naturally.",
+      "Fair enough. It sounds like connecting with people is the part you want to focus on right now.",
+    ];
+    const questions = [
+      "What have you enjoyed most about building it so far?",
+      "What kind of conversations have been most fun for you?",
+      "What inspired you to start the page?",
+    ];
+    return responses.map((response, index) => avoidAnotherQuestion
+      ? response
+      : `${response} ${questions[index]}`);
+  }
 
   const checkpointQuestions: Record<FriendFunnelCheckpoint, string[]> = {
     tangible_goal: [

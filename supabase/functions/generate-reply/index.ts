@@ -31,6 +31,7 @@ import {
   deterministicFriendQualityIssues,
   formatFriendKnowledgeApplicationContract,
   hydrateFriendKnowledgeApplication,
+  selectBestFriendCandidates,
   friendStageToDatabase,
   selectRelevantConversationPassages,
 } from "../_shared/friend-conversation-engine.ts";
@@ -1161,12 +1162,15 @@ ${winningPatternsText.substring(0, 2000)}`;
       // validator's repaired prose when it is complete, otherwise retain the
       // original hydrated variants and use the deterministic fallback only if
       // neither candidate set passes the non-negotiable local checks.
-      let candidateVariants = repairedVariants.length === originalVariants.length && repairedVariants.length > 0
-        ? repairedVariants
-        : originalVariants;
-      let candidateIssues = candidateVariants.flatMap((variant: any, index: number) =>
-        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
-          .map((issue) => `variant ${index + 1}: ${issue}`)
+      const issuesForVariant = (variant: any) => deterministicFriendQualityIssues(
+        variant?.message || "", friendStageResult.stage, analysisJson, history,
+        variant, friendKnowledgeContract,
+      );
+      let selected = selectBestFriendCandidates(originalVariants, repairedVariants, issuesForVariant);
+      let candidateVariants = selected.candidates;
+      let candidateIssuesByIndex = selected.issues;
+      let candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
+        issues.map((issue) => `variant ${index + 1}: ${issue}`)
       );
       if (candidateIssues.length > 0 && originalVariants.length === 3) {
         try {
@@ -1188,23 +1192,23 @@ ${winningPatternsText.substring(0, 2000)}`;
           const repaired = (Array.isArray(repairJson.variants) ? repairJson.variants : [])
             .map((variant: any) => hydrateFriendKnowledgeApplication(variant, friendKnowledgeContract));
           if (repaired.length !== 3) throw new Error("Compact Friend repair returned an incomplete variant set");
-          const repairIssues = repaired.flatMap((variant: any, index: number) =>
-            deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
-              .map((issue) => `variant ${index + 1}: ${issue}`)
-          );
-          if (repairIssues.length === 0) {
-            candidateVariants = repaired;
-            candidateIssues = [];
+          selected = selectBestFriendCandidates(candidateVariants, repaired, issuesForVariant);
+          if (selected.issues.flat().length < candidateIssuesByIndex.flat().length) {
+            candidateVariants = selected.candidates;
+            candidateIssuesByIndex = selected.issues;
+            candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
+              issues.map((issue) => `variant ${index + 1}: ${issue}`)
+            );
             console.warn("[generate-reply] Repaired Friend reply locally after validator issues");
           }
         } catch (repairError) {
           console.warn("[generate-reply] Compact Friend repair unavailable:", repairError instanceof Error ? repairError.message : repairError);
         }
       }
-      const useDeterministicFallback = candidateVariants.length !== 3 || candidateIssues.length > 0;
+      const useDeterministicFallback = candidateIssues.length > 0;
       if (useDeterministicFallback) {
         const fallbackMessages = buildDeterministicFriendFallbackMessages(
-          repairedVariants.length > 0 ? repairedVariants : originalVariants,
+          candidateVariants,
           friendStageResult.stage,
           friendStageResult.checkpoint,
           analysisJson,
@@ -1212,21 +1216,18 @@ ${winningPatternsText.substring(0, 2000)}`;
           history,
           friendKnowledgeContract,
         );
-        repairedVariants = fallbackMessages.map((fallbackMessage, index) => hydrateFriendKnowledgeApplication({
-          ...(originalVariants[index] || {
+        repairedVariants = fallbackMessages.map((fallbackMessage, index) => {
+          if (candidateIssuesByIndex[index]?.length === 0) return candidateVariants[index];
+          return {
             variant: index === 0 ? "primary" : index === 1 ? "alternative" : "casual",
-            move_used: analysisJson.reply_act || "probe",
-            principle_applied: "evidence-gated certainty funnel",
-            why_this_works: "Continues from the earliest unverified checkpoint without inventing facts.",
+            move_used: "conversation_grounded_recovery",
+            principle_applied: "verified conversation context",
+            why_this_works: "Responds to the verified conversation without inventing facts or implying a source lesson was applied.",
             warmth_prediction: analysisJson.warmth_score,
-          }),
-          message: fallbackMessage,
-          principle_applied: friendKnowledgeContract?.required ? friendKnowledgeContract.principleName : "evidence-gated certainty funnel",
-          why_this_works: friendKnowledgeContract?.required
-            ? `Applies ${friendKnowledgeContract.principleName} to the verified prospect fact while keeping the ${friendStageResult.checkpoint} checkpoint natural.`
-            : "Uses verified prospect facts and the earliest missing checkpoint without inventing facts.",
-        }, friendKnowledgeContract));
-        console.warn("generate-reply used source-backed Friend recovery:", validationFailure || candidateIssues.join("; "));
+            message: fallbackMessage,
+          };
+        });
+        console.warn("generate-reply used Friend recovery for invalid variants:", validationFailure || candidateIssues.join("; "));
       } else {
         repairedVariants = candidateVariants;
         if (validationFailure) {
@@ -1234,15 +1235,17 @@ ${winningPatternsText.substring(0, 2000)}`;
         }
       }
 
-      replyJson.variants = repairedVariants.map((variant: any, index: number) => ({
-        ...originalVariants[index],
-        ...variant,
-      }));
+      replyJson.variants = repairedVariants.map((variant: any, index: number) =>
+        useDeterministicFallback && candidateIssuesByIndex[index]?.length > 0
+          ? variant
+          : { ...originalVariants[index], ...variant }
+      );
       replyJson.qualityValidation = {
         passed: true,
         repaired: JSON.stringify(repairedVariants) !== JSON.stringify(originalVariants),
         fallbackApplied: useDeterministicFallback,
         fallbackReason: useDeterministicFallback ? (validationFailure || candidateIssues.join("; ")) : null,
+        fallbackVariantCount: candidateIssuesByIndex.filter((issues) => issues.length > 0).length,
         validatorBypassed: !useDeterministicFallback && Boolean(validationFailure),
       };
     }
@@ -1416,6 +1419,8 @@ ${winningPatternsText.substring(0, 2000)}`;
           retrieval_query: appliedRetrievalQuery,
           outcome_performance: strategyPerformance,
           knowledge_contract_required: friendKnowledgeContract?.required || false,
+          fallback_reason: replyJson.qualityValidation?.fallbackReason || null,
+          fallback_variant_count: replyJson.qualityValidation?.fallbackVariantCount || 0,
         },
         modelProvider: chat.provider,
         modelName: chat.models.balanced,
