@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "@/integrations/supabase/client";
 import { isSimpleBrainChatGreeting, simpleBrainChatGreetingResponse } from "@/lib/brain-chat-small-talk";
+import { isBrainChatReplyTruncated } from "@/lib/brainChatCompletion";
 
 type Msg = { id?: string; role: "user" | "assistant"; content: string; image_url?: string | null; image_urls?: string[]; is_edited?: boolean; is_pinned?: boolean; status?: "sending" | "sent" | "delivered" | "read"; selected_principles?: SelectedPrinciple[]; framework_name?: string };
 type Conversation = { id: string; title: string; created_at: string; updated_at: string };
@@ -107,8 +108,9 @@ async function streamChat({
   const decoder = new TextDecoder();
   let buf = "";
   let done = false;
-  let fullContent = "";
   let receivedDone = false;
+  let receivedCompleteReply = false;
+  let finishReason: string | null = null;
 
   try {
     while (!done) {
@@ -140,8 +142,11 @@ async function streamChat({
           }
           const content = parsed.choices?.[0]?.delta?.content;
           if (content) {
-            fullContent += content;
             onDelta(content);
+          }
+          if (parsed.reply_complete === true) receivedCompleteReply = true;
+          if (typeof parsed.choices?.[0]?.finish_reason === "string") {
+            finishReason = parsed.choices[0].finish_reason;
           }
         } catch {
           buf = line + "\n" + buf;
@@ -155,8 +160,9 @@ async function streamChat({
     return;
   }
 
-  // Detect truncation: stream ended without [DONE] or ends mid-sentence
-  const wasTruncated = !receivedDone || (fullContent.length > 100 && !/[.!?:)\]"'`]\s*$/.test(fullContent.trim()));
+  // A validated answer may legitimately end in a quote, list or code block.
+  // Use the server's completion signal, not punctuation, to detect truncation.
+  const wasTruncated = isBrainChatReplyTruncated({ receivedDone, receivedCompleteReply, finishReason });
   onDone(wasTruncated);
 }
 

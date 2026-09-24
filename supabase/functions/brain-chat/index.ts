@@ -610,7 +610,7 @@ serve(async (req) => {
             empty_vault: false,
             debug: { small_talk: true, embedding_used: false },
           } })}\n\n`));
-          controller.enqueue(smallTalkEncoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: fixed } }] })}\n\n`));
+          controller.enqueue(smallTalkEncoder.encode(`data: ${JSON.stringify({ reply_complete: true, choices: [{ delta: { content: fixed }, finish_reason: "stop" }] })}\n\n`));
           controller.enqueue(smallTalkEncoder.encode("data: [DONE]\n\n"));
           controller.close();
         },
@@ -818,7 +818,7 @@ serve(async (req) => {
         const stream = new ReadableStream({
           start(controller) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: { selected_principles: [], framework_name: "", contradictions: [], empty_vault: false, debug: { image_failed: true, vision_models_tried: buildVisionModelChain(chat.models.vision, chat.visionFallbackModels), vision_failures: visionFailures } } })}\n\n`));
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: fixed } }] })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ reply_complete: true, choices: [{ delta: { content: fixed }, finish_reason: "stop" }] })}\n\n`));
             controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
             controller.close();
           },
@@ -950,7 +950,7 @@ serve(async (req) => {
         start(controller) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: brainMeta })}\n\n`));
           // Stream the fixed message as a single delta so the UI renders it identically
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: fixed } }] })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ reply_complete: true, choices: [{ delta: { content: fixed }, finish_reason: "stop" }] })}\n\n`));
           controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
           controller.close();
         },
@@ -1095,6 +1095,7 @@ serve(async (req) => {
 
           const data = await aiResp.json();
           const draft = sanitize(String(data.choices?.[0]?.message?.content || "")).trim();
+          const draftFinishReason = String(data.choices?.[0]?.finish_reason || "").toLowerCase();
           if (!draft) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "AI returned an empty response" })}\n\n`));
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
@@ -1114,6 +1115,7 @@ serve(async (req) => {
             recentContext: recentForBrief,
           });
           const finalResponse = sanitize(validation.response).trim();
+          const replyComplete = validation.repaired || !["length", "max_tokens", "model_context_window_exceeded"].includes(draftFinishReason);
           const evaluation = evaluateBrainChatAnswer({
             response: finalResponse,
             validationIssues: validation.issues,
@@ -1144,7 +1146,7 @@ serve(async (req) => {
             },
           };
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ brain_meta: validatedMeta })}\n\n`));
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: finalResponse } }] })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ reply_complete: replyComplete, choices: [{ delta: { content: finalResponse }, finish_reason: replyComplete ? "stop" : "length" }] })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
         } catch (error) {
