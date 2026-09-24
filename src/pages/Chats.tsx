@@ -171,6 +171,7 @@ export default function Chats() {
   const [newProspectIg, setNewProspectIg] = useState("");
   const [messageInput, setMessageInput] = useState("");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [pushyWarning, setPushyWarning] = useState<string | null>(null);
   const [currentThreadType, setCurrentThreadType] = useState<"friend" | "expert">("friend");
@@ -340,6 +341,7 @@ export default function Chats() {
   // so one conversation can never display another conversation's replies.
   useEffect(() => {
     setSuggestions([]);
+    setSuggestionError(null);
     setPushyWarning(null);
     setFeedbackMap({});
     setConversationAnalysis(null);
@@ -940,6 +942,7 @@ export default function Chats() {
 
   const handleSendInbound = async () => {
     if (!messageInput.trim() || !selectedProspectId) return;
+    setSuggestionError(null);
     setIsAnalyzing(true);
     setIsAnalyzingIntel(true);
 
@@ -1082,8 +1085,11 @@ export default function Chats() {
       };
       const { data, error } = await invokeGenerate();
       if (error) throw error;
+      if (!Array.isArray(data?.suggestions) || data.suggestions.length === 0) {
+        throw new Error(data?.error || "The AI returned no reply suggestions. Please try again.");
+      }
 
-      setSuggestions(data.suggestions || []);
+      setSuggestions(data.suggestions);
       setPushyWarning(null);
       setFeedbackMap({});
       if (data.conversationStage) setConversationStage(data.conversationStage);
@@ -1098,14 +1104,20 @@ export default function Chats() {
         const lr = data.learningResult;
         toast.success(`🧠 Learned ${lr.chunksAdded || 1} new pattern${(lr.chunksAdded || 1) > 1 ? 's' : ''} from "${(data.prospectType || "prospect").replace(/_/g, " ")}"`, { duration: 5000 });
       }
+      setMessageInput("");
+      setPendingScreenshot(null);
+      setPendingScreenshotNote("");
     } catch (e: any) {
       console.error("AI suggestion error:", e);
-      toast.error(e instanceof AiRequestTimeoutError ? e.message : "Failed to get suggestions");
+      let detail = e instanceof AiRequestTimeoutError ? e.message : String(e?.message || "Failed to get suggestions");
+      if (e?.context instanceof Response) {
+        const payload = await e.context.clone().json().catch(() => null);
+        if (typeof payload?.error === "string") detail = payload.error;
+      }
+      setSuggestionError(detail);
+      toast.error(detail, { duration: 8000 });
     }
 
-    setMessageInput("");
-    setPendingScreenshot(null);
-    setPendingScreenshotNote("");
     queryClient.invalidateQueries({ queryKey: ["messages"] });
     queryClient.invalidateQueries({ queryKey: ["prospects"] });
     setIsAnalyzing(false);
@@ -2027,6 +2039,14 @@ export default function Chats() {
                 <div ref={messagesEndRef} />
               </div>
             </ScrollArea>
+
+            {suggestionError && (
+              <div role="alert" className="mx-3 mb-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+                <p className="font-medium">Reply suggestions did not finish</p>
+                <p className="mt-1">{suggestionError}</p>
+                <p className="mt-1 text-muted-foreground">Your message is still in the box below. You can retry without retyping it.</p>
+              </div>
+            )}
 
             {/* AI Suggestions */}
             {suggestions.length > 0 && (

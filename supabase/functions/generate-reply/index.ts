@@ -629,7 +629,7 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
         ],
         temperature: 0.2,
         response_format: { type: "json_object" },
-        timeout_ms: 15000,
+        timeout_ms: 12000,
       });
       if (!analysisResponse.ok) throw new Error(`Analysis AI error: ${analysisResponse.status}`);
       const analysisData = await analysisResponse.json();
@@ -1053,7 +1053,7 @@ ${winningPatternsText.substring(0, 2000)}`;
         // profile, source evidence, graph path and reference moments. Twenty
         // two seconds was causing valid Gemini generations to be aborted and
         // replaced by a generic deterministic question.
-        timeout_ms: 40000,
+        timeout_ms: 30000,
       });
       if (!replyResponse.ok) throw new Error(`Reply AI error: ${replyResponse.status}`);
       const replyData = await replyResponse.json();
@@ -1094,7 +1094,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           ],
           temperature: 0.45,
           response_format: { type: "json_object" },
-          timeout_ms: 30000,
+          timeout_ms: 18000,
         });
         if (!recoveryResponse.ok) throw new Error(`Compact Friend recovery failed: ${recoveryResponse.status}`);
         const recoveryData = await recoveryResponse.json();
@@ -1124,7 +1124,12 @@ ${winningPatternsText.substring(0, 2000)}`;
       );
       let repairedVariants: any[] = [];
       let validationFailure = replyGenerationFailure;
-      try {
+      if (originalVariants.length === 3 && deterministicIssues.length === 0) {
+        // The source-grounded draft already passed every local guard. A second
+        // model round-trip adds latency and can damage a valid reply, so return
+        // it without spending the user's request budget on redundant review.
+        repairedVariants = originalVariants;
+      } else try {
         if (validationFailure) throw new Error(validationFailure);
         if (originalVariants.length === 0) throw new Error("Reply generator returned no Friend variants");
         const qualityResponse = await userChat(chat, {
@@ -1138,7 +1143,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           ],
           temperature: 0.2,
           response_format: { type: "json_object" },
-          timeout_ms: 18000,
+          timeout_ms: 12000,
         });
         if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
         const qualityData = await qualityResponse.json();
@@ -1182,7 +1187,7 @@ ${winningPatternsText.substring(0, 2000)}`;
             ],
             temperature: 0.25,
             response_format: { type: "json_object" },
-            timeout_ms: 30000,
+            timeout_ms: 18000,
           });
           if (!repairResponse.ok) throw new Error(`Compact Friend repair failed: ${repairResponse.status}`);
           const repairData = await repairResponse.json();

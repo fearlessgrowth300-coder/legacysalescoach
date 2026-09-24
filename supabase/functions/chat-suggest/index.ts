@@ -1837,7 +1837,7 @@ ${jsonFormat}
         // The final Friend prompt includes the decision ledger, workspace
         // context, source passages and graph. Allow the selected model enough
         // time to return a grounded JSON response instead of falling back.
-        timeout_ms: 40000,
+        timeout_ms: 30000,
       });
       if (!response.ok) throw new Error(`AI gateway error: ${response.status}`);
       const aiResponse = await response.json();
@@ -1883,7 +1883,7 @@ ${jsonFormat}
           ],
           temperature: 0.45,
           response_format: { type: "json_object" },
-          timeout_ms: 30000,
+          timeout_ms: 18000,
         });
         if (!recoveryResponse.ok) throw new Error(`Compact Friend recovery failed: ${recoveryResponse.status}`);
         const recoveryData = await recoveryResponse.json();
@@ -2050,7 +2050,9 @@ ${jsonFormat}
       );
       let repairedSuggestions: any[] = [];
       let validationFailure = replyGenerationFailure;
-      try {
+      if (originalSuggestions.length === 3 && deterministicIssues.length === 0) {
+        repairedSuggestions = originalSuggestions;
+      } else try {
         if (validationFailure) throw new Error(validationFailure);
         if (originalSuggestions.length === 0) throw new Error("Reply generator returned no Friend suggestions");
         const qualityResponse = await userChat(chat, {
@@ -2064,7 +2066,7 @@ ${jsonFormat}
           ],
           temperature: 0.2,
           response_format: { type: "json_object" },
-          timeout_ms: 18000,
+          timeout_ms: 12000,
         });
         if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
         const qualityData = await qualityResponse.json();
@@ -2113,7 +2115,7 @@ ${jsonFormat}
             ],
             temperature: 0.25,
             response_format: { type: "json_object" },
-            timeout_ms: 30000,
+            timeout_ms: 18000,
           });
           if (!repairResponse.ok) throw new Error(`Compact Friend repair failed: ${repairResponse.status}`);
           const repairData = await repairResponse.json();

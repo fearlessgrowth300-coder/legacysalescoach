@@ -1,10 +1,8 @@
 // Friend replies can include retrieval, prospect-memory updates, graph
-// reasoning, generation and a quality repair. The old 45-second client race
-// rejected a healthy backend response before it could return, then encouraged
-// the user to retry and create duplicate suggestions. Keep this aligned with
-// the 90-second AI Chat deadline while still allowing the UI to recover from a
-// genuinely stalled request.
-export const CONVERSATION_AI_TIMEOUT_MS = 90000;
+// reasoning, generation and a quality repair. Give the backend enough time to
+// finish its bounded retries, while still recovering the UI from a stalled
+// request and retaining the user's draft for an explicit retry.
+export const CONVERSATION_AI_TIMEOUT_MS = 120000;
 
 export class AiRequestTimeoutError extends Error {
   constructor(timeoutMs: number) {
