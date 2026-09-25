@@ -1096,7 +1096,7 @@ export default function Chats() {
       if (data.prospectType) setProspectType(data.prospectType);
       if (data.analysis) setConversationAnalysis(data.analysis);
       if (data.qualityValidation?.fallbackApplied) {
-        toast.warning("Gemini is unavailable. These are conversation-based backup replies; a Sales Brain lesson was not applied.", { duration: 7000 });
+        toast.warning("The AI provider did not return a reply. These are conversation-based backups; a Sales Brain lesson was not applied.", { duration: 7000 });
       } else if (data.brainRetrieval && data.brainRetrieval.chunksRetrieved > 0) {
         const br = data.brainRetrieval;
         const sourceList = (br.sources || []).filter((s: string) => s !== "unknown").join(", ") || "brain";
@@ -1262,7 +1262,7 @@ export default function Chats() {
       if (data.prospectType) setProspectType(data.prospectType);
       if (data.analysis) setConversationAnalysis(data.analysis);
       if (data.qualityValidation?.fallbackApplied) {
-        toast.warning("Gemini is unavailable. These are conversation-based backup replies; a Sales Brain lesson was not applied.", { duration: 7000 });
+        toast.warning("The AI provider did not return a reply. These are conversation-based backups; a Sales Brain lesson was not applied.", { duration: 7000 });
       } else if (data.brainRetrieval && data.brainRetrieval.chunksRetrieved > 0) {
         const br = data.brainRetrieval;
         const sourceList = (br.sources || []).filter((s: string) => s !== "unknown").join(", ") || "brain";
@@ -2065,10 +2065,10 @@ export default function Chats() {
                   <ReferralWarningBanner warmthScore={conversationAnalysis.warmth_score} />
                 )}
 
-                {suggestions.some((suggestion) => /conversation[_-]grounded recovery/i.test(suggestion.frameworkUsed || "")) && (
+                {suggestions.some((suggestion) => /conversation[_ -]grounded[_ -]recovery/i.test(suggestion.frameworkUsed || "")) && (
                   <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200">
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    Gemini could not generate a reply. These are conversation-based backups, not replies applying the selected Sales Brain source.
+                    The AI provider did not return a reply. These are conversation-based backups, not replies applying the selected Sales Brain source.
                   </div>
                 )}
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -2077,7 +2077,7 @@ export default function Chats() {
                       <Sparkles className="h-4 w-4 text-primary" />Suggested Replies
                     </p>
                     <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-primary/5 text-primary border-primary/20">
-                      {suggestions.some((suggestion) => /conversation[_-]grounded recovery/i.test(suggestion.frameworkUsed || "")) ? "Backup replies" : "AI suggestions"}
+                      {suggestions.some((suggestion) => /conversation[_ -]grounded[_ -]recovery/i.test(suggestion.frameworkUsed || "")) ? "Backup replies" : "AI suggestions"}
                     </Badge>
                   </div>
                   <div className="flex gap-1 flex-wrap">

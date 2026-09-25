@@ -224,6 +224,63 @@ export type SimpleChatOpts = {
   timeout_ms?: number;
 };
 
+// The OpenAI-compatible Gemini endpoint can fail independently of the native
+// generateContent endpoint. Keep this narrowly scoped to text-only requests;
+// callers using tools, images, or streaming retain their existing path.
+async function tryGeminiNativeChat(
+  target: UserChatTarget,
+  opts: SimpleChatOpts,
+  model: string,
+  timeoutMs: number,
+): Promise<Response | null> {
+  if (opts.stream || opts.tools?.length || !opts.messages.every((message) =>
+    ["system", "user", "assistant"].includes(message.role) && typeof message.content === "string"
+  )) return null;
+
+  const apiKey = target.headers["x-goog-api-key"];
+  if (!apiKey) return null;
+  const systemText = opts.messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n");
+  const contents = opts.messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role === "assistant" ? "model" : "user",
+      parts: [{ text: message.content }],
+    }));
+  if (!contents.length) contents.push({ role: "user", parts: [{ text: "Continue." }] });
+  const generationConfig: Record<string, unknown> = {};
+  if (opts.max_tokens) generationConfig.maxOutputTokens = opts.max_tokens;
+  if (opts.response_format?.type === "json_object") generationConfig.responseMimeType = "application/json";
+  if (!shouldOmitGeminiSamplingParameters("gemini", model)) generationConfig.temperature = opts.temperature ?? 0.3;
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: "POST",
+      headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(systemText ? { system_instruction: { parts: [{ text: systemText }] } } : {}),
+        contents,
+        ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    },
+  );
+  if (!response.ok) return response;
+  const data = await response.json();
+  const content = (data.candidates?.[0]?.content?.parts || [])
+    .map((part: { text?: string }) => part.text || "")
+    .filter(Boolean)
+    .join("\n");
+  if (!content.trim()) return null;
+  return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] }), {
+    status: 200,
+    headers: { "Content-Type": "application/json", "X-AI-Transport": "gemini-native-recovery" },
+  });
+}
+
 export async function userChat(
   target: UserChatTarget,
   opts: SimpleChatOpts,
@@ -240,6 +297,8 @@ export async function userChat(
       : [opts.model];
 
     let lastResponse: Response | null = null;
+    let rateLimitResponse: Response | null = null;
+    let nativeRecoveryAttempted = false;
     const totalTimeoutMs = Math.max(5_000, opts.timeout_ms || 60_000);
     const deadline = Date.now() + totalTimeoutMs;
 
@@ -275,6 +334,7 @@ export async function userChat(
 
           lastResponse = res;
           if (res.ok) return res;
+          if (res.status === 429) rateLimitResponse = res;
 
           if (res.status === 503 && attempt === 0 && deadline - Date.now() > 3_500) {
             const backoffMs = 800 + Math.floor(Math.random() * 400);
@@ -286,6 +346,25 @@ export async function userChat(
           // model, but never silently switch to another provider/account.
           if (res.status === 429 || res.status === 503 || res.status === 404) {
             console.warn(`[user-ai] model ${currentModel} returned ${res.status}; trying Gemini fallback`);
+            if (target.provider === "gemini" && res.status === 503 && !nativeRecoveryAttempted) {
+              nativeRecoveryAttempted = true;
+              const nativeBudgetMs = Math.min(18_000, deadline - Date.now() - 1_000);
+              if (nativeBudgetMs > 5_000) {
+                try {
+                  const nativeResponse = await tryGeminiNativeChat(target, opts, currentModel, nativeBudgetMs);
+                  if (nativeResponse?.ok) {
+                    console.warn(`[user-ai] recovered ${currentModel} through the native Gemini endpoint`);
+                    return nativeResponse;
+                  }
+                  if (nativeResponse) {
+                    if (nativeResponse.status === 429) rateLimitResponse = nativeResponse;
+                    console.warn(`[user-ai] native ${currentModel} returned ${nativeResponse.status}`);
+                  }
+                } catch (nativeError) {
+                  console.warn(`[user-ai] native ${currentModel} failed:`, nativeError);
+                }
+              }
+            }
             break;
           }
           return res;
@@ -296,7 +375,10 @@ export async function userChat(
       }
     }
 
-    return lastResponse || new Response(JSON.stringify({ error: "AI rate limit reached on all models. Please try again shortly." }), { status: 429 });
+    // The final compatibility attempt may report 503 even when the native API
+    // already identified the real limit as 429. Preserve that actionable
+    // signal for the caller instead of masking it as transient overload.
+    return rateLimitResponse || lastResponse || new Response(JSON.stringify({ error: "AI rate limit reached on all models. Please try again shortly." }), { status: 429 });
   }
 
   // Anthropic translation — non-streaming only.
