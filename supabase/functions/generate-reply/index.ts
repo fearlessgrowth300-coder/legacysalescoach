@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { generateEmbedding } from "../_shared/embeddings.ts";
+import { loadFriendSupportingPassage, retrieveFriendLexicalKnowledge } from "../_shared/friend-knowledge-search.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 import {
   buildProspectEvidenceLedger,
@@ -25,12 +26,12 @@ import {
   applyEarliestMissingFriendCheckpoint,
   buildFriendKnowledgeApplicationContract,
   buildDeterministicFriendFallbackMessages,
-  buildFriendQualityValidatorPrompt,
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
   deterministicFriendQualityIssues,
   formatFriendKnowledgeApplicationContract,
   hydrateFriendKnowledgeApplication,
+  prioritizeFriendDirectQuestion,
   selectBestFriendCandidates,
   friendStageToDatabase,
   selectRelevantConversationPassages,
@@ -290,6 +291,7 @@ serve(async (req) => {
     ] = await Promise.all([
       supabase.from("sales_brain")
         .select(PRINCIPLE_SELECT)
+        .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("brain_type", [activeThreadType, "both"])
         .in("source_type", ["core_knowledge", "sales_principle"])
@@ -304,6 +306,7 @@ serve(async (req) => {
         .limit(200).then(r => r.data || []),
       supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
+        .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("brain_type", [activeThreadType, "both"])
         .eq("source_type", "core_knowledge")
@@ -338,7 +341,7 @@ serve(async (req) => {
     });
 
     const sourceCoverageIds = (kbItems || []).map((k: any) => k.id).filter(Boolean).slice(0, MAX_SOURCE_COVERAGE_FILES);
-    const [sourceCoveragePrinciplesNested, sourceCoverageChunksNested] = await Promise.all([
+    const [sourceCoveragePrinciplesNested, sourceCoverageChunksNested, initialLexical] = await Promise.all([
       Promise.all(sourceCoverageIds.map((sourceId: string) =>
         supabase.from("sales_brain")
           .select(PRINCIPLE_SELECT)
@@ -363,9 +366,13 @@ serve(async (req) => {
           .limit(4)
           .then((r: any) => r.data || [])
       )),
+      activeThreadType === "friend"
+        ? retrieveFriendLexicalKnowledge(supabase, user.id, activeThreadType, kbModeMap, brainQuery)
+        : Promise.resolve({ principles: [], chunks: [], query: "" }),
     ]);
     const sourceCoveragePrinciples = sourceCoveragePrinciplesNested.flat();
     const sourceCoverageChunks = sourceCoverageChunksNested.flat();
+    let lexicalCandidatesRetrieved = initialLexical.principles.length + initialLexical.chunks.length;
 
     // Semantic search
     let semanticPrinciples: any[] = [];
@@ -390,8 +397,14 @@ serve(async (req) => {
     // Merge + deduplicate + message-focused source-balanced ranking
     const allPrinciples = mergeByIdPriority(sourceCoveragePrinciples, mergeByIdPriority(userPrinciples, globalPrinciples));
     const allChunks = mergeByIdPriority(sourceCoverageChunks, mergeByIdPriority(userChunks, globalChunks));
-    const mergedPrinciples = deduplicatePrinciples(mergeByIdPriority(semanticPrinciples, allPrinciples), "relevance_score");
-    const mergedChunks = deduplicateChunks(mergeByIdPriority(semanticChunks, allChunks), "relevance_score");
+    const mergedPrinciples = deduplicatePrinciples(
+      mergeByIdPriority(semanticPrinciples, mergeByIdPriority(initialLexical.principles, allPrinciples)),
+      "relevance_score",
+    );
+    const mergedChunks = deduplicateChunks(
+      mergeByIdPriority(semanticChunks, mergeByIdPriority(initialLexical.chunks, allChunks)),
+      "relevance_score",
+    );
 
     const messageTerms = extractMeaningfulTerms(`${message} ${screenshotContext} ${last3}`);
     function sourceNameFor(item: any) {
@@ -576,6 +589,13 @@ BOUNDARIES: "Don't contact me", "leave me alone", or an equivalent explicit refu
 WARMTH: +5-15 personal detail, +10 shared struggle, +15 asked about you, +20 wants change, -10 short/low energy, -15 skeptical.
 VISUAL EVIDENCE: When a screenshot is supplied, use visible speaker alignment, reactions, quoted replies, timestamps, read/seen/delivered status, unanswered-message state, and attachments. If OCR conflicts with the image, trust the image and mention the conflict in signals_detected. Treat salesperson notes as context, never as the prospect's words.`;
 
+    // Friend analysis only needs the decision-relevant evidence. Sending the
+    // entire workspace, source library and transcript made this first Gemini
+    // pass time out before it could return structured analysis. The full
+    // source and workspace context is still supplied to the reply generator.
+    const friendAnalysisPrompt = `Analyze this peer-to-peer conversation and return one JSON object only. Distinguish YOU/OUTBOUND from PROSPECT/INBOUND. Use explicit evidence, not inferred income, pain, buying intent, or mentor status. The latest prospect message overrides stale memory. Answer a direct question before proposing a new question. Respect a clear no or do-not-contact boundary.
+Return: warmth_score (0-100), prospect_psychology, stage_reason, detectedTone, segment, experience_level, sales_status, mentor_status, current_strategy, interests, desires, pain_points, objections, questions_already_answered, objections_handled, strategies_attempted, exact_unresolved_issue, motivation, intent, tangible_goal, why_goal_matters, past_experiences, problem_gap, problem_status (active|past_resolved|unclear|none), root_cause, consequences, need_for_change_reason, inaction_pattern, detailed_future_outcome, doubt_cause, certainty_gap, reply_act (relate|share_story|validate|answer|observe|probe|reframe|transition|ask_permission|refer|stop), question_needed, knowledge_need, readiness (not_ready|exploring|problem_aware|wants_help|accepted_referral), contact_status (active|not_now|do_not_contact|not_a_fit), next_best_action, learning_confidence, evidence (short strings), signals_detected, objection_detected, objection_bucket, spin_stage, offer_fit, referral_readiness, next_objective. Use null or unknown for unsupported scalar facts and [] for unsupported arrays. Do not treat confidence or content growth as verified sales. If sales are explicitly inconsistent, record that fact rather than asking again. Keep one next objective; never force an expert introduction.`;
+
     const prospectEvidenceLedger = buildProspectEvidenceLedger(history);
     const analysisUserPrompt = `WORKSPACE_PROFILE:
 ${workspaceProfile}
@@ -611,32 +631,42 @@ AUTHORITATIVE LATEST PROSPECT MESSAGE:
 ${message || "No inbound prospect message was found."}
 
 SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND rows are the buyer's messages. Never answer a YOU message as though the prospect said it.`;
+    const friendAnalysisUserPrompt = `WORKSPACE (context, not prospect speech):\n${keepHeadAndLatest(workspaceProfile, 1800, 300)}
+LINKED EXPERT (only if relevant):\n${linkedExpertContext.substring(0, 900)}
+KNOWN PROSPECT MEMORY (newer evidence overrides):\n${JSON.stringify(existingFriendProfile).substring(0, 2800)}
+FACT AND STRATEGY LEDGER:\n${prospectDecisionHistory.substring(0, 2600)}
+PROSPECT INBOUND EVIDENCE:\n${keepHeadAndLatest(prospectEvidenceLedger, 2600, 350)}
+RECENT CONVERSATION (YOU/OUTBOUND versus PROSPECT/INBOUND):\n${keepHeadAndLatest(formatConversationHistory(history), 6500, 1100)}
+SCREENSHOT CONTEXT:\n${(screenshotContext || "none").substring(0, 750)}
+LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}`;
+    const selectedAnalysisPrompt = activeThreadType === "friend" ? friendAnalysisPrompt : analysisPrompt;
+    const selectedAnalysisUserPrompt = activeThreadType === "friend" ? friendAnalysisUserPrompt : analysisUserPrompt;
     const screenshotSignedUrl = await createScreenshotSignedUrl(supabase, user.id, screenshotPath);
     const analysisUserContent: any = screenshotSignedUrl && !chat.isAnthropic
       ? [
-          { type: "text", text: `${analysisUserPrompt}\n\nInspect the attached original screenshot as primary evidence. Reconcile it with the extracted transcript, note any OCR/speaker errors, and use visible reactions, timestamps, read status, quoted replies, and attachments in the analysis.` },
+          { type: "text", text: `${selectedAnalysisUserPrompt}\n\nInspect the attached original screenshot as primary evidence. Reconcile it with the extracted transcript, note any OCR/speaker errors, and use visible reactions, timestamps, read status, quoted replies, and attachments in the analysis.` },
           { type: "image_url", image_url: { url: screenshotSignedUrl } },
         ]
-      : analysisUserPrompt;
+      : selectedAnalysisUserPrompt;
 
     let analysisJson: any = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Deterministic fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything", segment: "other", experience_level: "unknown", sales_status: "unknown", mentor_status: "unknown", current_strategy: "unknown", interests: [], desires: [], pain_points: [], objections: [], motivation: "unknown", intent: "unknown", tangible_goal: "unknown", problem_gap: "unknown", doubt_cause: "unknown", certainty_gap: "unknown", reply_act: "respond naturally", question_needed: false, knowledge_need: "none", readiness: "not_ready", contact_status: "active", next_best_action: "continue discovery", learning_confidence: 0, evidence: [] };
     try {
       const analysisResponse = await userChat(chat, {
         model: screenshotSignedUrl && !chat.isAnthropic ? chat.models.vision : chat.models.fast,
         messages: [
-          { role: "system", content: analysisPrompt },
+          { role: "system", content: selectedAnalysisPrompt },
           { role: "user", content: analysisUserContent },
         ],
         temperature: 0.2,
         response_format: { type: "json_object" },
-        timeout_ms: 12000,
+        timeout_ms: activeThreadType === "friend" ? 28000 : 12000,
       });
       if (!analysisResponse.ok) throw new Error(`Analysis AI error: ${analysisResponse.status}`);
       const analysisData = await analysisResponse.json();
       const analysisRaw = analysisData.choices?.[0]?.message?.content || "";
       if (!analysisRaw.trim()) throw new Error("Analysis AI returned no usable content");
       const match = analysisRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
-      analysisJson = JSON.parse((match ? match[1] : analysisRaw).trim());
+      analysisJson = { ...analysisJson, ...JSON.parse((match ? match[1] : analysisRaw).trim()) };
     } catch (analysisError) {
       if (activeThreadType !== "friend") throw analysisError;
       console.warn("[generate-reply] Friend analysis used deterministic fallback", analysisError);
@@ -657,6 +687,7 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
         ...buildFriendProspectProfile(analysisJson, existingFriendProfile),
       };
       analysisJson = applyEarliestMissingFriendCheckpoint(analysisJson);
+      analysisJson = prioritizeFriendDirectQuestion(analysisJson, message);
     }
 
     // Both Friend reply paths use one evidence-gated five-stage journey. A
@@ -686,31 +717,38 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
     if (activeThreadType === "friend") {
       const decisionQuery = buildFriendDecisionSearchQuery(analysisJson, message, existingFriendProfile);
       appliedRetrievalQuery = decisionQuery;
-      const decisionEmbedding = await generateEmbedding(decisionQuery, supabase, user.id);
+      const [decisionEmbedding, decisionLexical] = await Promise.all([
+        generateEmbedding(decisionQuery, supabase, user.id),
+        retrieveFriendLexicalKnowledge(supabase, user.id, activeThreadType, kbModeMap, message, analysisJson),
+      ]);
+      lexicalCandidatesRetrieved += decisionLexical.principles.length + decisionLexical.chunks.length;
+      let decisionSemanticPrinciples: any[] = [];
+      let decisionSemanticChunks: any[] = [];
       if (decisionEmbedding) {
         const embStr = JSON.stringify(decisionEmbedding);
         const [decisionP, decisionC] = await Promise.all([
           supabase.rpc("match_sales_brain", { query_embedding: embStr, match_count: 120, match_threshold: 0.14, p_user_id: user.id }),
           supabase.rpc("match_knowledge_chunks", { query_embedding: embStr, match_count: 100, match_threshold: 0.14, p_user_id: user.id }),
         ]);
-        const decisionSemanticPrinciples = (decisionP.data || [])
+        decisionSemanticPrinciples = (decisionP.data || [])
           .filter((p: any) => ALLOWED_SOURCE_TYPES.includes(p.source_type) && (
             (!p.source_id && (!p.brain_type || p.brain_type === "both" || p.brain_type === activeThreadType)) ||
             (p.source_id && (!kbModeMap[p.source_id] || kbModeMap[p.source_id] === "both" || kbModeMap[p.source_id] === activeThreadType))
           ))
           .map((p: any) => ({ ...p, _decisionSemantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-        const decisionSemanticChunks = (decisionC.data || [])
+        decisionSemanticChunks = (decisionC.data || [])
           .filter((c: any) => ALLOWED_SOURCE_TYPES.includes(c.source_type) && (!c.brain_type || c.brain_type === "both" || c.brain_type === activeThreadType))
           .map((c: any) => ({ ...c, _decisionSemantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
-        const decisionTerms = extractMeaningfulTerms(decisionQuery, 64);
-        const scoreForDecision = (text: string, semantic: number) => {
-          const lower = (text || "").toLowerCase();
-          let score = semantic * 10;
-          for (const term of decisionTerms) if (lower.includes(term)) score += 6;
-          return score;
-        };
-        const decisionPrinciples = deduplicatePrinciples(
-          mergeByIdPriority(decisionSemanticPrinciples, mergedPrinciples),
+      }
+      const decisionTerms = extractMeaningfulTerms(decisionQuery, 64);
+      const scoreForDecision = (text: string, semantic: number) => {
+        const lower = (text || "").toLowerCase();
+        let score = semantic * 10;
+        for (const term of decisionTerms) if (lower.includes(term)) score += 6;
+        return score;
+      };
+      const decisionPrinciples = deduplicatePrinciples(
+          mergeByIdPriority(decisionSemanticPrinciples, mergeByIdPriority(decisionLexical.principles, mergedPrinciples)),
           "relevance_score",
         ).map((p: any) => ({
           ...p,
@@ -719,32 +757,32 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
             p._decisionSemantic ? (p.relevance_score || 0) / 100 : 0,
           ),
         })).sort((a: any, b: any) => b.matchScore - a.matchScore);
-        const decisionChunks = deduplicateChunks(
-          mergeByIdPriority(decisionSemanticChunks, mergedChunks),
+      const decisionChunks = deduplicateChunks(
+          mergeByIdPriority(decisionSemanticChunks, mergeByIdPriority(decisionLexical.chunks, mergedChunks)),
           "relevance_score",
         ).map((c: any) => ({
           ...c,
           matchScore: scoreForDecision(`${c.content || ""} ${c.trigger_phrases || ""}`, c._decisionSemantic ? (c.relevance_score || 0) / 100 : 0),
         })).sort((a: any, b: any) => b.matchScore - a.matchScore);
 
-        // Keep the second pass tightly focused on the diagnosed moment. A huge
-        // context set lets broad material overpower the exact sales gap.
-        replyTopPrinciples = sourceBalancedTake(decisionPrinciples, 1, 8);
-        replyTopChunks = sourceBalancedTake(decisionChunks, 1, 10);
-        replyPrinciplesText = replyTopPrinciples.length
+      // Keep the second pass tightly focused on the diagnosed moment. This
+      // also runs when the embedding provider is unavailable: lexical hits
+      // can still reach every uploaded source instead of the first 32 files.
+      replyTopPrinciples = sourceBalancedTake(decisionPrinciples, 1, 8);
+      replyTopChunks = sourceBalancedTake(decisionChunks, 1, 10);
+      replyPrinciplesText = replyTopPrinciples.length
           ? replyTopPrinciples.map((p: any) => {
               const src = p.source_id && kbMap[p.source_id] ? kbMap[p.source_id] : p.source_name;
               return `• [${p.principle_name}] (Source: ${src}): ${p.what_i_learned}\n  Apply: ${p.how_to_apply}`;
             }).join("\n")
           : "No principle is required. Respond naturally from the current conversation and approved Friend identity.";
-        replyChunksText = replyTopChunks.length
+      replyChunksText = replyTopChunks.length
           ? replyTopChunks.map((c: any) => {
               const sourceTitle = c.source_id && kbMap[c.source_id] ? kbMap[c.source_id] : c.source_type;
               const src = `${sourceTitle}${c.locator ? `, ${c.locator}` : ""}${c.chunk_kind === "source_passage" ? ", original source passage" : ""}`;
               return `• (Source: ${src}) [${c.category || "general"}]: ${(c.content || "").substring(0, 700)}`;
             }).join("\n")
           : "No knowledge passage is necessary for this reply.";
-      }
     }
 
     // Outcome-aware ranking augments relevance; it never replaces it. New
@@ -816,11 +854,8 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
         : lockedReplyPrinciple.source_name || lockedReplyPrinciple.source_type || "unknown")
       : "";
     const lockedReplyPassage = activeThreadType === "friend"
-      ? replyTopChunks.find((chunk: any) =>
-          chunk.chunk_kind === "source_passage"
-          && (!lockedReplyPrinciple?.source_id || chunk.source_id === lockedReplyPrinciple.source_id)
-        ) || replyTopChunks.find((chunk: any) => chunk.chunk_kind === "source_passage") || replyTopChunks[0]
-      : null;
+      ? await loadFriendSupportingPassage(supabase, user.id, lockedReplyPrinciple, replyTopChunks)
+      : "";
     const friendKnowledgeContract = activeThreadType === "friend"
       ? buildFriendKnowledgeApplicationContract({
           analysis: analysisJson,
@@ -829,7 +864,7 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
           latestProspectMessage: message,
           principle: lockedReplyPrinciple,
           sourceName: lockedReplySource,
-          supportingPassage: lockedReplyPassage?.content || "",
+          supportingPassage: lockedReplyPassage,
         })
       : null;
     const friendKnowledgeContractText = friendKnowledgeContract
@@ -976,6 +1011,7 @@ VARIANT RULES:
 - Variant 3 (casual): Shortest natural version. It may omit a framework only when Required=false.
 
 KNOWLEDGE GROUNDING: When a variant uses a retrieved principle, cite its exact principle and source in metadata. Use ONLY names that appear in SALES_BRAIN_PRINCIPLES; never invent.
+- A direct prospect question takes priority over the funnel checkpoint. Answer it from approved workspace facts and relevant retrieved knowledge before any next move. Put the source and principle in metadata/why_this_works, not in the ready-to-send message.
 - When Required=true, every variant must include knowledge_application with the locked principle/source, the actual lesson applied, the strategic move, and message_evidence copied exactly from its own visible message. A label or citation without real application fails validation.
 - At logical_certainty, emotional_certainty, or pitch with an active sales gap, the primary variant MUST apply the single strongest retrieved sales principle internally and cite it in metadata. The visible message must still sound like a friend, never a lesson or framework recital.
 - When knowledge_need="none" or a simple human response is best, set cited_principle_name and cited_source_name to null. Do not force a framework into the visible message.
@@ -1089,7 +1125,7 @@ ${winningPatternsText.substring(0, 2000)}`;
         const recoveryResponse = await userChat(chat, {
           model: chat.models.fast,
           messages: [
-            { role: "system", content: "You write the next message in a genuine peer-to-peer Friend conversation. Return ONLY valid JSON: {\"variants\":[{\"variant\":\"primary\",\"message\":\"...\",\"why_this_works\":\"...\"},{\"variant\":\"alternative\",\"message\":\"...\",\"why_this_works\":\"...\"},{\"variant\":\"casual\",\"message\":\"...\",\"why_this_works\":\"...\"}]}. Use the known facts and selected source lesson. Do not invent results, pressure, sell, or ask more than one question per variant. Keep each message short, warm, distinct, and focused on the stated checkpoint." },
+            { role: "system", content: "You write the next message in a genuine peer-to-peer Friend conversation. Return ONLY valid JSON: {\"variants\":[{\"variant\":\"primary\",\"message\":\"...\",\"why_this_works\":\"...\"},{\"variant\":\"alternative\",\"message\":\"...\",\"why_this_works\":\"...\"},{\"variant\":\"casual\",\"message\":\"...\",\"why_this_works\":\"...\"}]}. Answer any direct prospect question first from approved facts. Apply the selected source lesson as private reasoning, never cite it in the sendable message. Do not invent results, pressure, sell, or ask more than one question per variant. Keep each message short, warm, distinct, and focused on the checkpoint after answering." },
             { role: "user", content: compactFacts },
           ],
           temperature: 0.45,
@@ -1112,66 +1148,24 @@ ${winningPatternsText.substring(0, 2000)}`;
       }
     }
 
-    // Friend replies must pass a second, low-temperature conversion-quality
-    // review before they can reach the UI. The validator repairs drift while
-    // preserving the locked stage, objective, approved truth and metadata.
+    // Validate against the locked stage, transcript and source contract in
+    // process. A second full Gemini review on every reply exhausted quota and
+    // could push the Edge invocation beyond its CPU budget. Only a failed
+    // local check can trigger one compact AI repair below.
     if (activeThreadType === "friend") {
       const originalVariants = (Array.isArray(replyJson.variants) ? replyJson.variants : [])
         .map((variant: any) => hydrateFriendKnowledgeApplication(variant, friendKnowledgeContract));
-      const deterministicIssues = originalVariants.flatMap((variant: any, index: number) =>
-        deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
-          .map((issue) => `variant ${index + 1}: ${issue}`)
-      );
-      let repairedVariants: any[] = [];
-      let validationFailure = replyGenerationFailure;
-      if (originalVariants.length === 3 && deterministicIssues.length === 0) {
-        // The source-grounded draft already passed every local guard. A second
-        // model round-trip adds latency and can damage a valid reply, so return
-        // it without spending the user's request budget on redundant review.
-        repairedVariants = originalVariants;
-      } else try {
-        if (validationFailure) throw new Error(validationFailure);
-        if (originalVariants.length === 0) throw new Error("Reply generator returned no Friend variants");
-        const qualityResponse = await userChat(chat, {
-          model: chat.models.fast,
-          messages: [
-            { role: "system", content: buildFriendQualityValidatorPrompt("variants") },
-            {
-              role: "user",
-              content: `${friendStageDirective}\n\n${friendKnowledgeContractText}\n\nLOCKED ANALYSIS:\n${JSON.stringify(analysisJson)}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nFACT AND PREVIOUS STRATEGY LEDGER:\n${prospectDecisionHistory.substring(0, 5000)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nRETRIEVED KNOWLEDGE:\n${replyPrinciplesText.substring(0, 4500)}\n${replyChunksText.substring(0, 4500)}\n\nKNOWLEDGE GRAPH:\n${knowledgeGraphContext.text.substring(0, 3500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT VARIANTS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalVariants)}`,
-            },
-          ],
-          temperature: 0.2,
-          response_format: { type: "json_object" },
-          timeout_ms: 12000,
-        });
-        if (!qualityResponse.ok) throw new Error(`Friend quality validation failed: ${qualityResponse.status}`);
-        const qualityData = await qualityResponse.json();
-        const qualityRaw = qualityData.choices?.[0]?.message?.content || "{}";
-        const qualityMatch = qualityRaw.match(/```(?:json)?\s*([\s\S]*?)```/);
-        const qualityJson = JSON.parse((qualityMatch ? qualityMatch[1] : qualityRaw).trim());
-        repairedVariants = (Array.isArray(qualityJson.variants) ? qualityJson.variants : [])
-          .map((variant: any) => hydrateFriendKnowledgeApplication(variant, friendKnowledgeContract));
-        if (repairedVariants.length !== originalVariants.length) throw new Error("Friend quality validator returned an incomplete variant set");
-        const remainingIssues = repairedVariants.flatMap((variant: any, index: number) =>
-          deterministicFriendQualityIssues(variant?.message || "", friendStageResult.stage, analysisJson, history, variant, friendKnowledgeContract)
-            .map((issue) => `variant ${index + 1}: ${issue}`)
-        );
-        if (remainingIssues.length > 0) validationFailure = `Friend quality validator rejected the reply: ${remainingIssues.join("; ")}`;
-      } catch (qualityError) {
-        validationFailure = qualityError instanceof Error ? qualityError.message : "Friend quality validation failed";
-      }
+      let repairedVariants: any[] = originalVariants;
+      let validationFailure = replyGenerationFailure || (originalVariants.length !== 3
+        ? "Reply generator returned an incomplete Friend variant set" : "");
 
-      // A validator outage or metadata-only omission must not erase an
-      // otherwise safe, source-grounded primary generation. Prefer the
-      // validator's repaired prose when it is complete, otherwise retain the
-      // original hydrated variants and use the deterministic fallback only if
-      // neither candidate set passes the non-negotiable local checks.
+      // Keep a locally valid source-grounded draft. If any non-negotiable
+      // check fails, attempt a single compact rewrite and check it again.
       const issuesForVariant = (variant: any) => deterministicFriendQualityIssues(
         variant?.message || "", friendStageResult.stage, analysisJson, history,
         variant, friendKnowledgeContract,
       );
-      let selected = selectBestFriendCandidates(originalVariants, repairedVariants, issuesForVariant);
+      let selected = selectBestFriendCandidates(originalVariants, [], issuesForVariant);
       let candidateVariants = selected.candidates;
       let candidateIssuesByIndex = selected.issues;
       let candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
@@ -1204,7 +1198,7 @@ ${winningPatternsText.substring(0, 2000)}`;
             candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
               issues.map((issue) => `variant ${index + 1}: ${issue}`)
             );
-            console.warn("[generate-reply] Repaired Friend reply locally after validator issues");
+            console.warn("[generate-reply] Improved Friend reply after local quality checks");
           }
         } catch (repairError) {
           console.warn("[generate-reply] Compact Friend repair unavailable:", repairError instanceof Error ? repairError.message : repairError);
@@ -1235,9 +1229,7 @@ ${winningPatternsText.substring(0, 2000)}`;
         console.warn("generate-reply used Friend recovery for invalid variants:", validationFailure || candidateIssues.join("; "));
       } else {
         repairedVariants = candidateVariants;
-        if (validationFailure) {
-          console.warn("generate-reply kept a locally valid grounded Friend reply after validator failure:", validationFailure);
-        }
+        if (validationFailure) console.warn("generate-reply kept a locally valid grounded Friend reply after validator failure:", validationFailure);
       }
 
       replyJson.variants = repairedVariants.map((variant: any, index: number) =>
@@ -1251,7 +1243,8 @@ ${winningPatternsText.substring(0, 2000)}`;
         fallbackApplied: useDeterministicFallback,
         fallbackReason: useDeterministicFallback ? (validationFailure || candidateIssues.join("; ")) : null,
         fallbackVariantCount: candidateIssuesByIndex.filter((issues) => issues.length > 0).length,
-        validatorBypassed: !useDeterministicFallback && Boolean(validationFailure),
+        validatorBypassed: false,
+        validatorType: "deterministic_with_bounded_repair",
       };
     }
 
@@ -1424,6 +1417,8 @@ ${winningPatternsText.substring(0, 2000)}`;
           retrieval_query: appliedRetrievalQuery,
           outcome_performance: strategyPerformance,
           knowledge_contract_required: friendKnowledgeContract?.required || false,
+          lexical_candidates_retrieved: lexicalCandidatesRetrieved,
+          linked_source_passage_used: Boolean(lockedReplyPassage),
           fallback_reason: replyJson.qualityValidation?.fallbackReason || null,
           fallback_variant_count: replyJson.qualityValidation?.fallbackVariantCount || 0,
         },
@@ -1470,6 +1465,7 @@ ${winningPatternsText.substring(0, 2000)}`;
         insightsRetrieved: brainInsights?.length || 0,
         retrievalPhase: activeThreadType === "friend" ? "analysis_then_decision_search" : "message_search",
         graphPathsRetrieved: knowledgeGraphContext.paths.length,
+        lexicalCandidatesRetrieved,
         outcomeRankedStrategies: strategyPerformance.length,
       },
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });

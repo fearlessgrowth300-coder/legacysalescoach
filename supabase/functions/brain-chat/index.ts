@@ -12,6 +12,8 @@ import { loadKnowledgeGraphContext, traverseSalesKnowledgeGraph } from "../_shar
 import {
   buildBrainRetrievalMeta,
   classifyBrainChatIntent,
+  conversationCoachingStructureIssues,
+  imageAnalysisShowsConversation,
   isAllowedBrainChatOrigin,
   isSimpleBrainChatSmallTalk,
   responseMentionsUnknownSources,
@@ -24,6 +26,7 @@ import {
   hasConversationMemory,
   normalizeConversationMemory,
   renderConversationMemory,
+  selectConversationDecisionEvidence,
   type ConversationMemory,
 } from "./memory.ts";
 
@@ -53,11 +56,18 @@ const VALIDATION_DRAFT_CHAR_LIMIT = 22000;
 // Keep the generation and its optional validator comfortably below the provider
 // limit so the client always receives a complete answer and `[DONE]` event.
 const BRAIN_RESPONSE_MAX_TOKENS = 1800;
-const BRAIN_VALIDATION_MAX_TOKENS = 1600;
+const BRAIN_VALIDATION_MAX_TOKENS = 2400;
 
 function responseFormatForIntent(intent: BrainChatIntent): string {
   if (intent === "conversation_coaching") return `RESPONSE MODE: CONVERSATION COACHING
-Use these sections only: SITUATION, STRATEGY, REPLY (Copy & Paste), WHY IT WORKS, NEXT STEP. End with one question only when an unanswered fact would materially change the advice.`;
+Write a worked-through coaching analysis, not a terse five-field report. Use this sequence for a real buyer conversation:
+1. Open with two short paragraphs: what the buyer actually said/did (quote the decisive words), what happened earlier, and what that may mean now. Interpret the message in plain language, but mark uncertain motives as possibilities rather than mind-reading.
+2. Connect the diagnosis to one or two genuinely applicable principles from the retrieved Sales Brain. Number them when there are two. Name each principle and its verified source, state its trigger in this conversation, and explain how it changes the next move. Do not list techniques just to sound learned.
+3. Use the Markdown heading ### THE STRATEGY: [a situation-specific name]. Explain how you would handle this turn and why this move is timely. Do not use the same strategy for every buyer.
+4. Use ### THE SCRIPT (Copy & Paste). Give the exact natural message in a Markdown blockquote, separate from coaching and citations. If the right move is not to message, say that instead of manufacturing a script.
+5. Use ### WHY THIS WORKS. Explain two or three exact phrases from the script with bold phrase labels and connect each to the goal and relevant principle. Explain likely effects, never a guaranteed response.
+6. Use ### THE BRAIN'S ADVICE. Give the practical follow-through, what response would change the plan, and one focused question to the user only if essential.
+Use bold for the key observation and principle names; use readable paragraphs and lists. Keep the analysis richer than the message to send. Do not copy wording, psychology labels, or claims from prior assistant answers merely because they appeared in chat history.`;
   if (intent === "source_summary") return `RESPONSE MODE: SOURCE SUMMARY
 Answer with: concise overview, key teachings, practical applications, and important limitations. Cite the supporting source inline. Do not invent a buyer, write a sales reply, or add buyer psychology.`;
   if (intent === "source_comparison") return `RESPONSE MODE: SOURCE COMPARISON
@@ -80,16 +90,19 @@ async function validateGroundedBrainResponse(args: {
   evidencePack: string;
   durableMemory: string;
   recentContext: string;
-}): Promise<{ response: string; repaired: boolean; issues: string[] }> {
-  const { chat, intent, userRequest, draft, allowedSourceTitles, requestedSourceTitles, evidencePack, durableMemory, recentContext } = args;
+  decisionHistory: string;
+  decisionFlags: string[];
+}): Promise<{ response: string; repaired: boolean; issues: string[]; mode: "model"; resolvedIssues: string[] }> {
+  const { chat, intent, userRequest, draft, allowedSourceTitles, requestedSourceTitles, evidencePack, durableMemory, recentContext, decisionHistory, decisionFlags } = args;
   // Every provider gets the same evidence check. Never mark an unchecked draft
   // as validated when the provider has no quota for source verification.
   const unknownSources = responseMentionsUnknownSources(draft, allowedSourceTitles);
+  const draftStructureIssues = intent === "conversation_coaching" ? conversationCoachingStructureIssues(draft) : [];
   const prompt = `You are the final grounding and answer-quality validator for a Knowledge-Base-powered AI Chat.
 
 REQUEST MODE: ${intent}
 USER REQUEST:
-${clampText(userRequest, 4000)}
+${clampText(userRequest, 2500)}
 
 ALLOWED SOURCE TITLES:
 ${allowedSourceTitles.map((title) => `- ${title}`).join("\n") || "- none"}
@@ -98,19 +111,26 @@ VERIFIED USER-NAMED SOURCES PRESENT IN THE VAULT:
 ${requestedSourceTitles.map((title) => `- ${title}`).join("\n") || "- none"}
 
 RETRIEVED EVIDENCE:
-${clampText(evidencePack, 15000)}
+${clampText(evidencePack, 9000)}
 
 DURABLE CONVERSATION MEMORY:
-${clampText(durableMemory, 5000)}
+${clampText(durableMemory, 2400)}
 
 RECENT AI CHAT CONVERSATION (user statements are context, not independently verified results):
-${clampText(recentContext, 6000)}
+${clampText(recentContext, 2400)}
+
+RELEVANT EARLIER USER-PROVIDED EVIDENCE (not independently verified; prior assistant claims are excluded):
+${clampText(decisionHistory, 3000)}
+
+CONVERSATION CONSTRAINTS TO CHECK:
+${decisionFlags.map((flag) => `- ${flag}`).join("\n") || "- none detected"}
 
 DRAFT RESPONSE:
-${clampText(draft, 16000)}
+${clampText(draft, 11000)}
 
 KNOWN DETERMINISTIC ISSUES:
 ${unknownSources.length ? `The draft names unapproved sources: ${unknownSources.join(", ")}` : "none"}
+${draftStructureIssues.length ? `The draft lacks the requested worked-example structure: ${draftStructureIssues.join(", ")}` : ""}
 
 Validate all of these:
 1. It answers every material part of the user's latest request.
@@ -121,6 +141,10 @@ Validate all of these:
 6. It distinguishes weak evidence from certainty.
 7. It is concise enough for the request and does not expose hidden reasoning.
 8. It does not claim a verified user-named source is absent, and it uses that source's actual evidence when relevant.
+9. It accounts for relevant earlier buyer constraints and boundaries before recommending a sales move. Earlier assistant proposals are not evidence that a service, fee, technical dependency, payment, or outcome exists.
+10. It never invents a new charge or presents an unverified add-on as necessary. If the user has not established what a paid service actually delivers, explain the specific missing details in this conversation and offer a useful, clearly hypothetical way to package a real service. Preserve the concrete situation analysis and relevant source-backed teaching; do not replace the answer with a generic refusal or repeated boilerplate.
+11. For conversation coaching, the response first interprets the relevant buyer words and history, then explains the applicable retrieved principle(s), then gives THE STRATEGY, THE SCRIPT, WHY THIS WORKS, and THE BRAIN'S ADVICE. The script is sendable without coaching or citations; the explanation connects specific wording to the principle without promising a psychological reaction.
+12. It does not reinterpret a clear change of focus, refusal, silence, or trust complaint as secret interest. It does not use invented scarcity, a fictitious competing client, a fake case study, or a "takeaway" merely to provoke fear of loss.
 
 Return JSON only:
 {"pass":true,"issues":[],"corrected_response":""}
@@ -128,20 +152,26 @@ or
 {"pass":false,"issues":["short issue"],"corrected_response":"complete corrected final answer"}`;
   try {
     const response = await userChat(chat, {
-      model: chat.models.reasoning,
+      model: chat.models.fast,
       temperature: 0.05,
       max_tokens: BRAIN_VALIDATION_MAX_TOKENS,
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: prompt }],
-      timeout_ms: 16000,
+      timeout_ms: 14000,
     });
-    if (!response.ok) throw new Error("Source verification temporarily unavailable");
+    if (!response.ok) throw new Error(`validator_http_${response.status}`);
     const data = await response.json();
     const raw = String(data.choices?.[0]?.message?.content || "").trim();
-    return readGroundingVerdict(raw, draft, text => responseMentionsUnknownSources(text, allowedSourceTitles));
+    const verdict = readGroundingVerdict(raw, draft, text => responseMentionsUnknownSources(text, allowedSourceTitles));
+    return { ...verdict, mode: "model", resolvedIssues: verdict.resolvedIssues || [] };
   } catch (error) {
-    console.warn("[brain-chat] response validator failed", error);
-    throw new Error("I could not verify this answer against the retrieved sources. Please retry; no unchecked reply was published.");
+    const reason = error instanceof Error ? error.message : "unknown_validator_error";
+    console.warn("[brain-chat] independent validator rejected or incomplete", { reason: reason.slice(0, 120), intent });
+    if (/draft was not supported|rejected draft|unresolved issues|unsupported source/i.test(reason))
+      throw new Error("I could not safely verify this answer against its sources. Use Retry answer to generate a new one.");
+    if (/validator_http_429|validator_http_503|validator_http_504|timeout|abort/i.test(reason))
+      throw new Error("I could not finish the source check because the AI provider is busy. Use Retry answer without resending your message.");
+    throw new Error("I could not finish the source check. Use Retry answer without resending your message.");
   }
 }
 
@@ -156,6 +186,8 @@ function evaluateBrainChatAnswer(args: {
 }) {
   const { response, validationIssues, sourceTitles, pipeline, graphPaths, durableMemoryUsed, intent } = args;
   const unknownSourceTitles = responseMentionsUnknownSources(response, sourceTitles);
+  const formatIssues = intent === "conversation_coaching" ? conversationCoachingStructureIssues(response) : [];
+  const formatComplete = formatIssues.length === 0;
   const hasAnswer = response.trim().length >= 24;
   const evidenceCount = (pipeline.selected?.length || 0) + (pipeline.evidence_principles?.length || 0) + (pipeline.supporting_chunks?.length || 0);
   const grounded = evidenceCount > 0 && unknownSourceTitles.length === 0 && validationIssues.length === 0;
@@ -165,15 +197,17 @@ function evaluateBrainChatAnswer(args: {
     Math.min(20, evidenceCount * 4) +
     Math.min(15, graphPaths.length * 3) +
     (durableMemoryUsed ? 5 : 0) +
-    (validationIssues.length === 0 ? 5 : 0),
+    (validationIssues.length === 0 ? 5 : 0) + (intent === "conversation_coaching" && formatComplete ? 5 : 0),
   ));
   return {
     version: 1,
     intent,
-    passed: hasAnswer && grounded,
+    passed: hasAnswer && grounded && formatComplete,
     score,
     answer_complete: hasAnswer,
     source_grounded: grounded,
+    coaching_format_complete: intent === "conversation_coaching" ? formatComplete : null,
+    coaching_format_issues: formatIssues,
     unknown_source_titles: unknownSourceTitles,
     validation_issues: validationIssues,
     retrieved_principle_count: pipeline.selected?.length || 0,
@@ -347,10 +381,12 @@ function buildSystemPrompt(opts: {
   recentExchanges: string;
   priorSummary: string;
   durableMemory: string;
+  decisionHistory: string;
+  decisionFlags: string[];
   sourceTitles: string[];
   requestedSourceTitles: string[];
 }) {
-  const { responseMode, selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, businessContext, knowledgeGraph, recentExchanges, priorSummary, durableMemory, sourceTitles, requestedSourceTitles } = opts;
+  const { responseMode, selectedBlock, evidenceBlock, chunksBlock, principleApplicationMap, userInput, businessContext, knowledgeGraph, recentExchanges, priorSummary, durableMemory, decisionHistory, decisionFlags, sourceTitles, requestedSourceTitles } = opts;
   const sourceList = sourceTitles.length ? sourceTitles.map((t, i) => `  ${i + 1}. ${t}`).join("\n") : "  (none)";
   return `You are AI Chat, a capable general Sales Brain. You help with business, marketing, offers, funnels, strategy, sales, mindset, copywriting, troubleshooting, planning, and pasted conversations. Your knowledge base is the user's uploaded books, PDFs, videos, transcripts, and structured insights.
 
@@ -358,13 +394,16 @@ ${responseMode}
 
 ${BRAIN_PERSONA}
 
+For this AI Chat, the persona sets the tone, not the facts. Directness never means claiming to know an unspoken motive or promising a result. Do not imitate a source's distinctive wording; apply its verified teaching in your own words.
+
 Use the vault as your primary evidence. Retrieve only the material relevant to this exact request; do not dump every source or force unrelated sales advice. Original passages are evidence. Structured principles, techniques, psychology, examples, and graph relationships are your reasoning tools.
 
 SILENT QUALITY PROCESS (never reveal private reasoning):
-1. Understand the latest request in the context of the full AI Chat conversation and durable memory.
-2. Choose the smallest useful set of retrieved principles, techniques, examples, source passages, and graph paths.
-3. Apply them to the requested task. For a pasted conversation, use conversation coaching. For a plan, offer, funnel, or business task, use business planning. Do not force a prospect reply in any other mode.
-4. Check that the response is specific, non-repetitive, complete, and does not invent facts or source teachings.
+1. Perceive the latest request AND relevant earlier user-provided conversation evidence; separate buyer statements, user assertions, and prior assistant speculation.
+2. Judge the person's present goal, constraints, trust, consent, and conversation stage. Older facts may have changed; check rather than assume.
+3. Choose one appropriate next objective, then the smallest relevant retrieved framework. Reject techniques whose trigger is absent or whose contraindication is present.
+4. Apply that framework to the requested task. For a pasted conversation, use conversation coaching. For a plan, offer, funnel, or business task, use business planning.
+5. Validate the proposed answer against actual evidence and prior attempts. Do not invent products, fees, technical requirements, results, or source teachings.
 
 SOURCE RULES:
 - Cite a source inline only when you make an attributed claim. Use (Source: "Title") or include the chapter when it is supplied.
@@ -375,8 +414,14 @@ SOURCE RULES:
 - Do not expose source passages as long quotes. Summarize and apply them.
 
 CONVERSATION-COACHING RULES (only in that mode):
-- Give: SITUATION, STRATEGY, REPLY (Copy & Paste), WHY IT WORKS, and NEXT STEP.
+- Follow RESPONSE MODE's diagnostic narrative -> applied Sales Brain teaching -> strategy -> script -> phrase-level rationale -> Brain's Advice. These are not five generic fields to fill. Use Markdown headings, bold key ideas, and a visibly separate script so the user can scan and copy it as in a skilled coach's worked example.
+- Make the coaching as concrete as a skilled human reviewing a real conversation: point to the buyer's relevant words and any earlier messages, identify the present communication mistake or opportunity, explain the immediate objective, then show exactly how the proposed wording carries it out. Keep evidence, inference, and recommendation distinct.
+- In STRATEGY, name the most relevant retrieved principle(s), cite the actual source title inline, explain the trigger that makes each applicable, and explicitly reject a tempting technique when it would be premature or harm trust. If no retrieved principle fits, do not manufacture one; give transparent advice without a fake attribution.
+- In WHY IT WORKS, unpack one or two exact phrases from THE SCRIPT and connect each to the stated objective/principle. If no message is appropriate, explain the timing decision instead. Describe a plausible benefit, not a guaranteed or covert psychological effect.
 - Match the actual conversation, preserve established facts, and do not repeat a move already tried without a new reason.
+- If the buyer previously expressed debt, inability to pay, distrust, or a refusal, account for it even when it was many turns ago. Do not exploit financial distress or imply that silence or a short acknowledgement is agreement to buy.
+- Before proposing any new paid service, establish that it is real, separately priced, and clearly described. A sales framework can guide communication but cannot prove a fee or technical requirement exists.
+- If the user asks how to sell a new offer that has not been defined, still coach the actual conversation: explain what the buyer last said, how previous moves affected trust, what genuine service could be evaluated, and what facts the user must supply. Label sample offers as hypothetical and do not write a payment demand as if the offer already exists.
 - The ready-to-send reply must be natural, concise, specific, and must not contain source citations or coaching language.
 
 GENERAL WRITING RULES:
@@ -417,6 +462,14 @@ ${priorSummary || "(no earlier messages)"}
 
 === DURABLE AI CHAT MEMORY ===
 ${durableMemory || "(no durable memory yet)"}
+
+=== RELEVANT EARLIER USER-PROVIDED EVIDENCE ===
+${decisionHistory}
+
+=== CONVERSATION CONSTRAINTS ===
+${decisionFlags.map((flag) => `- ${flag}`).join("\n") || "(none detected)"}
+
+Earlier assistant replies are suggestions, not evidence that the buyer agreed, paid, or received a service.
 
 === OPTIONAL USER BUSINESS CONTEXT ===
 ${businessContext || "(none provided)"}
@@ -513,13 +566,36 @@ serve(async (req) => {
           .limit(160),
       ]);
       conversationRecord = conversationResult.data || null;
-      const historyRows = historyResult.data;
+      let historyRows = historyResult.data || [];
       const historyError = historyResult.error;
-      storedMessageCount = historyResult.count || historyRows?.length || validated.length;
+      storedMessageCount = historyResult.count || historyRows.length || validated.length;
+
+      // Hosted PostgREST commonly caps a single response at 1,000 rows even
+      // when .limit(2000) is requested. Fetch the older pages explicitly so a
+      // consequential fact in the middle of a long chat remains discoverable.
+      if (!historyError && storedMessageCount > historyRows.length) {
+        const pageSize = 500;
+        for (let offset = historyRows.length; offset < Math.min(storedMessageCount, MAX_MESSAGES); offset += pageSize) {
+          const { data: olderPage, error: olderError } = await supabaseAdmin
+            .from("ai_chat_messages")
+            .select("role, content, created_at, image_url, metadata")
+            .eq("conversation_id", conversation_id)
+            .eq("user_id", user.id)
+            .in("role", ["user", "assistant"])
+            .order("created_at", { ascending: false })
+            .range(offset, Math.min(offset + pageSize - 1, MAX_MESSAGES - 1));
+          if (olderError || !olderPage?.length) {
+            console.warn("[brain-chat] older history page unavailable:", olderError);
+            break;
+          }
+          historyRows = [...historyRows, ...olderPage];
+          if (olderPage.length < pageSize) break;
+        }
+      }
 
       if (historyError) {
         console.warn("[brain-chat] conversation history load failed:", historyError);
-      } else if (historyRows?.length) {
+      } else if (historyRows.length) {
         const allHistoryRows = [...(historyHeadResult.data || []), ...historyRows]
           .sort((a: any, b: any) => String(a.created_at).localeCompare(String(b.created_at)))
           .filter((row: any, index: number, rows: any[]) => index === 0 || !(
@@ -857,21 +933,29 @@ serve(async (req) => {
       retrievalQuery = `Latest user request:\n${clampText(lastUserText || "(no text)", USER_INPUT_CHAR_LIMIT)}\n\nDurable AI Chat memory:\n${clampText(durableMemoryText, 1800)}\n\nRecent context:\n${clampText(recentForBrief || "(none)", RECENT_EXCHANGES_CHAR_LIMIT)}\n\nSearch focus: the exact outcome requested, relevant principles, strategies, techniques, psychology, examples, source passages, and practical implementation.`;
     }
 
+    // Re-select relevant facts from the full user-authored history on every
+    // turn, including direct Gemini sessions where refreshing LLM memory is
+    // deliberately skipped for speed/quota. This evidence is selected BEFORE
+    // Sales Brain retrieval so a long-ago constraint can change the framework.
+    const decisionEvidence = selectConversationDecisionEvidence(conversationMessages, lastUserText || userInstruction);
+    retrievalQuery += `\n\nRelevant earlier user-provided conversation evidence:\n${decisionEvidence.history}\n\nDecision constraints: ${decisionEvidence.retrievalFocus}`;
+
     // Clean text for the semantic embedding — the user's ACTUAL message (or, for
     // screenshots, the extracted situation sentence), never the boilerplate
     // retrieval template. This is what makes each question pull different,
     // genuinely relevant principles instead of the same ones every time.
     const cleanMsg = (lastUserText || "").trim();
-    const responseIntent = classifyBrainChatIntent(cleanMsg, hasImageAttachment);
-    const embedQuery = hasImageAttachment
+    const responseIntent = classifyBrainChatIntent(cleanMsg, hasImageAttachment && imageAnalysisShowsConversation(conversationText));
+    const baseEmbedQuery = hasImageAttachment
       ? retrievalQuery // already a clean 1-sentence situation description
       : (cleanMsg.length >= 12
           ? cleanMsg
           : clampText(`${cleanMsg}\n\n${recentForBrief}`.trim(), 800));
+    const embedQuery = clampText(`${clampText(baseEmbedQuery, 850)}\n\nEarlier relevant context: ${clampText(decisionEvidence.history, 380)}\nDecision constraints: ${clampText(decisionEvidence.retrievalFocus, 220)}`, 1500);
     const focusedRetrievalQueries = buildFocusedRetrievalQueries(
       hasImageAttachment ? `${conversationText}\n${userInstruction}` : (lastUserText || ""),
       recentForBrief,
-      hasConversationMemory(durableMemory) ? durableMemoryText : "",
+      `${hasConversationMemory(durableMemory) ? durableMemoryText : ""}\n${decisionEvidence.history}`,
       // Gemini free tier is intentionally one semantic search per turn. The
       // full multi-query route can make four embedding requests before the
       // first visible answer, which looks like a frozen chat and burns quota.
@@ -903,6 +987,7 @@ serve(async (req) => {
     const graphQuery = clampText([
       cleanMsg,
       hasImageAttachment ? conversationText : "",
+      decisionEvidence.history,
       hasConversationMemory(durableMemory) ? durableMemoryText : "",
     ].filter(Boolean).join("\n\n"), 7000);
     const [graphTraversal, graphContext] = await Promise.all([
@@ -1010,6 +1095,8 @@ serve(async (req) => {
       recentExchanges: clampText(recentExchanges, RECENT_EXCHANGES_CHAR_LIMIT),
       priorSummary,
       durableMemory: durableMemoryText,
+      decisionHistory: decisionEvidence.history,
+      decisionFlags: decisionEvidence.flags,
       sourceTitles,
       requestedSourceTitles: pipeline.debug.requested_source_titles || [],
     });
@@ -1045,6 +1132,8 @@ serve(async (req) => {
         vault_coverage: vaultCoverage,
         durable_memory_used: hasConversationMemory(durableMemory),
         durable_memory_message_count: rememberedMessageCount,
+        relevant_history_message_count: decisionEvidence.selectedCount,
+        conversation_constraint_count: decisionEvidence.flags.length,
         stored_conversation_message_count: storedMessageCount,
       },
     };
@@ -1113,6 +1202,8 @@ serve(async (req) => {
             evidencePack: evidencePack.text,
             durableMemory: durableMemoryText,
             recentContext: recentForBrief,
+            decisionHistory: decisionEvidence.history,
+            decisionFlags: decisionEvidence.flags,
           });
           const finalResponse = sanitize(validation.response).trim();
           const replyComplete = validation.repaired || !["length", "max_tokens", "model_context_window_exceeded"].includes(draftFinishReason);
@@ -1139,9 +1230,11 @@ serve(async (req) => {
             ...brainMeta,
             debug: {
               ...brainMeta.debug,
-              response_validated: true,
+              response_validated: validation.mode === "model",
+              response_validation_mode: validation.mode,
               response_repaired: validation.repaired,
               validation_issues: validation.issues,
+              resolved_validation_issues: validation.resolvedIssues,
               answer_evaluation: evaluation,
             },
           };
@@ -1158,7 +1251,7 @@ serve(async (req) => {
             pipeline, graphPaths: combinedGraphPaths, evaluation: { version: 2, passed: false,
               answer_complete: false, source_grounded: false,
               validation_issues: [error instanceof Error ? error.message : "Response failed"] } });
-          const detail = error instanceof Error && error.message.startsWith("I could not verify")
+          const detail = error instanceof Error && error.message.startsWith("I could not")
             ? error.message : "The AI response could not be completed. Please try again.";
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: detail })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));

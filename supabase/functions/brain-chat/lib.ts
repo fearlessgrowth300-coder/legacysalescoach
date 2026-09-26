@@ -39,7 +39,6 @@ export type BrainChatIntent =
 
 export function classifyBrainChatIntent(text: string, hasImage = false): BrainChatIntent {
   const value = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
-  if (hasImage) return "conversation_coaching";
   if (/\b(?:compare|comparison|difference between|versus|\bvs\.?\b|which (?:book|video|framework|method))\b/.test(value)) {
     return "source_comparison";
   }
@@ -55,7 +54,16 @@ export function classifyBrainChatIntent(text: string, hasImage = false): BrainCh
   if (/\b(?:what should i reply|what do i say|reply to (?:her|him|them)|message should i send|(?:my|this|the) (?:prospect|buyer|lead|client)|(?:she|he|they) (?:said|replied|asked|told me)|pasted conversation|conversation below|dm conversation|ghosted me|close this prospect)\b/.test(value)) {
     return "conversation_coaching";
   }
+  if (hasImage) return "conversation_coaching";
   return "knowledge_qa";
+}
+
+/** Vision returns a labeled transcript; OCR may only return speaker-labeled lines. */
+export function imageAnalysisShowsConversation(analysis: string): boolean {
+  const text = String(analysis || "");
+  const labeledTranscript = text.match(/(?:^|\n)TRANSCRIPT:\s*([\s\S]*?)(?=\n(?:WHAT I SEE|SITUATION):|$)/i);
+  if (labeledTranscript) return Boolean(labeledTranscript[1].trim()) && !/^none\b/i.test(labeledTranscript[1].trim());
+  return /(?:^|\n)\s*(?:prospect|buyer|client|you|me|them|her|him)\s*:/im.test(text);
 }
 
 export function responseMentionsUnknownSources(content: string, allowedTitles: string[]): string[] {
@@ -64,6 +72,29 @@ export function responseMentionsUnknownSources(content: string, allowedTitles: s
     .map((match) => match[1].trim())
     .filter((title) => title && !allowed.has(title.toLowerCase()));
   return [...new Set(found)];
+}
+
+/** Checks the worked-example presentation, not whether the advice is true. */
+export function conversationCoachingStructureIssues(content: string): string[] {
+  const answer = String(content || "");
+  const headings = [
+    /^#{1,6}\s+THE STRATEGY\b.*$/im,
+    /^#{1,6}\s+THE SCRIPT\b.*$/im,
+    /^#{1,6}\s+WHY THIS WORKS\b.*$/im,
+    /^#{1,6}\s+THE BRAIN['’]S ADVICE\b.*$/im,
+  ];
+  const positions = headings.map((heading) => answer.search(heading));
+  const issues: string[] = [];
+  if (positions.some((position) => position < 0)) issues.push("missing_coaching_section");
+  else if (positions.some((position, index) => index > 0 && position <= positions[index - 1])) issues.push("coaching_sections_out_of_order");
+  if (positions[0] >= 0 && answer.slice(0, positions[0]).trim().length < 100) issues.push("missing_conversation_diagnosis");
+  if (positions[1] >= 0 && positions[2] > positions[1]) {
+    const scriptSection = answer.slice(positions[1], positions[2]);
+    const hasSendableScript = /^>\s*\S/m.test(scriptSection);
+    const recommendsNoMessage = /\b(?:do not|don't|no need to|avoid)\s+(?:send|message|reply|follow up)|\bno (?:message|reply|script)\b|\b(?:wait|pause|hold off)(?:\s+(?:for|until|here|now))?\b/i.test(scriptSection);
+    if (!hasSendableScript && !recommendsNoMessage) issues.push("script_not_visually_separated");
+  }
+  return issues;
 }
 
 export function buildBrainRetrievalMeta(pipeline: any) {

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildFocusedRetrievalQueries,
   buildMemoryTranscript,
+  isUndefinedPaidOfferRequest,
   normalizeConversationMemory,
   renderConversationMemory,
+  selectConversationDecisionEvidence,
 } from "../../supabase/functions/brain-chat/memory";
 import { selectBalancedSupportingChunks } from "../../supabase/functions/_shared/brain-pipeline";
 
@@ -56,6 +58,42 @@ describe("AI Chat durable conversation memory", () => {
     expect(memory.goals).toEqual(["Launch three courses"]);
     expect(rendered).toContain("Buyer/client name: Val");
     expect(rendered).toContain("Latest known state: Recovering");
+  });
+
+  it("brings an old financial constraint into a new payment decision", () => {
+    const messages = [
+      { role: "user", content: "Val told me she is getting more and more in debt and cannot find a way out.", created_at: "2026-01-01" },
+      ...Array.from({ length: 90 }, (_, i) => ({ role: "assistant", content: `Generic sales suggestion ${i}` })),
+      { role: "user", content: "How do I get her to pay another $150 now?", created_at: "2026-02-01" },
+    ];
+    const decision = selectConversationDecisionEvidence(messages, "How do I get her to pay another $150 now?");
+    expect(decision.history).toContain("getting more and more in debt");
+    expect(decision.flags).toEqual(expect.arrayContaining([expect.stringMatching(/financial constraints/i)]));
+  });
+
+  it("does not promote earlier assistant inventions into buyer facts", () => {
+    const decision = selectConversationDecisionEvidence([
+      { role: "assistant", content: "There is a required $150 tool-sync fee." },
+      { role: "user", content: "She previously said she did not trust another technical charge." },
+      { role: "user", content: "What should I say about the fee?" },
+    ], "What should I say about the fee?");
+    expect(decision.history).not.toContain("tool-sync fee");
+    expect(decision.history).toContain("did not trust");
+    expect(decision.flags.some((flag) => /trust concern/i.test(flag))).toBe(true);
+  });
+
+  it("finds a constraint buried inside an older screenshot transcription", () => {
+    const decision = selectConversationDecisionEvidence([
+      { role: "user", content: `This is what Val said. [Stored image evidence] ${"ordinary chat text ".repeat(80)}Prospect: I'm getting deeper into debt and cannot afford another charge.` },
+      { role: "user", content: "What should I sell her for $150 today?" },
+    ], "What should I sell her for $150 today?");
+    expect(decision.history).toContain("deeper into debt");
+    expect(decision.history).toContain("cannot afford");
+  });
+
+  it("flags a fabricated new fee but not a defined service request", () => {
+    expect(isUndefinedPaidOfferRequest("What can I sell her now to make her pay $150?")) .toBe(true);
+    expect(isUndefinedPaidOfferRequest("Write a description for my $150 website audit, including its deliverables.")).toBe(false);
   });
 
   it("keeps original source passages represented alongside summaries", () => {

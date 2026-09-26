@@ -3,6 +3,8 @@ import { toAnthropicContent } from "../../supabase/functions/_shared/anthropic-c
 import {
   buildBrainRetrievalMeta,
   classifyBrainChatIntent,
+  conversationCoachingStructureIssues,
+  imageAnalysisShowsConversation,
   isAllowedBrainChatOrigin,
   isSimpleBrainChatSmallTalk,
   responseMentionsUnknownSources,
@@ -22,6 +24,20 @@ import {
 } from "@/lib/brain-chat-small-talk";
 
 describe("AI Chat connection helpers", () => {
+  it("checks the worked coaching sequence and a visually distinct script", () => {
+    const complete = `Val said the proof had not arrived, then stopped replying. That is a delivery gap; her reason for silence is still unknown. The source lesson on timely follow-through fits because the requested proof remains outstanding.\n\n### THE STRATEGY: Deliver the proof\nKeep this turn focused on the promised item.\n\n### THE SCRIPT (Copy & Paste)\n> Val, I have the proof you asked for. Would you still like me to send it?\n\n### WHY THIS WORKS\n**The proof you asked for** refers to her actual request.\n\n### THE BRAIN'S ADVICE\nSend the file only if it is ready.`;
+    expect(conversationCoachingStructureIssues(complete)).toEqual([]);
+    expect(conversationCoachingStructureIssues("SITUATION: A buyer replied. STRATEGY: Ask a question. REPLY: Hi.")).toContain("missing_coaching_section");
+    expect(conversationCoachingStructureIssues(complete.replace("> Val", "Val"))).toContain("script_not_visually_separated");
+    expect(conversationCoachingStructureIssues(complete.replace("> Val, I have the proof you asked for. Would you still like me to send it?", "Do not send another message until the requested proof is ready."))).toEqual([]);
+    expect(conversationCoachingStructureIssues(complete.replace("### THE SCRIPT", "THE SCRIPT"))).toContain("missing_coaching_section");
+  });
+  it("uses the coaching format for conversation screenshots, not unrelated images", () => {
+    expect(imageAnalysisShowsConversation("TRANSCRIPT:\nProspect: What is the price?\nYou: Let me check.\nWHAT I SEE: A DM thread.")).toBe(true);
+    expect(imageAnalysisShowsConversation("TRANSCRIPT: none\nWHAT I SEE: A marketing chart.\nSITUATION: The chart has a dip.")).toBe(false);
+    expect(classifyBrainChatIntent("Explain the chart", imageAnalysisShowsConversation("TRANSCRIPT: none\nWHAT I SEE: A chart"))).toBe("knowledge_qa");
+    expect(classifyBrainChatIntent("What should I reply to her?", true)).toBe("conversation_coaching");
+  });
   it("allows local development and configured production origins without opening CORS broadly", () => {
     expect(isAllowedBrainChatOrigin("http://127.0.0.1:5173")).toBe(true);
     expect(isAllowedBrainChatOrigin("http://localhost:5173")).toBe(true);

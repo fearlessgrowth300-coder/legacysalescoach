@@ -51,7 +51,7 @@ async function streamChat({
   conversationId?: string | null;
   selectedModel?: string;
   onDelta: (text: string) => void;
-  onDone: (wasTruncated: boolean) => void;
+  onDone: (wasTruncated: boolean) => void | Promise<void>;
   onError: (err: string) => void;
   onBrainMeta?: (meta: any) => void;
 }) {
@@ -163,7 +163,7 @@ async function streamChat({
   // A validated answer may legitimately end in a quote, list or code block.
   // Use the server's completion signal, not punctuation, to detect truncation.
   const wasTruncated = isBrainChatReplyTruncated({ receivedDone, receivedCompleteReply, finishReason });
-  onDone(wasTruncated);
+  await onDone(wasTruncated);
 }
 
 function generateFollowUps(content: string): string[] {
@@ -226,6 +226,7 @@ export default function AiChat() {
   const [followUps, setFollowUps] = useState<string[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [wasTruncated, setWasTruncated] = useState(false);
+  const [failedTurn, setFailedTurn] = useState<{ messageId: string; error: string } | null>(null);
   // collapsible feature removed per user request
   const userMsgRef = useRef<HTMLDivElement>(null);
   const sendInFlightRef = useRef(false);
@@ -318,7 +319,8 @@ export default function AiChat() {
   };
 
   useEffect(() => {
-    if (!activeConvId) { setMessages([]); setFollowUps([]); return; }
+    if (!activeConvId) { setMessages([]); setFollowUps([]); setFailedTurn(null); return; }
+    setFailedTurn(null);
     loadMessages(activeConvId);
   }, [activeConvId]);
 
@@ -646,6 +648,8 @@ export default function AiChat() {
     if (isLoading || sendInFlightRef.current) return;
     if (!user) return;
     sendInFlightRef.current = true;
+    setFailedTurn(null);
+    setRetrievalStats(null);
 
     if (isRecording) { recognitionRef.current?.stop(); setIsRecording(false); }
     setFollowUps([]);
@@ -835,6 +839,7 @@ export default function AiChat() {
           if (meta.brainRetrieval) setRetrievalStats(meta.brainRetrieval);
         },
         onDone: async (truncated: boolean) => {
+          setFailedTurn(null);
           setIsLoading(false);
           setIsTyping(false);
           setWasTruncated(truncated);
@@ -856,11 +861,18 @@ export default function AiChat() {
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
-        onError: (err) => { toast.error(err); setIsLoading(false); setIsTyping(false); },
+        onError: (err) => {
+          toast.error(err);
+          if (savedMsg?.id) setFailedTurn({ messageId: savedMsg.id, error: err });
+          setIsLoading(false);
+          setIsTyping(false);
+        },
       });
     } catch (e) {
       console.error("AI chat error:", e);
-      toast.error(e instanceof Error ? e.message : "Failed to get response");
+      const detail = e instanceof Error ? e.message : "Failed to get response";
+      toast.error(detail);
+      if (savedMsg?.id) setFailedTurn({ messageId: savedMsg.id, error: detail });
       setIsLoading(false);
       setIsTyping(false);
     } finally {
@@ -897,25 +909,35 @@ export default function AiChat() {
     e.target.value = "";
   };
 
-  const saveEdit = async () => {
-    if (editingMsgIdx === null) return;
-    const msg = messages[editingMsgIdx];
+  const saveEdit = async (retryIndex?: number) => {
+    const isRetry = typeof retryIndex === "number";
+    const messageIndex = isRetry ? retryIndex : editingMsgIdx;
+    if (messageIndex === null || messageIndex === undefined || isLoading || sendInFlightRef.current || !user) return;
+    const msg = messages[messageIndex];
+    if (!msg || msg.role !== "user" || (isRetry && !msg.id)) return;
+    sendInFlightRef.current = true;
+    setFailedTurn(null);
+    setRetrievalStats(null);
+    try {
+    const messageText = isRetry ? msg.content : editText;
+    const existingImages = isRetry ? (msg.image_urls || (msg.image_url ? [msg.image_url] : [])) : editImages;
+    const newImages = isRetry ? [] : editNewImages;
 
     // Upload new images
-    const newUploadedUrls = await Promise.all(editNewImages.map((blob, idx) => uploadImage(blob, idx)));
+    const newUploadedUrls = await Promise.all(newImages.map((blob, idx) => uploadImage(blob, idx)));
     const validNewUrls = newUploadedUrls.filter((u): u is string => u !== null);
 
     // Combine existing kept images + new uploaded URLs (not previews)
-    const allImageUrls = [...editImages, ...validNewUrls];
+    const allImageUrls = [...existingImages, ...validNewUrls];
     const primaryUrl = allImageUrls[0] || null;
 
     // Keep the base64 previews for new images to send to AI (private bucket URLs won't work)
-    const newImageBase64s = [...editNewPreviews];
+    const newImageBase64s = isRetry ? [] : [...editNewPreviews];
 
     // Update the edited message in DB
-    if (msg.id) {
+    if (msg.id && !isRetry) {
       await supabase.from("ai_chat_messages").update({
-        content: editText,
+        content: messageText,
         is_edited: true,
         image_url: primaryUrl,
         metadata: allImageUrls.length ? { image_urls: allImageUrls } : {},
@@ -926,6 +948,7 @@ export default function AiChat() {
     //    which can be null right after a fresh send → the old reply would survive),
     //  - delete by created_at (catches assistant rows whose id never reached state),
     //  - PLUS an explicit id sweep of subsequent messages we already track.
+    let effectiveConvId = activeConvId;
     if (msg.id) {
       const { data: editedRow } = await supabase
         .from("ai_chat_messages")
@@ -933,6 +956,7 @@ export default function AiChat() {
         .eq("id", msg.id)
         .maybeSingle();
       const convId = activeConvId || editedRow?.conversation_id;
+      effectiveConvId = convId || null;
       if (editedRow?.created_at && convId) {
         await supabase
           .from("ai_chat_messages")
@@ -949,12 +973,12 @@ export default function AiChat() {
         } as any).eq("id", convId).eq("user_id", user!.id);
       }
     }
-    const subsequentIds = messages.slice(editingMsgIdx + 1).map((m) => m.id).filter((x): x is string => !!x);
+    const subsequentIds = messages.slice(messageIndex + 1).map((m) => m.id).filter((x): x is string => !!x);
     if (subsequentIds.length) {
       await supabase.from("ai_chat_messages").delete().in("id", subsequentIds);
     }
-    const truncated: Msg[] = messages.slice(0, editingMsgIdx);
-    truncated.push({ ...msg, content: editText, is_edited: true, image_url: primaryUrl, image_urls: allImageUrls.length > 0 ? allImageUrls : undefined });
+    const truncated: Msg[] = messages.slice(0, messageIndex);
+    truncated.push({ ...msg, content: messageText, is_edited: isRetry ? msg.is_edited : true, image_url: primaryUrl, image_urls: allImageUrls.length > 0 ? allImageUrls : undefined });
     setMessages(truncated);
     setEditingMsgIdx(null);
     setEditText("");
@@ -1002,7 +1026,7 @@ export default function AiChat() {
       let base64Imgs: string[] = [];
       if (isEditedMsg) {
         // For the edited message: use base64 previews for new images, download existing kept images
-        for (const existingUrl of editImages) {
+        for (const existingUrl of existingImages) {
           const b64 = await downloadImageAsBase64Edit(existingUrl);
           if (b64) base64Imgs.push(b64);
         }
@@ -1038,7 +1062,7 @@ export default function AiChat() {
     try {
       await streamChat({
         messages: aiMessages,
-        conversationId: activeConvId,
+        conversationId: effectiveConvId,
         selectedModel: activeAi.provider === "gemini" ? activeAi.model : undefined,
         onDelta: upsert,
         onBrainMeta: (meta) => {
@@ -1056,12 +1080,13 @@ export default function AiChat() {
           }
         },
         onDone: async (truncated: boolean) => {
+          setFailedTurn(null);
           setIsLoading(false);
           setIsTyping(false);
           setWasTruncated(truncated);
-          if (assistantSoFar && activeConvId) {
+          if (assistantSoFar && effectiveConvId) {
             const { data: inserted } = await supabase.from("ai_chat_messages").insert({
-              conversation_id: activeConvId, user_id: user!.id, role: "assistant", content: assistantSoFar,
+              conversation_id: effectiveConvId, user_id: user!.id, role: "assistant", content: assistantSoFar,
               metadata: lastBrainMeta2 ? { selected_principles: lastBrainMeta2.selected_principles || [], framework_name: lastBrainMeta2.framework_name || "", empty_vault: !!lastBrainMeta2.empty_vault, debug: lastBrainMeta2.debug || null } : {},
             } as any).select("id").single();
             if (inserted?.id) {
@@ -1074,9 +1099,23 @@ export default function AiChat() {
           }
           setFollowUps(generateFollowUps(assistantSoFar));
         },
-        onError: (err) => { toast.error(err); setIsLoading(false); setIsTyping(false); },
+        onError: (err) => {
+          toast.error(err);
+          if (msg.id) setFailedTurn({ messageId: msg.id, error: err });
+          setIsLoading(false);
+          setIsTyping(false);
+        },
       });
-    } catch { setIsLoading(false); }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Failed to get a response. Please retry.";
+      toast.error(detail);
+      if (msg.id) setFailedTurn({ messageId: msg.id, error: detail });
+      setIsLoading(false);
+      setIsTyping(false);
+    }
+    } finally {
+      sendInFlightRef.current = false;
+    }
   };
 
   const handleFeedLink = async () => {
@@ -1454,7 +1493,7 @@ export default function AiChat() {
                         <Button size="sm" variant="outline" onClick={() => editFileRef.current?.click()}>
                           <Image className="h-3 w-3 mr-1" /> Add Image
                         </Button>
-                        <Button size="sm" variant="secondary" onClick={saveEdit}><Check className="h-3 w-3 mr-1" /> Save & Resend</Button>
+                        <Button size="sm" variant="secondary" onClick={() => void saveEdit()} disabled={isLoading}><Check className="h-3 w-3 mr-1" /> Save & Resend</Button>
                         <Button size="sm" variant="ghost" onClick={() => { setEditingMsgIdx(null); setEditImages([]); setEditNewImages([]); setEditNewPreviews([]); }}><X className="h-3 w-3" /></Button>
                       </div>
                       <input ref={editFileRef} type="file" accept="image/*" multiple className="hidden" onChange={handleEditImageAdd} />
@@ -1489,6 +1528,14 @@ export default function AiChat() {
                           {msg.status === "delivered" && <CheckCheck className="h-3 w-3 opacity-50" />}
                           {(msg.status === "read" || (!msg.status && msg.id)) && <CheckCheck className="h-3 w-3 text-primary/60" />}
                         </span>
+                      )}
+                      {msg.role === "user" && msg.id && i === messages.length - 1 && !isLoading && (
+                        <div className="mt-2 rounded-md border border-primary-foreground/30 p-2 text-xs" role={failedTurn?.messageId === msg.id ? "alert" : undefined}>
+                          <p>{failedTurn?.messageId === msg.id ? failedTurn.error : "No answer is saved for this message yet."}</p>
+                          <button type="button" className="mt-1 font-semibold underline underline-offset-2" onClick={() => void saveEdit(i)}>
+                            Retry answer without resending your message
+                          </button>
+                        </div>
                       )}
                       {/* Desktop: hover icons outside bubble */}
                       <div className={`absolute ${msg.role === "user" ? "-left-16" : "-right-16"} top-1/2 -translate-y-1/2 hidden md:flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity`}>

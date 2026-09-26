@@ -17,6 +17,89 @@ export type ConversationMemory = {
 
 type MemoryMessage = { role?: string; content?: unknown; created_at?: string };
 
+const CONTEXT_STOP_WORDS = new Set("about after again already also because been before could from have into just know more need only over said says that their them then there these they this want what when where which with would your".split(" "));
+const MONEY_REQUEST = /\b(?:sell|buy|charge|pay|payment|price|fee|invoice|upsell|deposit|renew|cost)\b/i;
+const FINANCIAL_CONSTRAINT = /\b(?:debt|broke|loan|credit card|can't afford|cannot afford|no money|financial|balance transfer|bills?|borrow|struggling to pay)\b/i;
+const BOUNDARY = /\b(?:not interested|stop messaging|don't contact|do not contact|leave me alone|no more|not ready|don't want to buy)\b/i;
+const TRUST_CONCERN = /\b(?:scam|scammed|don't trust|do not trust|did not trust|doesn't trust|fraud|misled|promised|guaranteed)\b/i;
+
+export type ConversationDecisionEvidence = {
+  history: string;
+  retrievalFocus: string;
+  flags: string[];
+  selectedCount: number;
+};
+
+export function isUndefinedPaidOfferRequest(request: string): boolean {
+  const asksForNewSale = /\b(?:sell something|sell anything|what (?:can|should) i sell|make (?:her|him|them) pay)\b/i.test(request);
+  const asksForMoney = /\$\s*\d|\b(?:pay|charge|fee|price|dollars?)\b/i.test(request);
+  return asksForNewSale && asksForMoney;
+}
+
+/**
+ * Re-read the user's own conversation evidence before selecting a sales lesson.
+ * Prior assistant proposals are deliberately excluded: a model's earlier guess
+ * about a payment, buyer state, or service is not a verified buyer fact.
+ */
+export function selectConversationDecisionEvidence(
+  messages: MemoryMessage[],
+  latestRequest: string,
+  maxChars = 6200,
+): ConversationDecisionEvidence {
+  const queryTokens = new Set((clean(latestRequest).toLowerCase().match(/[a-z0-9]{4,}/g) || [])
+    .filter((word) => !CONTEXT_STOP_WORDS.has(word)));
+  const paymentRequest = MONEY_REQUEST.test(latestRequest);
+  const candidates = messages.slice(0, -1).map((message, index) => {
+    if (message.role !== "user") return null;
+    const body = clean(textOf(message.content)).slice(0, 16000);
+    if (!body || body === "[image]") return null;
+    const tokens = new Set(body.toLowerCase().match(/[a-z0-9]{4,}/g) || []);
+    const overlap = [...queryTokens].filter((word) => tokens.has(word)).length;
+    const financial = FINANCIAL_CONSTRAINT.test(body);
+    const boundary = BOUNDARY.test(body);
+    const trust = TRUST_CONCERN.test(body);
+    const recent = index >= messages.length - 14;
+    const score = overlap * 3 + (recent ? 3 : 0) +
+      (paymentRequest && financial ? 12 : 0) + (boundary ? 10 : 0) +
+      (trust ? 6 : 0);
+    return { index, body, date: message.created_at || "date unknown", score, financial, boundary, trust };
+  }).filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate));
+
+  const flags: string[] = [];
+  if (paymentRequest && candidates.some((item) => item.financial))
+    flags.push("Earlier user-provided conversation context mentions financial constraints. Do not turn that into payment pressure; check the latest status before assuming it remains current.");
+  if (candidates.some((item) => item.boundary))
+    flags.push("Earlier user-provided context includes a possible refusal or boundary. Check its wording and timing before suggesting another pitch.");
+  if (candidates.some((item) => item.trust))
+    flags.push("Earlier user-provided context includes a trust concern. Prefer transparent, verifiable information over persuasion claims.");
+  if (isUndefinedPaidOfferRequest(latestRequest))
+    flags.push("The user requests a new paid sale without defining a verified deliverable. Do not invent a fee or technical necessity; clarify the real optional service, its scope, and price first.");
+
+  const ranked = candidates.sort((a, b) => b.score - a.score || b.index - a.index);
+  const chosen = ranked.filter((item) => item.score > 0).slice(0, 12);
+  const chronological = chosen.sort((a, b) => a.index - b.index);
+  let used = 0;
+  const lines: string[] = [];
+  for (const item of chronological) {
+    const riskMatch = paymentRequest ? FINANCIAL_CONSTRAINT.exec(item.body) : null;
+    const relevantMatch = riskMatch || BOUNDARY.exec(item.body) || TRUST_CONCERN.exec(item.body) ||
+      [...queryTokens].map((word) => item.body.toLowerCase().indexOf(word)).filter((position) => position >= 0)
+        .sort((a, b) => a - b).map((position) => ({ index: position }))[0];
+    const start = relevantMatch ? Math.max(0, relevantMatch.index - 180) : 0;
+    const excerpt = item.body.slice(start, start + 600);
+    const line = `[Earlier user message ${item.index + 1}, ${item.date}] ${start ? "…" : ""}${excerpt}${start + 600 < item.body.length ? "…" : ""}`;
+    if (used + line.length > maxChars) continue;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return {
+    history: lines.join("\n") || "(no relevant earlier user-provided evidence found)",
+    retrievalFocus: flags.length ? flags.join(" ") : "Match the current request to verified conversation context before selecting a framework.",
+    flags,
+    selectedCount: lines.length,
+  };
+}
+
 function textOf(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {

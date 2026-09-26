@@ -503,7 +503,11 @@ describe("Friend conversation engine", () => {
     const chatsUi = readFileSync("src/pages/Chats.tsx", "utf8");
 
     expect(generateReply).toContain("Full Approved Reference Conversation");
-    expect(generateReply).toContain("buildFriendQualityValidatorPrompt(\"variants\")");
+    expect(generateReply).toContain('validatorType: "deterministic_with_bounded_repair"');
+    expect(generateReply).toContain('const selectedAnalysisPrompt = activeThreadType === "friend" ? friendAnalysisPrompt : analysisPrompt');
+    expect(generateReply).toContain('const selectedAnalysisUserPrompt = activeThreadType === "friend" ? friendAnalysisUserPrompt : analysisUserPrompt');
+    expect(generateReply).toContain('selectBestFriendCandidates(originalVariants, [], issuesForVariant)');
+    expect(generateReply).toContain('analysisJson = { ...analysisJson, ...JSON.parse(');
     expect(generateReply).toContain("friendStageToDatabase(friendStageResult.stage)");
     expect(generateReply).toContain("sourceBalancedTake(decisionPrinciples, 1, 8)");
     expect(generateReply).not.toContain("workspace.custom_framework.substring(0, 8000)");

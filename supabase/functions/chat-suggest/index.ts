@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { SALES_PLAYBOOK, FRAMEWORK_DETECTION_PROMPT } from "./sales-playbook.ts";
 import { OBJECTION_HANDLERS, OBJECTION_DETECTION_PROMPT } from "./objection-handlers.ts";
 import { generateEmbedding } from "../_shared/embeddings.ts";
+import { loadFriendSupportingPassage, retrieveFriendLexicalKnowledge } from "../_shared/friend-knowledge-search.ts";
 import { deduplicateChunks, deduplicatePrinciples, mergeByIdPriority } from "../_shared/dedup.ts";
 import {
   buildProspectEvidenceLedger,
@@ -37,6 +38,7 @@ import {
   deterministicFriendQualityIssues,
   formatFriendKnowledgeApplicationContract,
   hydrateFriendKnowledgeApplication,
+  prioritizeFriendDirectQuestion,
   selectBestFriendCandidates,
   friendStageToDatabase,
   selectRelevantConversationPassages,
@@ -308,11 +310,13 @@ ${brainChunks}
 
 HOW TO USE BRAIN KNOWLEDGE IN FRIEND MODE:
 - When the locked knowledge contract says Required=true, use its exact principle as a private strategy guide in every variant.
+- If the prospect asks a direct question, answer it first with approved workspace facts and relevant retrieved knowledge; the next funnel checkpoint waits. Never pivot to a discovery question instead.
 - When Required=false, use the single most relevant principle only if it improves the analyzed reply_act.
 - Present a principle as personal experience only when an approved story or backstory explicitly supports it.
 - Otherwise ask a grounded question or share it as a general observation without pretending it happened to you.
 - Add another principle only when it materially improves the next move.
 - The reply should feel natural, not like a textbook or a stack of sales techniques.
+- Source and principle names belong in the explanation/trace metadata, never in the ready-to-send DM text.
 - It is valid to use no principle only when the locked contract says Required=false and a simple peer reaction, answer or approved shared experience is the best response.
 
 ABSOLUTE RULES:
@@ -966,6 +970,7 @@ serve(async (req) => {
         .limit(1),
       supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
+        .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("brain_type", [activeThreadType, "both"])
         .eq("source_type", "core_knowledge")
@@ -973,6 +978,7 @@ serve(async (req) => {
         .limit(150).then((r: any) => r.data || []),
       supabase.from("sales_brain")
         .select(PRINCIPLE_SELECT)
+        .eq("user_id", user.id)
         .is("workspace_id", null)
         .in("brain_type", [activeThreadType, "both"])
         .in("source_type", ["core_knowledge", "sales_principle"])
@@ -1022,8 +1028,10 @@ serve(async (req) => {
     ]);
 
     const personaData = workspacePersonaRows?.[0]?.metadata || null;
+    const kbModeMap: Record<string, string> = {};
+    (kbItems || []).forEach((k: any) => { kbModeMap[k.id] = k.brain_type || "both"; });
     const sourceCoverageIds = (kbItems || []).map((k: any) => k.id).filter(Boolean).slice(0, MAX_SOURCE_COVERAGE_FILES);
-    const [sourceCoverageKnowledgeNested, sourceCoveragePrinciplesNested] = await Promise.all([
+    const [sourceCoverageKnowledgeNested, sourceCoveragePrinciplesNested, initialLexical] = await Promise.all([
       Promise.all(sourceCoverageIds.map((sourceId: string) =>
         supabase.from("knowledge_chunks")
           .select(CHUNK_SELECT)
@@ -1048,12 +1056,13 @@ serve(async (req) => {
           .limit(5)
           .then((r: any) => r.data || [])
       )),
+      activeThreadType === "friend"
+        ? retrieveFriendLexicalKnowledge(supabase, user.id, activeThreadType, kbModeMap, brainQuery)
+        : Promise.resolve({ principles: [], chunks: [], query: "" }),
     ]);
     const sourceCoverageKnowledge = sourceCoverageKnowledgeNested.flat();
     const sourceCoveragePrinciples = sourceCoveragePrinciplesNested.flat();
-
-    const kbModeMap: Record<string, string> = {};
-    (kbItems || []).forEach((k: any) => { kbModeMap[k.id] = k.brain_type || "both"; });
+    let lexicalCandidatesRetrieved = initialLexical.principles.length + initialLexical.chunks.length;
 
     const brainKnowledge = mergeByIdPriority(sourceCoverageKnowledge, mergeByIdPriority(userBrainKnowledge, globalBrainKnowledge));
     const salesPrinciples = mergeByIdPriority(sourceCoveragePrinciples, mergeByIdPriority(userSalesPrinciples, globalSalesPrinciples));
@@ -1089,8 +1098,8 @@ serve(async (req) => {
     }
 
     // ─── MERGE SEMANTIC + STATIC, DEDUPLICATE ───
-    const mergedCoreChunks = mergeByIdPriority(semanticChunks, brainKnowledge || []);
-    const mergedPrinciples = mergeByIdPriority(semanticPrinciples, salesPrinciples || []);
+    const mergedCoreChunks = mergeByIdPriority(semanticChunks, mergeByIdPriority(initialLexical.chunks, brainKnowledge || []));
+    const mergedPrinciples = mergeByIdPriority(semanticPrinciples, mergeByIdPriority(initialLexical.principles, salesPrinciples || []));
 
     // Deduplicate
     const dedupedCoreChunks = deduplicateChunks(mergedCoreChunks, "relevance_score");
@@ -1204,6 +1213,7 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
         ...buildFriendProspectProfile(friendDecisionAnalysis, existingFriendProfile),
       };
       friendDecisionAnalysis = applyEarliestMissingFriendCheckpoint(friendDecisionAnalysis);
+      friendDecisionAnalysis = prioritizeFriendDirectQuestion(friendDecisionAnalysis, message);
     }
 
     const decisionSearchQuery = activeThreadType === "friend"
@@ -1223,25 +1233,37 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
     let decisionCoreChunks = dedupedCoreChunks;
     let decisionPrinciples = dedupedPrinciples;
     if (activeThreadType === "friend") {
-      const decisionEmbedding = await generateEmbedding(decisionSearchQuery, supabase, user.id);
+      const [decisionEmbedding, decisionLexical] = await Promise.all([
+        generateEmbedding(decisionSearchQuery, supabase, user.id),
+        retrieveFriendLexicalKnowledge(supabase, user.id, activeThreadType, kbModeMap, message, friendDecisionAnalysis),
+      ]);
+      lexicalCandidatesRetrieved += decisionLexical.principles.length + decisionLexical.chunks.length;
+      let secondPassPrinciples: any[] = [];
+      let secondPassChunks: any[] = [];
       if (decisionEmbedding) {
         const embeddingStr = JSON.stringify(decisionEmbedding);
         const [decisionP, decisionC] = await Promise.all([
           supabase.rpc("match_sales_brain", { query_embedding: embeddingStr, match_count: 120, match_threshold: 0.14, p_user_id: user.id }),
           supabase.rpc("match_knowledge_chunks", { query_embedding: embeddingStr, match_count: 100, match_threshold: 0.14, p_user_id: user.id }),
         ]);
-        const secondPassPrinciples = (decisionP.data || [])
+        secondPassPrinciples = (decisionP.data || [])
           .filter((p: any) => ["core_knowledge", "sales_principle", "content", "video", "pdf"].includes(p.source_type) && (
             (!p.source_id && (!p.brain_type || p.brain_type === "both" || p.brain_type === activeThreadType)) ||
             (p.source_id && (!kbModeMap[p.source_id] || kbModeMap[p.source_id] === "both" || kbModeMap[p.source_id] === activeThreadType))
           ))
           .map((p: any) => ({ ...p, _decisionSemantic: true, relevance_score: Math.round((p.similarity || 0) * 100) }));
-        const secondPassChunks = (decisionC.data || [])
+        secondPassChunks = (decisionC.data || [])
           .filter((c: any) => ["core_knowledge", "content", "video", "pdf", "sales_principle"].includes(c.source_type) && (!c.brain_type || c.brain_type === "both" || c.brain_type === activeThreadType))
           .map((c: any) => ({ ...c, _decisionSemantic: true, relevance_score: Math.round((c.similarity || 0) * 100) }));
-        decisionPrinciples = deduplicatePrinciples(mergeByIdPriority(secondPassPrinciples, dedupedPrinciples), "relevance_score");
-        decisionCoreChunks = deduplicateChunks(mergeByIdPriority(secondPassChunks, dedupedCoreChunks), "relevance_score");
       }
+      decisionPrinciples = deduplicatePrinciples(
+        mergeByIdPriority(secondPassPrinciples, mergeByIdPriority(decisionLexical.principles, dedupedPrinciples)),
+        "relevance_score",
+      );
+      decisionCoreChunks = deduplicateChunks(
+        mergeByIdPriority(secondPassChunks, mergeByIdPriority(decisionLexical.chunks, dedupedCoreChunks)),
+        "relevance_score",
+      );
     }
 
     if (leadEntry) {
@@ -1398,11 +1420,8 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
         : lockedFriendPrinciple.source_name || lockedFriendPrinciple.source_type || "unknown")
       : "";
     const lockedFriendPassage = activeThreadType === "friend"
-      ? topChunks.find((chunk: any) =>
-          chunk.chunk_kind === "source_passage"
-          && (!lockedFriendPrinciple?.source_id || chunk.source_id === lockedFriendPrinciple.source_id)
-        ) || topChunks.find((chunk: any) => chunk.chunk_kind === "source_passage") || topChunks[0]
-      : null;
+      ? await loadFriendSupportingPassage(supabase, user.id, lockedFriendPrinciple, topChunks)
+      : "";
     const friendKnowledgeContract = activeThreadType === "friend"
       ? buildFriendKnowledgeApplicationContract({
           analysis: friendDecisionAnalysis,
@@ -1411,7 +1430,7 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
           latestProspectMessage: message,
           principle: lockedFriendPrinciple,
           sourceName: lockedFriendSource,
-          supportingPassage: lockedFriendPassage?.content || "",
+          supportingPassage: lockedFriendPassage,
         })
       : null;
     const friendKnowledgeContractText = friendKnowledgeContract
@@ -1628,6 +1647,7 @@ The "whyThisWorks" should explain what you changed and why it's better.`;
 
     const friendJsonFormat = `
 === FRIEND CONVERSATION ANALYSIS (run silently before writing) ===
+If the latest prospect message asks a direct question, all three suggestions must answer that question first. Do not resume the earliest_missing_checkpoint until after answering. Keep source titles and principle names in metadata, not the sendable text.
 Read the complete conversation, newest message, profile/screenshot evidence, approved workspace truth, and the precomputed FRIEND DECISION ANALYSIS. Treat the precomputed reply_act and question_needed as locked unless they are absent. Determine:
 1. The prospect's evidence-gated current stage: intent, logical_certainty, emotional_certainty, pitch, or handoff.
 2. Their stated pain, motivation, desired result, objection, trust/readiness, and what is still unknown. Do not infer facts without evidence.
@@ -1877,7 +1897,7 @@ ${jsonFormat}
           messages: [
             {
               role: "system",
-              content: `You write the next message in a genuine peer-to-peer Friend conversation. Return ONLY valid JSON: {"suggestions":[{"id":1,"type":"primary","text":"...","whyThisWorks":"..."},{"id":2,"type":"alternative","text":"...","whyThisWorks":"..."},{"id":3,"type":"softer","text":"...","whyThisWorks":"..."}]}. Use the known prospect facts and selected source lesson below. Do not invent results, pressure, sell, or ask more than one question per suggestion. Each reply must be short, warm, distinct, and move the stated checkpoint forward.`,
+              content: `You write the next message in a genuine peer-to-peer Friend conversation. Return ONLY valid JSON: {"suggestions":[{"id":1,"type":"primary","text":"...","whyThisWorks":"..."},{"id":2,"type":"alternative","text":"...","whyThisWorks":"..."},{"id":3,"type":"softer","text":"...","whyThisWorks":"..."}]}. Answer any direct prospect question first from approved facts. Use the selected source lesson as private reasoning, never as a citation in the sendable message. Do not invent results, pressure, sell, or ask more than one question per suggestion. Keep each reply short, warm, distinct, and focused on the stated checkpoint after answering.`,
             },
             { role: "user", content: compactFacts },
           ],
@@ -1946,6 +1966,7 @@ ${jsonFormat}
         sources: Array.from(sourceTypes),
         insightsRetrieved: brainInsights?.length || 0,
         retrievalPhase: "profile_grounded_first_contact",
+        lexicalCandidatesRetrieved,
       };
 
       await supabase.from("prospects").update({
@@ -2039,7 +2060,7 @@ ${jsonFormat}
         latestProspectMessage: message,
         principle: lockedFriendPrinciple,
         sourceName: lockedFriendSource,
-        supportingPassage: lockedFriendPassage?.content || "",
+        supportingPassage: lockedFriendPassage,
       });
       const finalFriendKnowledgeContractText = formatFriendKnowledgeApplicationContract(finalFriendKnowledgeContract);
       const originalSuggestions = (Array.isArray(parsed.suggestions) ? parsed.suggestions : [])
@@ -2444,6 +2465,8 @@ ${jsonFormat}
           retrieval_query: decisionSearchQuery,
           outcome_performance: strategyPerformance,
           knowledge_contract_required: friendKnowledgeContract?.required || false,
+          lexical_candidates_retrieved: lexicalCandidatesRetrieved,
+          linked_source_passage_used: Boolean(lockedFriendPassage),
           fallback_reason: parsed.qualityValidation?.fallbackReason || null,
           fallback_variant_count: parsed.qualityValidation?.fallbackVariantCount || 0,
         },
@@ -2468,6 +2491,8 @@ ${jsonFormat}
       insightsRetrieved: brainInsights?.length || 0,
       retrievalPhase: activeThreadType === "friend" ? "analysis_then_decision_search" : "message_search",
       graphPathsRetrieved: knowledgeGraphContext.paths.length,
+      lexicalCandidatesRetrieved,
+      linkedSourcePassageUsed: Boolean(lockedFriendPassage),
       outcomeRankedStrategies: strategyPerformance.length,
     };
 

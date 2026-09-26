@@ -627,6 +627,22 @@ export function applyEarliestMissingFriendCheckpoint(
   return result;
 }
 
+/** Answer the buyer's actual question before resuming any discovery checkpoint. */
+export function prioritizeFriendDirectQuestion(
+  analysis: Record<string, any> | null | undefined,
+  latestProspectMessage: string,
+): Record<string, any> {
+  const result = { ...(analysis || {}) };
+  const question = String(latestProspectMessage || "").trim();
+  if (!question.includes("?") || includesAny(result.contact_status, ["do_not_contact", "not_a_fit"])) return result;
+  result.reply_act = "answer";
+  result.question_needed = false;
+  result.latest_question = question;
+  result.next_best_action = "answer the prospect's direct question from verified workspace facts and relevant knowledge before resuming discovery";
+  result.next_objective = result.next_best_action;
+  return result;
+}
+
 export function buildFriendStageDirective(stageResult: ReturnType<typeof deriveEvidenceGatedFriendStage>): string {
   const { stage, evidence, missing, checkpoint } = stageResult;
   const objectives: Record<FriendStage, string> = {
@@ -715,7 +731,7 @@ Every ready-to-send message must pass all checks:
 10. At pitch/handoff, it asks permission before an introduction and gives a concrete approved handoff only after acceptance.
 11. When the prospect explicitly says sales are the problem, it must acknowledge that concrete gap and either diagnose the specific sales bottleneck or, if they already asked for help, make the permission-based transition. It must not fall back to generic rapport.
 12. It follows the certainty funnel in order: Intent (goal, why, past experience) -> Logical Certainty (obstacle, root cause, consequences, need for change) -> Emotional Certainty (inaction pattern, emotional mirror, detailed future) -> Pitch (full-context recap and permission) -> Handoff. It must not repeatedly ask discovery questions or lose earlier answers.
-13. Confidence, intentionality, "I know what works," and "I'm happy with my direction" are not verified sales outcomes. When result_verification_status=unverified, affirm the confidence and ask one respectful concrete question that distinguishes content/directional progress from leads, conversions, or consistent sales. But "sales are not consistent yet," "I wouldn't call sales consistent," and equivalent negated statements already answer that question: record inconsistent_sales and move to the next unresolved checkpoint.
+13. Confidence, intentionality, "I know what works," and "I'm happy with my direction" are not verified sales outcomes. When result_verification_status=unverified and the prospect has not asked a direct question, affirm the confidence and ask one respectful concrete question that distinguishes content/directional progress from leads, conversions, or consistent sales. Answer a direct question first. "Sales are not consistent yet," "I wouldn't call sales consistent," and equivalent negated statements already answer the result question: record inconsistent_sales and move to the next unresolved checkpoint.
 14. Use earliest_missing_checkpoint as the locked next destination on every new message. Continue from that checkpoint after answering the newest message; never rely on the previously displayed UI stage, skip required evidence, or repeat a field already answered.
 15. Every qualified active prospect should eventually receive a permission-based pitch after the certainty checkpoints are complete. Never end with generic encouragement while a material checkpoint remains unknown. Explicit do-not-contact, not-a-fit, or refusal boundaries always override progression.
 16. When a LOCKED KNOWLEDGE APPLICATION CONTRACT says Required=true, use that exact principle's actual lesson on the stated prospect fact. Do not substitute a famous framework, merely cite the source, or attach a principle label to a generic question. knowledge_application.message_evidence must be copied exactly from the ready-to-send message and must be the phrase that performs the lesson.
@@ -851,10 +867,13 @@ export function deterministicFriendQualityIssues(
 ): string[] {
   const message = String(text || "").trim();
   const issues: string[] = [];
+  const latestInbound = [...conversation].reverse().find((turn) => turn.direction === "inbound")?.content || "";
+  const directlyAskedAboutCommercialContext = latestInbound.includes("?")
+    && /\b(?:expert|mentor|buy|price|cost|link|offer|course|program|product|service)\b|how much|what do you sell|who is behind/i.test(latestInbound);
   if (!message) issues.push("empty reply");
   if ((message.match(/\?/g) || []).length > 1) issues.push("more than one question");
   if (/good vibes|if you ever want to chat|what do you think would be possible|amplify that feeling/i.test(message)) issues.push("vague non-progressing language");
-  if (stage === "intent" && /expert|mentor|buy|price|link|offer/i.test(message)) issues.push("premature expert transition in intent");
+  if (stage === "intent" && /\b(?:expert|mentor|buy|price|link|offer)\b/i.test(message) && !directlyAskedAboutCommercialContext) issues.push("premature expert transition in intent");
   if (stage === "intent" && /\baudience\b/i.test(message) && /struggl|problem|intimidat|overwhelm/i.test(message)) issues.push("asks about the audience instead of the prospect");
   if ((stage === "logical_certainty" || stage === "emotional_certainty") && /(?:sales?|clients?|customers?)/i.test(message) && /what.*(?:journey|inspire|passionate)|how.*feel/i.test(message)) issues.push("ignores a concrete sales gap for generic rapport");
   if (repeatsAnsweredFriendQuestion(message, conversation)) issues.push("repeats an answered question");
@@ -868,7 +887,6 @@ export function deterministicFriendQualityIssues(
     .map((turn) => String(turn.content || ""));
   const prospectIsDisengaging = recentInbound.some((turn) => /\b(?:not interested|no thanks|don't contact|do not contact|leave me alone|stop|not buying)\b/i.test(turn))
     || (recentInbound.length >= 2 && recentInbound.every((turn) => normalized(turn).split(" ").length <= 3));
-  const latestInbound = recentInbound.at(-1) || "";
   const prospectAskedQuestion = latestInbound.includes("?");
   if (message.includes("?") && recentOutbound.length === 2 && recentOutbound.every((turn) => turn.includes("?")) && !prospectAskedQuestion && !/\b(?:how|what|why|can you|could you|tell me)\b/i.test(String(analysis?.latest_question || ""))) {
     issues.push("creates a predictable consecutive-question chain");

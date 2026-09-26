@@ -60,7 +60,7 @@ export default function BrainCitations({ content, selectedPrinciples, frameworkN
   return (
     <>
       <div
-        className="prose prose-sm dark:prose-invert max-w-full break-words overflow-hidden [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words"
+        className="prose prose-sm dark:prose-invert max-w-full break-words overflow-hidden prose-headings:font-bold prose-headings:text-foreground prose-h3:mt-5 prose-h3:mb-2 prose-blockquote:border-primary/60 prose-blockquote:text-foreground prose-strong:text-foreground [&>*]:max-w-full [&_pre]:overflow-x-auto [&_p]:break-words [&_li]:break-words [&_strong]:break-words [&_h1]:break-words [&_h2]:break-words [&_h3]:break-words [&_blockquote]:break-words"
         style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
       >
         <ReactMarkdown
