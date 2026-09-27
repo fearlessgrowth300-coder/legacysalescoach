@@ -11,6 +11,28 @@ async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+async function readBoundedBody(request: Request, maxBytes = 40_000): Promise<string> {
+  if (Number(request.headers.get("Content-Length") || 0) > maxBytes) throw new Error("Request too large");
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error("Request too large");
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder().decode(bytes);
+}
 function history(input: ExternalBrainInput): string {
   return input.conversation.map((turn) => `${turn.role}: ${turn.content}`).join("\n").slice(-12000);
 }
@@ -39,8 +61,9 @@ Deno.serve(async (request) => {
   if (request.method !== "POST") return json({ error: "POST required" }, 405);
   const secret = request.headers.get("Authorization")?.match(/^Bearer\s+(lsc_live_[0-9a-f]{64})$/i)?.[1];
   if (!secret) return json({ error: "Invalid Sales Brain API key" }, 401);
-  const raw = await request.text();
-  if (raw.length > 40_000) return json({ error: "Request too large" }, 413);
+  let raw: string;
+  try { raw = await readBoundedBody(request); }
+  catch { return json({ error: "Request too large" }, 413); }
   let input: ExternalBrainInput;
   try { input = parseExternalBrainInput(JSON.parse(raw)); }
   catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid JSON" }, 400); }
