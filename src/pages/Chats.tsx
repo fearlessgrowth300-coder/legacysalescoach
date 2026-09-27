@@ -13,6 +13,7 @@ import { fetchInstagramProfile, pickInstagramTargetPost } from "@/lib/fetch-inst
 import { needsFirstMessageRepair, parseSavedFirstMessages } from "@/lib/first-message";
 import { needsAvatarRefresh } from "@/lib/prospect-avatar";
 import { AiRequestTimeoutError, withAiRequestTimeout } from "@/lib/ai-request-timeout";
+import { describeEdgeFunctionError } from "@/lib/edge-function-error";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { useNavigate, useParams } from "react-router-dom";
@@ -1111,11 +1112,7 @@ export default function Chats() {
       setPendingScreenshotNote("");
     } catch (e: any) {
       console.error("AI suggestion error:", e);
-      let detail = e instanceof AiRequestTimeoutError ? e.message : String(e?.message || "Failed to get suggestions");
-      if (e?.context instanceof Response) {
-        const payload = await e.context.clone().json().catch(() => null);
-        if (typeof payload?.error === "string") detail = payload.error;
-      }
+      const detail = await describeEdgeFunctionError(e);
       setSuggestionError(detail);
       toast.error(detail, { duration: 8000 });
     }
