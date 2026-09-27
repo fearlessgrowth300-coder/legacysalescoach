@@ -37,6 +37,49 @@ export default function Settings() {
   const [aiKey, setAiKey] = useState("");
   const [aiSaving, setAiSaving] = useState(false);
   const [activeAi, setActiveAi] = useState<{ provider: string; masked: string } | null>(null);
+  type BrainAccessKey = { id: string; name: string; key_prefix: string; scopes: string[]; expires_at: string; revoked_at: string | null; total_requests: number };
+  const [brainKeys, setBrainKeys] = useState<BrainAccessKey[]>([]);
+  const [newBrainKeyName, setNewBrainKeyName] = useState("");
+  const [allowBrainGenerate, setAllowBrainGenerate] = useState(false);
+  const [newBrainSecret, setNewBrainSecret] = useState("");
+  const [brainKeyBusy, setBrainKeyBusy] = useState(false);
+
+  const loadBrainKeys = useCallback(async () => {
+    const { data, error } = await supabase.functions.invoke("manage-sales-brain-access", { body: { action: "list" } });
+    if (error || data?.error) throw new Error(data?.error || "Could not load Sales Brain API keys");
+    setBrainKeys(data.keys || []);
+  }, []);
+
+  useEffect(() => {
+    if (user) loadBrainKeys().catch(() => {});
+  }, [user, loadBrainKeys]);
+
+  const createBrainKey = async () => {
+    if (!newBrainKeyName.trim()) { toast.error("Name this integration first"); return; }
+    setBrainKeyBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-sales-brain-access", {
+        body: { action: "create", name: newBrainKeyName.trim(), scopes: allowBrainGenerate ? ["context", "generate"] : ["context"] },
+      });
+      if (error || data?.error) throw new Error(data?.error || "Could not create key");
+      setNewBrainSecret(data.key);
+      setNewBrainKeyName("");
+      await loadBrainKeys();
+      toast.success("Sales Brain API key created. Copy it now; it will not be shown again.");
+    } catch (error: any) { toast.error(error.message || "Could not create key"); }
+    finally { setBrainKeyBusy(false); }
+  };
+
+  const revokeBrainKey = async (id: string) => {
+    setBrainKeyBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-sales-brain-access", { body: { action: "revoke", id } });
+      if (error || data?.error) throw new Error(data?.error || "Could not revoke key");
+      await loadBrainKeys();
+      toast.success("Sales Brain API key revoked");
+    } catch (error: any) { toast.error(error.message || "Could not revoke key"); }
+    finally { setBrainKeyBusy(false); }
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -152,6 +195,41 @@ export default function Settings() {
       </div>
 
       <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg"><Key className="h-5 w-5" />External Sales Brain API</CardTitle>
+            <CardDescription>
+              Let another website use your uploaded books, PDFs, and video knowledge. The context API analyzes the supplied conversation and returns relevant principles and source excerpts before that site's AI writes. Optional generation uses your configured AI provider and its quota.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-xs text-muted-foreground">Use these keys only on the other website's server, never in browser JavaScript. Keys expire after 90 days and are limited to 30 requests per minute.</p>
+            {newBrainSecret && (
+              <Alert><AlertDescription className="space-y-2">
+                <strong>Copy this new key now — it will not be shown again.</strong>
+                <div className="flex gap-2 items-center"><code className="block min-w-0 flex-1 break-all text-xs">{newBrainSecret}</code>
+                  <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(newBrainSecret).then(() => toast.success("Copied"))}>Copy</Button>
+                </div>
+              </AlertDescription></Alert>
+            )}
+            {brainKeys.filter((key) => !key.revoked_at).map((key) => (
+              <div key={key.id} className="flex items-center gap-2 rounded-lg border px-3 py-2">
+                <div className="min-w-0 flex-1 text-sm">
+                  <div className="font-medium truncate">{key.name}</div>
+                  <div className="text-xs text-muted-foreground"><code>{key.key_prefix}…</code> · {key.scopes.join(", ")} · {key.total_requests} calls · expires {new Date(key.expires_at).toLocaleDateString()}</div>
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => revokeBrainKey(key.id)} disabled={brainKeyBusy}>Revoke</Button>
+              </div>
+            ))}
+            <div className="space-y-2"><Label htmlFor="brain-key-name">Integration name</Label>
+              <Input id="brain-key-name" value={newBrainKeyName} onChange={(event) => setNewBrainKeyName(event.target.value)} maxLength={80} placeholder="e.g. My other website" />
+            </div>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allowBrainGenerate} onChange={(event) => setAllowBrainGenerate(event.target.checked)} /> Allow this key to generate answers with my AI provider</label>
+            <Button onClick={createBrainKey} disabled={brainKeyBusy || !newBrainKeyName.trim()}><Plus className="mr-2 h-4 w-4" />Create Sales Brain API key</Button>
+            <p className="text-xs text-muted-foreground">Endpoint: <code className="break-all">https://iyqwrgqyfsfqgqqhlbec.supabase.co/functions/v1/sales-brain-api</code>. See the integration guide in the repository for a server-side example.</p>
+          </CardContent>
+        </Card>
+
         {/* Bring-your-own AI provider */}
         <Card>
           <CardHeader>

@@ -90,5 +90,11 @@ verify_jwt = false
 [functions.sales-evaluate]
 verify_jwt = false
 
+[functions.sales-brain-api]
+verify_jwt = false
+
+[functions.manage-sales-brain-access]
+verify_jwt = false
+
 [functions.backfill-sales-superbrain]
 verify_jwt = false
