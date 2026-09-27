@@ -62,7 +62,6 @@ const MAX_MESSAGE_LENGTH = 12000;
 const PAGE_SIZE = 1000;
 const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, exact_words_to_use, the_deep_why, when_to_use, common_mistake, knowledge_types, objection_types, hidden_causes, buying_stages, psychological_mechanisms, intended_outcomes, techniques, contraindications, language_patterns, extraction_confidence, evidence_mode";
 const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score, chunk_kind, chunk_index, locator, metadata";
-const MAX_SOURCE_COVERAGE_FILES = 32;
 
 function keepHeadAndLatest(text: string, maxLength: number, headLength = 2000): string {
   if (!text || text.length <= maxLength) return text || "";
@@ -1030,42 +1029,15 @@ serve(async (req) => {
     const personaData = workspacePersonaRows?.[0]?.metadata || null;
     const kbModeMap: Record<string, string> = {};
     (kbItems || []).forEach((k: any) => { kbModeMap[k.id] = k.brain_type || "both"; });
-    const sourceCoverageIds = (kbItems || []).map((k: any) => k.id).filter(Boolean).slice(0, MAX_SOURCE_COVERAGE_FILES);
-    const [sourceCoverageKnowledgeNested, sourceCoveragePrinciplesNested, initialLexical] = await Promise.all([
-      Promise.all(sourceCoverageIds.map((sourceId: string) =>
-        supabase.from("knowledge_chunks")
-          .select(CHUNK_SELECT)
-          .eq("user_id", user.id)
-          .is("workspace_id", null)
-          .in("brain_type", [activeThreadType, "both"])
-          .eq("source_id", sourceId)
-          .in("source_type", ["core_knowledge", "content", "video", "pdf", "sales_principle"])
-          .order("relevance_score", { ascending: false, nullsFirst: false })
-          .limit(4)
-          .then((r: any) => r.data || [])
-      )),
-      Promise.all(sourceCoverageIds.map((sourceId: string) =>
-        supabase.from("sales_brain")
-          .select(PRINCIPLE_SELECT)
-          .eq("user_id", user.id)
-          .is("workspace_id", null)
-          .in("brain_type", [activeThreadType, "both"])
-          .eq("source_id", sourceId)
-          .in("source_type", ["core_knowledge", "sales_principle", "content", "video", "pdf"])
-          .order("relevance_score", { ascending: false, nullsFirst: false })
-          .limit(5)
-          .then((r: any) => r.data || [])
-      )),
-      activeThreadType === "friend"
-        ? retrieveFriendLexicalKnowledge(supabase, user.id, activeThreadType, kbModeMap, brainQuery)
-        : Promise.resolve({ principles: [], chunks: [], query: "" }),
-    ]);
-    const sourceCoverageKnowledge = sourceCoverageKnowledgeNested.flat();
-    const sourceCoveragePrinciples = sourceCoveragePrinciplesNested.flat();
+    // Full-vault lexical and semantic retrieval already search all uploaded
+    // sources. Avoid 64 per-source HTTP queries that exhaust Edge resources.
+    const initialLexical = activeThreadType === "friend"
+      ? await retrieveFriendLexicalKnowledge(supabase, user.id, activeThreadType, kbModeMap, brainQuery)
+      : { principles: [], chunks: [], query: "" };
     let lexicalCandidatesRetrieved = initialLexical.principles.length + initialLexical.chunks.length;
 
-    const brainKnowledge = mergeByIdPriority(sourceCoverageKnowledge, mergeByIdPriority(userBrainKnowledge, globalBrainKnowledge));
-    const salesPrinciples = mergeByIdPriority(sourceCoveragePrinciples, mergeByIdPriority(userSalesPrinciples, globalSalesPrinciples));
+    const brainKnowledge = mergeByIdPriority(userBrainKnowledge, globalBrainKnowledge);
+    const salesPrinciples = mergeByIdPriority(userSalesPrinciples, globalSalesPrinciples);
 
     // ─── SEMANTIC RPC CALLS (if embedding succeeded) ───
     let semanticPrinciples: any[] = [];

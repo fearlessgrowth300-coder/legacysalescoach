@@ -47,7 +47,6 @@ const ALLOWED_SOURCE_TYPES = ["core_knowledge", "sales_principle", "content", "v
 const PAGE_SIZE = 1000;
 const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, common_mistake, knowledge_types, objection_types, hidden_causes, buying_stages, psychological_mechanisms, intended_outcomes, techniques, contraindications, language_patterns, extraction_confidence, evidence_mode";
 const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score, chunk_kind, chunk_index, locator, metadata";
-const MAX_SOURCE_COVERAGE_FILES = 32;
 
 function keepHeadAndLatest(text: string, maxLength: number, headLength = 2000): string {
   if (!text || text.length <= maxLength) return text || "";
@@ -340,38 +339,14 @@ serve(async (req) => {
       kbModeMap[k.id] = k.brain_type || "both";
     });
 
-    const sourceCoverageIds = (kbItems || []).map((k: any) => k.id).filter(Boolean).slice(0, MAX_SOURCE_COVERAGE_FILES);
-    const [sourceCoveragePrinciplesNested, sourceCoverageChunksNested, initialLexical] = await Promise.all([
-      Promise.all(sourceCoverageIds.map((sourceId: string) =>
-        supabase.from("sales_brain")
-          .select(PRINCIPLE_SELECT)
-          .eq("user_id", user.id)
-          .is("workspace_id", null)
-          .in("brain_type", [activeThreadType, "both"])
-          .eq("source_id", sourceId)
-          .in("source_type", ALLOWED_SOURCE_TYPES)
-          .order("relevance_score", { ascending: false, nullsFirst: false })
-          .limit(5)
-          .then((r: any) => r.data || [])
-      )),
-      Promise.all(sourceCoverageIds.map((sourceId: string) =>
-        supabase.from("knowledge_chunks")
-          .select(CHUNK_SELECT)
-          .eq("user_id", user.id)
-          .is("workspace_id", null)
-          .in("brain_type", [activeThreadType, "both"])
-          .eq("source_id", sourceId)
-          .in("source_type", ALLOWED_SOURCE_TYPES)
-          .order("relevance_score", { ascending: false, nullsFirst: false })
-          .limit(4)
-          .then((r: any) => r.data || [])
-      )),
-      activeThreadType === "friend"
-        ? retrieveFriendLexicalKnowledge(supabase, user.id, activeThreadType, kbModeMap, brainQuery)
-        : Promise.resolve({ principles: [], chunks: [], query: "" }),
-    ]);
-    const sourceCoveragePrinciples = sourceCoveragePrinciplesNested.flat();
-    const sourceCoverageChunks = sourceCoverageChunksNested.flat();
+    // The full-vault lexical RPC and semantic RPCs search every uploaded
+    // source. Per-source coverage previously fanned out into 64 additional
+    // database requests here, even for an ordinary one-line reply. Keep the
+    // bounded relevance reservoir as a fallback instead of loading unrelated
+    // passages from the first 32 files on every invocation.
+    const initialLexical = activeThreadType === "friend"
+      ? await retrieveFriendLexicalKnowledge(supabase, user.id, activeThreadType, kbModeMap, brainQuery)
+      : { principles: [], chunks: [], query: "" };
     let lexicalCandidatesRetrieved = initialLexical.principles.length + initialLexical.chunks.length;
 
     // Semantic search
@@ -395,8 +370,8 @@ serve(async (req) => {
     }
 
     // Merge + deduplicate + message-focused source-balanced ranking
-    const allPrinciples = mergeByIdPriority(sourceCoveragePrinciples, mergeByIdPriority(userPrinciples, globalPrinciples));
-    const allChunks = mergeByIdPriority(sourceCoverageChunks, mergeByIdPriority(userChunks, globalChunks));
+    const allPrinciples = mergeByIdPriority(userPrinciples, globalPrinciples);
+    const allChunks = mergeByIdPriority(userChunks, globalChunks);
     const mergedPrinciples = deduplicatePrinciples(
       mergeByIdPriority(semanticPrinciples, mergeByIdPriority(initialLexical.principles, allPrinciples)),
       "relevance_score",

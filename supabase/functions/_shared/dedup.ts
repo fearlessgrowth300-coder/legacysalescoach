@@ -10,14 +10,79 @@ function getWordNgrams(text: string, n: number): Set<string> {
   return ngrams;
 }
 
-function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 1;
-  let intersection = 0;
-  for (const item of a) {
-    if (b.has(item)) intersection++;
+// Only rows sharing a 3-gram can be near-duplicates. Indexing those grams
+// avoids comparing every retrieved book passage against every other passage
+// (twice per Friend reply), which can exhaust an Edge Function's CPU budget.
+function deduplicateByNgrams<T>(
+  items: T[],
+  textFor: (item: T) => string,
+  minimumLength: number,
+  scoreKey: string,
+  threshold: number,
+): T[] {
+  if (items.length <= 1) return items;
+
+  const kept: T[] = [];
+  const keptNgrams: Set<string>[] = [];
+  const gramIndex = new Map<string, Set<number>>();
+
+  const updateIndex = (index: number, oldGrams: Set<string>, newGrams: Set<string>) => {
+    for (const gram of oldGrams) {
+      const positions = gramIndex.get(gram);
+      positions?.delete(index);
+      if (positions?.size === 0) gramIndex.delete(gram);
+    }
+    for (const gram of newGrams) {
+      let positions = gramIndex.get(gram);
+      if (!positions) {
+        positions = new Set<number>();
+        gramIndex.set(gram, positions);
+      }
+      positions.add(index);
+    }
+  };
+
+  for (const item of items) {
+    const text = textFor(item);
+    if (text.length < minimumLength) {
+      kept.push(item);
+      keptNgrams.push(new Set());
+      continue;
+    }
+
+    const ngrams = getWordNgrams(text, 3);
+    const overlap = new Map<number, number>();
+    for (const gram of ngrams) {
+      for (const index of gramIndex.get(gram) || []) {
+        overlap.set(index, (overlap.get(index) || 0) + 1);
+      }
+    }
+
+    let duplicateIndex = -1;
+    // Preserve the original first-match behavior, including which record
+    // wins when several existing records are similar to this one.
+    for (const index of [...overlap.keys()].sort((a, b) => a - b)) {
+      const intersection = overlap.get(index) || 0;
+      const union = ngrams.size + keptNgrams[index].size - intersection;
+      if (union > 0 && intersection / union > threshold) {
+        duplicateIndex = index;
+        break;
+      }
+    }
+
+    if (duplicateIndex < 0) {
+      const index = kept.length;
+      kept.push(item);
+      keptNgrams.push(ngrams);
+      updateIndex(index, new Set(), ngrams);
+    } else if (((item as any)[scoreKey] ?? 0) > ((kept[duplicateIndex] as any)[scoreKey] ?? 0)) {
+      updateIndex(duplicateIndex, keptNgrams[duplicateIndex], ngrams);
+      kept[duplicateIndex] = item;
+      keptNgrams[duplicateIndex] = ngrams;
+    }
   }
-  const union = a.size + b.size - intersection;
-  return union === 0 ? 0 : intersection / union;
+
+  return kept;
 }
 
 /**
@@ -29,39 +94,7 @@ export function deduplicateChunks<T extends { content?: string; id?: string }>(
   scoreKey: string = "relevance_score",
   threshold: number = 0.7
 ): T[] {
-  if (items.length <= 1) return items;
-
-  const kept: T[] = [];
-  const keptNgrams: Set<string>[] = [];
-
-  for (const item of items) {
-    const text = (item as any).content || "";
-    if (text.length < 20) { kept.push(item); keptNgrams.push(new Set()); continue; }
-
-    const ngrams = getWordNgrams(text, 3);
-    let isDuplicate = false;
-
-    for (let i = 0; i < keptNgrams.length; i++) {
-      if (jaccardSimilarity(ngrams, keptNgrams[i]) > threshold) {
-        // Keep the one with higher score
-        const existingScore = (kept[i] as any)[scoreKey] ?? 0;
-        const newScore = (item as any)[scoreKey] ?? 0;
-        if (newScore > existingScore) {
-          kept[i] = item;
-          keptNgrams[i] = ngrams;
-        }
-        isDuplicate = true;
-        break;
-      }
-    }
-
-    if (!isDuplicate) {
-      kept.push(item);
-      keptNgrams.push(ngrams);
-    }
-  }
-
-  return kept;
+  return deduplicateByNgrams(items, item => item.content || "", 20, scoreKey, threshold);
 }
 
 /**
@@ -72,38 +105,7 @@ export function deduplicatePrinciples<T extends { principle_name?: string; what_
   scoreKey: string = "relevance_score",
   threshold: number = 0.8
 ): T[] {
-  if (items.length <= 1) return items;
-
-  const kept: T[] = [];
-  const keptNgrams: Set<string>[] = [];
-
-  for (const item of items) {
-    const text = `${(item as any).principle_name || ""} ${(item as any).what_i_learned || ""}`;
-    if (text.length < 10) { kept.push(item); keptNgrams.push(new Set()); continue; }
-
-    const ngrams = getWordNgrams(text, 3);
-    let isDuplicate = false;
-
-    for (let i = 0; i < keptNgrams.length; i++) {
-      if (jaccardSimilarity(ngrams, keptNgrams[i]) > threshold) {
-        const existingScore = (kept[i] as any)[scoreKey] ?? 0;
-        const newScore = (item as any)[scoreKey] ?? 0;
-        if (newScore > existingScore) {
-          kept[i] = item;
-          keptNgrams[i] = ngrams;
-        }
-        isDuplicate = true;
-        break;
-      }
-    }
-
-    if (!isDuplicate) {
-      kept.push(item);
-      keptNgrams.push(ngrams);
-    }
-  }
-
-  return kept;
+  return deduplicateByNgrams(items, item => `${item.principle_name || ""} ${item.what_i_learned || ""}`, 10, scoreKey, threshold);
 }
 
 /**
