@@ -222,7 +222,46 @@ export type SimpleChatOpts = {
   stream?: boolean;
   /** Total wall-clock budget across the primary model and all fallbacks. */
   timeout_ms?: number;
+  /** Per-model HTTP budget; defaults to 18s so short Friend requests stay responsive. */
+  attempt_timeout_ms?: number;
+  /** Gemini OpenAI-compatible thinking level; omitted for other providers. */
+  reasoning_effort?: "low" | "medium" | "high";
 };
+
+function geminiCompletionMetadata(data: any) {
+  const choice = data?.choices?.[0];
+  const message = choice?.message;
+  const content = message?.content;
+  const hasText = typeof content === "string" && content.trim().length > 0;
+  const hasToolCall = Array.isArray(message?.tool_calls) && message.tool_calls.some((call: any) =>
+    call?.type === "function" && typeof call.function?.name === "string" &&
+    call.function.name.trim().length > 0 && typeof call.function?.arguments === "string"
+  );
+  const finishReason = String(choice?.finish_reason || "").toLowerCase().slice(0, 64);
+  const blockReason = String(data?.promptFeedback?.blockReason || data?.prompt_feedback?.block_reason || "").toLowerCase().slice(0, 64);
+  const safetyBlocked = /safety|content_filter|blocked|prohibited|recitation/.test(finishReason) ||
+    Boolean(blockReason && blockReason !== "block_reason_unspecified");
+  const usage = data?.usage || {};
+  return {
+    usable: hasText || hasToolCall,
+    safetyBlocked,
+    safeLog: {
+      finishReason: finishReason || "missing",
+      blockReason: blockReason || "none",
+      completionTokens: Number.isFinite(usage.completion_tokens) ? usage.completion_tokens : null,
+      totalTokens: Number.isFinite(usage.total_tokens) ? usage.total_tokens : null,
+    },
+  };
+}
+
+function geminiEmptyResponseError(blocked: boolean): Response {
+  return new Response(JSON.stringify({ error: blocked
+    ? "Gemini blocked this request. Rephrase it and try again."
+    : "Gemini returned no answer after trying the available models. Retry or select another Gemini model." }), {
+    status: blocked ? 422 : 502,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 // The OpenAI-compatible Gemini endpoint can fail independently of the native
 // generateContent endpoint. Keep this narrowly scoped to text-only requests;
@@ -254,6 +293,9 @@ async function tryGeminiNativeChat(
   if (opts.max_tokens) generationConfig.maxOutputTokens = opts.max_tokens;
   if (opts.response_format?.type === "json_object") generationConfig.responseMimeType = "application/json";
   if (!shouldOmitGeminiSamplingParameters("gemini", model)) generationConfig.temperature = opts.temperature ?? 0.3;
+  if (opts.reasoning_effort && /^gemini-3(?:\.|-)/.test(model)) {
+    generationConfig.thinkingConfig = { thinkingLevel: opts.reasoning_effort };
+  }
 
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
@@ -271,11 +313,27 @@ async function tryGeminiNativeChat(
   if (!response.ok) return response;
   const data = await response.json();
   const content = (data.candidates?.[0]?.content?.parts || [])
-    .map((part: { text?: string }) => part.text || "")
+    .filter((part: { thought?: boolean; text?: string }) => !part.thought && typeof part.text === "string")
+    .map((part: { text: string }) => part.text)
     .filter(Boolean)
     .join("\n");
   if (!content.trim()) return null;
-  return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] }), {
+  const candidate = data.candidates?.[0] || {};
+  const nativeFinishReason = String(candidate.finishReason || "").toUpperCase();
+  const finishReason = nativeFinishReason === "MAX_TOKENS" ? "length"
+    : nativeFinishReason === "STOP" ? "stop"
+    : nativeFinishReason.toLowerCase() || null;
+  const nativeUsage = data.usageMetadata || {};
+  return new Response(JSON.stringify({
+    choices: [{ message: { role: "assistant", content }, finish_reason: finishReason }],
+    gemini_finish_reason: nativeFinishReason || null,
+    usage: {
+      prompt_tokens: nativeUsage.promptTokenCount ?? null,
+      completion_tokens: nativeUsage.candidatesTokenCount ?? null,
+      total_tokens: nativeUsage.totalTokenCount ?? null,
+      completion_tokens_details: { reasoning_tokens: nativeUsage.thoughtsTokenCount ?? null },
+    },
+  }), {
     status: 200,
     headers: { "Content-Type": "application/json", "X-AI-Transport": "gemini-native-recovery" },
   });
@@ -298,7 +356,8 @@ export async function userChat(
 
     let lastResponse: Response | null = null;
     let rateLimitResponse: Response | null = null;
-    let nativeRecoveryAttempted = false;
+    const nativeRecoveryAttemptedModels = new Set<string>();
+    let sawEmptyCompletion = false;
     const totalTimeoutMs = Math.max(5_000, opts.timeout_ms || 60_000);
     const deadline = Date.now() + totalTimeoutMs;
 
@@ -313,6 +372,7 @@ export async function userChat(
         body.temperature = opts.temperature ?? 0.3;
       }
       if (opts.max_tokens) body.max_tokens = opts.max_tokens;
+      if (target.provider === "gemini" && opts.reasoning_effort) body.reasoning_effort = opts.reasoning_effort;
       if (opts.response_format) body.response_format = opts.response_format;
       if (opts.tools) body.tools = opts.tools;
       if (opts.tool_choice) body.tool_choice = opts.tool_choice;
@@ -329,11 +389,37 @@ export async function userChat(
             method: "POST",
             headers: target.headers,
             body: JSON.stringify(body),
-            signal: AbortSignal.timeout(Math.min(18_000, requestBudgetMs)),
+            signal: AbortSignal.timeout(Math.min(opts.attempt_timeout_ms ?? 18_000, requestBudgetMs)),
           });
 
+          if (res.ok) {
+            if (target.provider !== "gemini" || opts.stream) return res;
+            let data: any = null;
+            try { data = await res.clone().json(); } catch { /* Malformed 2xx is not a usable completion. */ }
+            const completion = geminiCompletionMetadata(data);
+            if (completion.usable) return res;
+            console.warn(`[user-ai] model ${currentModel} returned an empty Gemini completion`, completion.safeLog);
+            if (completion.safetyBlocked) return geminiEmptyResponseError(true);
+            sawEmptyCompletion = true;
+            if (!nativeRecoveryAttemptedModels.has(currentModel)) {
+              nativeRecoveryAttemptedModels.add(currentModel);
+              const nativeBudgetMs = Math.min(18_000, deadline - Date.now() - 1_000);
+              if (nativeBudgetMs > 5_000) {
+                try {
+                  const nativeResponse = await tryGeminiNativeChat(target, opts, currentModel, nativeBudgetMs);
+                  if (nativeResponse?.ok) {
+                    console.warn(`[user-ai] recovered empty ${currentModel} response through the native Gemini endpoint`);
+                    return nativeResponse;
+                  }
+                  if (nativeResponse?.status === 429) rateLimitResponse = nativeResponse;
+                } catch (nativeError) {
+                  console.warn(`[user-ai] native ${currentModel} recovery failed:`, nativeError);
+                }
+              }
+            }
+            break;
+          }
           lastResponse = res;
-          if (res.ok) return res;
           if (res.status === 429) rateLimitResponse = res;
 
           if (res.status === 503 && attempt === 0 && deadline - Date.now() > 3_500) {
@@ -346,8 +432,8 @@ export async function userChat(
           // model, but never silently switch to another provider/account.
           if (res.status === 429 || res.status === 503 || res.status === 404) {
             console.warn(`[user-ai] model ${currentModel} returned ${res.status}; trying Gemini fallback`);
-            if (target.provider === "gemini" && res.status === 503 && !nativeRecoveryAttempted) {
-              nativeRecoveryAttempted = true;
+            if (target.provider === "gemini" && res.status === 503 && !nativeRecoveryAttemptedModels.has(currentModel)) {
+              nativeRecoveryAttemptedModels.add(currentModel);
               const nativeBudgetMs = Math.min(18_000, deadline - Date.now() - 1_000);
               if (nativeBudgetMs > 5_000) {
                 try {
@@ -378,7 +464,11 @@ export async function userChat(
     // The final compatibility attempt may report 503 even when the native API
     // already identified the real limit as 429. Preserve that actionable
     // signal for the caller instead of masking it as transient overload.
-    return rateLimitResponse || lastResponse || new Response(JSON.stringify({ error: "AI rate limit reached on all models. Please try again shortly." }), { status: 429 });
+    return rateLimitResponse || (sawEmptyCompletion ? geminiEmptyResponseError(false) : lastResponse) ||
+      new Response(JSON.stringify({ error: "The AI provider did not respond before the timeout. Please retry." }), {
+        status: 504,
+        headers: { "Content-Type": "application/json" },
+      });
   }
 
   // Anthropic translation — non-streaming only.

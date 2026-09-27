@@ -55,8 +55,10 @@ const VALIDATION_DRAFT_CHAR_LIMIT = 22000;
 // exhausts the model's output budget before it reaches the copy-ready message.
 // Keep the generation and its optional validator comfortably below the provider
 // limit so the client always receives a complete answer and `[DONE]` event.
-const BRAIN_RESPONSE_MAX_TOKENS = 1800;
-const BRAIN_VALIDATION_MAX_TOKENS = 2400;
+// Gemini 3.x counts private thinking against max_tokens. A small cap can
+// produce HTTP 200 with no visible answer before the model reaches its reply.
+const BRAIN_RESPONSE_MAX_TOKENS = 8192;
+const BRAIN_VALIDATION_MAX_TOKENS = 4096;
 
 function responseFormatForIntent(intent: BrainChatIntent): string {
   if (intent === "conversation_coaching") return `RESPONSE MODE: CONVERSATION COACHING
@@ -155,9 +157,11 @@ or
       model: chat.models.fast,
       temperature: 0.05,
       max_tokens: BRAIN_VALIDATION_MAX_TOKENS,
+      reasoning_effort: chat.provider === "gemini" ? "low" : undefined,
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: prompt }],
-      timeout_ms: 14000,
+      timeout_ms: 30000,
+      attempt_timeout_ms: 22000,
     });
     if (!response.ok) throw new Error(`validator_http_${response.status}`);
     const data = await response.json();
@@ -169,8 +173,10 @@ or
     console.warn("[brain-chat] independent validator rejected or incomplete", { reason: reason.slice(0, 120), intent });
     if (/draft was not supported|rejected draft|unresolved issues|unsupported source/i.test(reason))
       throw new Error("I could not safely verify this answer against its sources. Use Retry answer to generate a new one.");
-    if (/validator_http_429|validator_http_503|validator_http_504|timeout|abort/i.test(reason))
-      throw new Error("I could not finish the source check because the AI provider is busy. Use Retry answer without resending your message.");
+    if (/validator_http_429/i.test(reason))
+      throw new Error("The AI provider's rate limit prevented the source check. Wait briefly, then use Retry answer without resending your message.");
+    if (/validator_http_503|validator_http_504|timeout|abort/i.test(reason))
+      throw new Error("The source check timed out while the AI provider was busy. Use Retry answer without resending your message.");
     throw new Error("I could not finish the source check. Use Retry answer without resending your message.");
   }
 }
@@ -1162,16 +1168,22 @@ serve(async (req) => {
           const aiResp = await userChat(chat, {
             model: chat.models.reasoning,
             max_tokens: BRAIN_RESPONSE_MAX_TOKENS,
+            reasoning_effort: chat.provider === "gemini" ? "low" : undefined,
             temperature: 0.35,
             messages: [{ role: "system", content: systemPrompt }, ...modelMessages],
             stream: false,
             timeout_ms: 58_000,
+            attempt_timeout_ms: 28_000,
           });
 
           if (!aiResp.ok || !aiResp.body) {
             let message = "AI gateway error";
             if (aiResp.status === 429) message = "Rate limit exceeded. Please try again.";
             else if (aiResp.status === 402) message = "Usage limit reached. Please add credits.";
+            else if (aiResp.status === 422) message = "The AI provider blocked this request. Rephrase it and try again.";
+            else if (aiResp.status === 502) message = "The AI models returned no usable answer. Use Retry answer without resending your message.";
+            else if (aiResp.status === 503 || aiResp.status === 504)
+              message = "The AI provider timed out. Use Retry answer without resending your message.";
             else {
               const t = await aiResp.text().catch(() => "");
               console.error("AI gateway error:", aiResp.status, t);
@@ -1186,7 +1198,17 @@ serve(async (req) => {
           const draft = sanitize(String(data.choices?.[0]?.message?.content || "")).trim();
           const draftFinishReason = String(data.choices?.[0]?.finish_reason || "").toLowerCase();
           if (!draft) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "AI returned an empty response" })}\n\n`));
+            console.warn("[brain-chat] generation returned no visible text", {
+              provider: chat.provider,
+              model: String(data.model || chat.models.reasoning).slice(0, 80),
+              finish_reason: draftFinishReason.slice(0, 40),
+              choice_count: Array.isArray(data.choices) ? data.choices.length : 0,
+              completion_tokens: data.usage?.completion_tokens ?? null,
+            });
+            const detail = ["length", "max_tokens", "model_context_window_exceeded"].includes(draftFinishReason)
+              ? "The AI used its output budget before producing an answer. Use Retry answer without resending your message."
+              : "The AI model returned no visible answer. Use Retry answer without resending your message.";
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: detail })}\n\n`));
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             controller.close();
             return;
