@@ -178,38 +178,51 @@ export default function BrainStats() {
     }
   };
 
-  // Repair Search: backfill missing embeddings so semantic search works.
-  // Non-destructive — only adds vectors to existing principles/chunks. Loops the
-  // edge function (which processes a batch per call) until it reports done.
+  // Repair Search: (re)index every principle/passage with the CURRENT embedding
+  // model. reindex:true also re-embeds rows made by an older provider (e.g.
+  // OpenAI rows when the active key is Gemini) — mixed vector spaces make
+  // semantic search return noise. Non-destructive and resumable: each call
+  // handles one batch and reports what's left, so a quota stop can be resumed.
   const handleRepairSearch = async () => {
     if (isRepairing) return;
     setIsRepairing(true);
-    toast.info("Repairing search — adding meaning-vectors to your principles...");
+    toast.info("Repairing search — re-indexing your brain with your current AI model...");
+    let totalBrain = 0;
+    let totalChunks = 0;
+    let rateLimitWaits = 0;
     try {
-      let totalBrain = 0;
-      let totalChunks = 0;
-      for (let i = 0; i < 60; i++) {
+      // ponytail: browser-driven loop; tab must stay open. Move to a cron job if brains get much bigger.
+      for (let i = 0; i < 2000; i++) {
         // Dedicated, NON-DESTRUCTIVE function only. Never call reprocess-brain here.
-        const { data, error } = await supabase.functions.invoke("backfill-embeddings");
-        if (error) throw error;
-        if (data?.error) throw new Error(data.error);
+        const { data, error } = await supabase.functions.invoke("backfill-embeddings", { body: { reindex: true } });
+        const message = String(data?.error || (error as any)?.message || "");
+        if (error || data?.error) {
+          // Provider rate limit (common on free Gemini keys): wait and resume.
+          if (/429|retry after|rate|quota|503|non-2xx/i.test(message) && rateLimitWaits < 20) {
+            rateLimitWaits++;
+            toast.info(`AI provider is rate-limiting — waiting 60s then resuming (${totalBrain + totalChunks} done so far)`);
+            await new Promise((r) => setTimeout(r, 60_000));
+            continue;
+          }
+          throw new Error(message || "Repair failed");
+        }
         // SAFETY: only a real backfill response has a boolean `done`. If we get
         // anything else, stop immediately — never loop a non-backfill response.
         if (typeof data?.done !== "boolean") {
           throw new Error("Backfill isn't deployed yet. No changes were made — try again later.");
         }
+        rateLimitWaits = 0;
         totalBrain += data.updatedBrain || 0;
         totalChunks += data.updatedChunks || 0;
         const remaining = (data.remainingBrain || 0) + (data.remainingChunks || 0);
-        if (remaining > 0) {
-          toast.info(`Embedding... ${totalBrain} principles done, ${remaining} to go`);
-        }
         if (data.done) break;
+        if (!data.updatedBrain && !data.updatedChunks) throw new Error(`${remaining} items could not be indexed. Try again later.`);
+        if (i % 5 === 0) toast.info(`Re-indexing... ${totalBrain + totalChunks} done, ${remaining} to go`);
       }
-      toast.success(`Search repaired! Embedded ${totalBrain} principles + ${totalChunks} chunks. Try the AI chat now.`);
+      toast.success(`Search repaired! Re-indexed ${totalBrain} principles + ${totalChunks} passages. Try the AI chat now.`);
       queryClient.invalidateQueries({ queryKey: ["brain-chunks"] });
     } catch (e: any) {
-      toast.error(e.message || "Repair failed");
+      toast.error(`${e.message || "Repair failed"} — ${totalBrain + totalChunks} were saved; click Repair Search again to continue.`);
     } finally {
       setIsRepairing(false);
     }
