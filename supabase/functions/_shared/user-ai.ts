@@ -13,11 +13,11 @@
 import { decryptStoredApiKey } from "./api-key-utils.ts";
 import { toAnthropicContent } from "./anthropic-content.ts";
 import { normalizeGeminiModel, GEMINI_CHAT_MODELS, GEMINI_EMBEDDING_MODEL, GEMINI_VISION_FALLBACK_MODELS, shouldOmitGeminiSamplingParameters } from "./gemini-models.ts";
-import { embedBatch } from "./embedding-batch.ts";
+import { embedBatch, localEmbedTarget } from "./embedding-batch.ts";
 
 declare const Deno: { env: { get(name: string): string | undefined } };
 
-export type UserAiProvider = "openai" | "gemini" | "anthropic" | "lovable";
+export type UserAiProvider = "openai" | "gemini" | "anthropic" | "lovable" | "local";
 
 export type UserChatTarget = {
   provider: UserAiProvider;
@@ -173,6 +173,8 @@ export async function resolveUserEmbedTarget(
   supabase: any,
   userId: string | null,
 ): Promise<UserEmbedTarget> {
+  const local = localEmbedTarget();
+  if (local) return local;
   const found = await getUserAiKey(supabase, userId);
   if (!found) {
     const lovable = lovableEmbedTarget();

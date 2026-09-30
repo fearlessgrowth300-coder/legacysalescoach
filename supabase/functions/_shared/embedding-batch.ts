@@ -1,11 +1,37 @@
 import { coerceEmbeddingDimensions } from "./embedding-vector.ts";
 import type { UserEmbedTarget } from "./user-ai.ts";
 
+// Self-hosted EmbeddingGemma-300M (llama.cpp on the VPS, OpenAI-compatible).
+// When LOCAL_EMBED_URL is set, EVERY embedding — stored rows and search queries —
+// goes there regardless of the user's chat key, so all vectors share one space.
+// (Mixing OpenAI + Gemini vectors made semantic search return noise.)
+export const LOCAL_EMBED_MODEL = "embeddinggemma-300m";
+export function localEmbedTarget(): UserEmbedTarget | null {
+  const url = Deno.env.get("LOCAL_EMBED_URL");
+  if (!url) return null;
+  return {
+    provider: "local",
+    url,
+    headers: { Authorization: `Bearer ${Deno.env.get("LOCAL_EMBED_TOKEN") || ""}`, "Content-Type": "application/json" },
+    model: LOCAL_EMBED_MODEL,
+    dimensions: 768,
+  };
+}
+
 // Batch requests reduce quota consumption during resumable indexing. Keep row
 // positions stable and reject malformed vectors instead of silently saving them.
-export async function embedBatch(target: UserEmbedTarget, texts: string[]): Promise<number[][]> {
+// `kind` picks EmbeddingGemma's retrieval prompt: stored text is a "document",
+// what the user asks is a "query". Other providers ignore it.
+export async function embedBatch(
+  target: UserEmbedTarget, texts: string[], kind: "query" | "document" = "query",
+): Promise<number[][]> {
   if (!texts.length) return [];
-  const input = texts.map(text => text.trim().slice(0, 24000));
+  target = localEmbedTarget() || target;
+  const local = target.provider === "local";
+  // EmbeddingGemma reads at most 2048 tokens; ~6000 chars keeps well under that.
+  const input = texts.map(text => text.trim().slice(0, local ? 6000 : 24000))
+    .map(text => !local || !text ? text
+      : kind === "document" ? `title: none | text: ${text}` : `task: search result | query: ${text}`);
   if (input.some(text => !text)) throw new Error("Empty embedding input");
   const gemini = target.provider === "gemini";
   const url = gemini
@@ -15,7 +41,7 @@ export async function embedBatch(target: UserEmbedTarget, texts: string[]): Prom
     model: `models/${target.model}`, content: { parts: [{ text }] }, outputDimensionality: target.dimensions,
   })) } : { model: target.model, input, dimensions: target.dimensions };
   const response = await fetch(url, { method: "POST", headers: target.headers,
-    body: JSON.stringify(body), signal: AbortSignal.timeout(25000) });
+    body: JSON.stringify(body), signal: AbortSignal.timeout(local ? 120000 : 25000) });
   if (!response.ok) {
     const retry = response.headers.get("retry-after") || "30";
     throw new Error(`Embedding provider HTTP ${response.status}; retry after ${retry}s`);

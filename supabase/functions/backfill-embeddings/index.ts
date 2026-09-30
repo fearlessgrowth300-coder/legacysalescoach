@@ -37,7 +37,7 @@ serve(async req => {
       const valid = rows.filter(row => textOf(row).length > 0);
       rows.filter(row => !textOf(row)).forEach(row => failed.push(row.id));
       if (!valid.length) continue;
-      const vectors = await embedBatch(target, valid.map(textOf));
+      const vectors = await embedBatch(target, valid.map(textOf), "document");
       for (let i = 0; i < valid.length; i++) {
         const row = valid[i];
         const result = await db.from(table).update({ embedding: vectors[i], metadata: {

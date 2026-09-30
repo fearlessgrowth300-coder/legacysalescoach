@@ -15,7 +15,7 @@
 
 import { getLatestUserApiKey } from "./api-key-utils.ts";
 import { SEARCH_EMBEDDING_DIMENSIONS } from "./embedding-vector.ts";
-import { embedBatch } from "./embedding-batch.ts";
+import { embedBatch, localEmbedTarget } from "./embedding-batch.ts";
 declare const Deno: { env: { get(name: string): string | undefined } };
 import {
   GEMINI_CHAT_MODELS,
@@ -246,6 +246,11 @@ async function anthropicChat(provider: AiProvider, model: string, opts: AiChatOp
 // Anthropic users (no embeddings API) — callers should surface a clear error.
 export async function aiEmbed(provider: AiProvider, text: string): Promise<number[] | null> {
   const target = provider.embed;
+  const local = localEmbedTarget();
+  if (local) {
+    try { return (await embedBatch(local, [text], "document"))[0]; }
+    catch (e) { console.error("[ai-provider] local embed threw:", e); return null; }
+  }
   if (!target?.key) return null;
   try {
       const key = target.key.replace(/^Bearer\s+/i, "").trim();
@@ -259,7 +264,7 @@ export async function aiEmbed(provider: AiProvider, text: string): Promise<numbe
           ...(target.provider === "gemini" ? { "x-goog-api-key": key } : {}),
           ...(provider.name === "lovable" ? { "Lovable-API-Key": key } : {}),
         },
-      }, [text]))[0];
+      }, [text], "document"))[0];
   } catch (e) {
     console.error("[ai-provider] embed threw:", e);
     return null;
