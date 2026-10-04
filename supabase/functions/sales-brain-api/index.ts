@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { runPipelineFast, type SessionContext } from "../_shared/brain-pipeline.ts";
 import { resolveUserChatTarget, userChat, type UserChatTarget } from "../_shared/user-ai.ts";
-import { fallbackSituation, parseExternalBrainInput, parseSituation, type ExternalBrainInput, type Situation } from "../_shared/external-brain.ts";
+import { fallbackSituation, parseExternalBrainInput, parseSituation, sourceKind, sourceLink, type ExternalBrainInput, type Situation } from "../_shared/external-brain.ts";
 
 const responseHeaders = { "Content-Type": "application/json", "Cache-Control": "no-store", "Vary": "Authorization" };
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
@@ -104,19 +104,39 @@ Deno.serve(async (request) => {
       chat: chat || undefined,
       session,
     });
-    const principles = pipeline.selected.slice(0, 6).map((item) => ({
+    // Point every result at its real upload: PDF/book (chapter, pages) or video
+    // (link that opens at the passage's timestamp).
+    const selectedPrinciples = pipeline.selected.slice(0, 6);
+    const selectedPassages = pipeline.supporting_chunks.slice(0, 6);
+    const sourceIds = [...new Set([...selectedPrinciples, ...selectedPassages].map((row) => row.source_id).filter(Boolean))];
+    const [{ data: sourceRows }, { data: principleMeta }] = await Promise.all([
+      sourceIds.length
+        ? admin.from("knowledge_base_items").select("id, title, type, url").eq("user_id", claim.owner_id).in("id", sourceIds)
+        : Promise.resolve({ data: [] }),
+      selectedPrinciples.length
+        ? admin.from("sales_brain").select("id, metadata").eq("user_id", claim.owner_id).in("id", selectedPrinciples.map((item) => item.id))
+        : Promise.resolve({ data: [] }),
+    ]);
+    const sourceById = new Map((sourceRows || []).map((row: any) => [row.id, row]));
+    const chapterById = new Map((principleMeta || []).map((row: any) => [row.id, row.metadata?.chapter ?? null]));
+    const describeSource = (id: string | null | undefined, title: string | null | undefined, locator?: string | null) => {
+      const row: any = id ? sourceById.get(id) : null;
+      return { id: id || null, title: row?.title || title || null, type: sourceKind(row?.type, row?.url), url: sourceLink(row?.url, locator) };
+    };
+    const principles = selectedPrinciples.map((item) => ({
       id: item.id,
       name: item.principle_name,
-      source: { id: item.source_id, title: item.source_title, type: item.source_type },
+      source: describeSource(item.source_id, item.source_title),
+      chapter: chapterById.get(item.id) ?? null,
       why_relevant: item.why_relevant,
       what_it_teaches: (item.full.what_i_learned || "").slice(0, 500),
       how_to_apply: (item.full.how_to_apply || "").slice(0, 500),
       when_to_use: (item.full.when_to_use || "").slice(0, 300),
       when_not_to_use: (item.full.when_not_to_use || "").slice(0, 300),
     }));
-    const evidence = pipeline.supporting_chunks.slice(0, 6).map((chunk) => ({
+    const evidence = selectedPassages.map((chunk) => ({
       id: chunk.id,
-      source: { id: chunk.source_id, title: chunk.source_title, type: chunk.source_type },
+      source: describeSource(chunk.source_id, chunk.source_title, chunk.locator),
       locator: chunk.locator || null,
       kind: chunk.chunk_kind || "knowledge_summary",
       excerpt: (chunk.content || "").slice(0, 500),

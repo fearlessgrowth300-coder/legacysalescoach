@@ -22,7 +22,7 @@ export function parseExternalBrainInput(value: unknown): ExternalBrainInput {
   if (input.conversation !== undefined && (!Array.isArray(input.conversation) || input.conversation.length > MAX_TURNS)) {
     throw new Error(`conversation must contain at most ${MAX_TURNS} messages`);
   }
-  const conversation = (input.conversation || []).map((turn: unknown) => {
+  const conversation = ((input.conversation as unknown[] | undefined) || []).map((turn: unknown) => {
     if (!turn || typeof turn !== "object") throw new Error("Invalid conversation message");
     const row = turn as Record<string, unknown>;
     if ((row.role !== "prospect" && row.role !== "agent") || typeof row.content !== "string" ||
@@ -86,5 +86,27 @@ export function parseSituation(text: string, fallback: Situation): Situation {
     };
   } catch {
     return fallback;
+  }
+}
+
+/** What the source is, from knowledge_base_items.type + url ("url" covers videos and web pages). */
+export function sourceKind(type: string | null | undefined, url?: string | null): "pdf" | "video" | "web_page" | "other" {
+  if (type === "pdf") return "pdf";
+  if (type === "url" || url) return /youtu\.?be|tiktok\.com|vimeo\.com|instagram\.com\/(?:reel|p)\//i.test(String(url || "")) ? "video" : "web_page";
+  return "other";
+}
+
+/** Link to the source; for a YouTube passage with a "HH:MM:SS-..." locator, jump to that moment. */
+export function sourceLink(url: string | null | undefined, locator?: string | null): string | null {
+  if (!url) return null;
+  const start = String(locator || "").match(/^\s*(?:(\d+):)?(\d{1,2}):(\d{2})\b/);
+  if (!start) return url;
+  try {
+    const link = new URL(url);
+    if (!/(^|\.)youtube\.com$|(^|\.)youtu\.be$/i.test(link.hostname)) return url;
+    link.searchParams.set("t", `${Number(start[1] || 0) * 3600 + Number(start[2]) * 60 + Number(start[3])}s`);
+    return link.toString();
+  } catch {
+    return url;
   }
 }

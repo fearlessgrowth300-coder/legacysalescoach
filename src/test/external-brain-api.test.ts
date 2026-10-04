@@ -34,3 +34,20 @@ describe("external Sales Brain request", () => {
     expect(parseSituation("not json", fallback)).toBe(fallback);
   });
 });
+
+import { sourceKind, sourceLink } from "../../supabase/functions/_shared/external-brain";
+
+describe("source pointers", () => {
+  it("links a video passage to its exact moment (real stored locator)", () => {
+    expect(sourceLink("https://youtu.be/vFsMKg9kck0?si=GFTMMCJnB0aawxUF", "01:34:35-01:37:21"))
+      .toBe("https://youtu.be/vFsMKg9kck0?si=GFTMMCJnB0aawxUF&t=5675s");
+    expect(sourceLink("https://www.youtube.com/watch?v=abc", "02:05-03:10")).toBe("https://www.youtube.com/watch?v=abc&t=125s");
+  });
+  it("leaves PDFs, pages and non-YouTube links alone", () => {
+    expect(sourceLink(null, "Pages 122-126")).toBeNull();
+    expect(sourceLink("https://example.com/post", "01:00:00")).toBe("https://example.com/post");
+    expect(sourceKind("pdf")).toBe("pdf");
+    expect(sourceKind("url", "https://youtu.be/x")).toBe("video");
+    expect(sourceKind("url", "https://blog.example.com/a")).toBe("web_page");
+  });
+});
