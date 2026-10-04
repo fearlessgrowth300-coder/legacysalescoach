@@ -29,7 +29,6 @@ import {
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
   deterministicFriendQualityIssues,
-  friendStalledSetIssue,
   formatFriendKnowledgeApplicationContract,
   hydrateFriendKnowledgeApplication,
   prioritizeFriendDirectQuestion,
@@ -1141,15 +1140,7 @@ ${winningPatternsText.substring(0, 2000)}`;
         variant?.message || "", friendStageResult.stage, analysisJson, history,
         variant, friendKnowledgeContract,
       );
-      // Per-variant checks cannot see that all three replies close the topic;
-      // charge that set-level stall to the primary variant so repair fixes it.
-      const withStallCheck = (picked: { candidates: any[]; issues: string[][] }) => {
-        const stall = friendStalledSetIssue(
-          picked.candidates.map((variant: any) => variant?.message || ""), friendStageResult.checkpoint, history,
-        );
-        return stall ? { ...picked, issues: picked.issues.map((list, i) => i === 0 ? [...list, stall] : list) } : picked;
-      };
-      let selected = withStallCheck(selectBestFriendCandidates(originalVariants, [], issuesForVariant));
+      let selected = selectBestFriendCandidates(originalVariants, [], issuesForVariant);
       let candidateVariants = selected.candidates;
       let candidateIssuesByIndex = selected.issues;
       let candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
@@ -1175,7 +1166,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           const repaired = (Array.isArray(repairJson.variants) ? repairJson.variants : [])
             .map((variant: any) => hydrateFriendKnowledgeApplication(variant, friendKnowledgeContract));
           if (repaired.length !== 3) throw new Error("Compact Friend repair returned an incomplete variant set");
-          selected = withStallCheck(selectBestFriendCandidates(candidateVariants, repaired, issuesForVariant));
+          selected = selectBestFriendCandidates(candidateVariants, repaired, issuesForVariant);
           if (selected.issues.flat().length < candidateIssuesByIndex.flat().length) {
             candidateVariants = selected.candidates;
             candidateIssuesByIndex = selected.issues;
@@ -1188,12 +1179,6 @@ ${winningPatternsText.substring(0, 2000)}`;
           console.warn("[generate-reply] Compact Friend repair unavailable:", repairError instanceof Error ? repairError.message : repairError);
         }
       }
-      // A stalled-but-valid set is worth one repair, never a generic fallback.
-      candidateIssuesByIndex = candidateIssuesByIndex.map((issues) =>
-        issues.filter((issue) => !issue.startsWith("no variant keeps the conversation going")));
-      candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
-        issues.map((issue) => `variant ${index + 1}: ${issue}`)
-      );
       const useDeterministicFallback = candidateIssues.length > 0;
       if (useDeterministicFallback) {
         const fallbackMessages = buildDeterministicFriendFallbackMessages(

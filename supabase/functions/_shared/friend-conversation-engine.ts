@@ -907,31 +907,6 @@ export function deterministicFriendQualityIssues(
   return issues;
 }
 
-/**
- * Set-level check: per-variant checks cannot see that ALL three replies close
- * the topic (e.g. "love that you found a rhythm"), which stalls the exchange
- * while the stage checkpoint is still open. Returns an issue for the primary
- * variant, or null. Stays silent when a question would be wrong: the prospect
- * is disengaging, or our last two messages were already questions.
- */
-export function friendStalledSetIssue(
-  messages: string[],
-  checkpoint: FriendFunnelCheckpoint | null | undefined,
-  conversation: FriendConversationMessage[] = [],
-): string | null {
-  if (!checkpoint || checkpoint === "complete" || checkpoint === "handoff_acceptance") return null;
-  if (messages.some((message) => String(message || "").includes("?"))) return null;
-  const turns = (direction: string) => conversation
-    .filter((turn) => turn.direction === direction && String(turn.content || "").trim())
-    .slice(-2).map((turn) => String(turn.content || ""));
-  const inbound = turns("inbound");
-  const disengaging = inbound.some((turn) => /\b(?:not interested|no thanks|don't contact|do not contact|leave me alone|stop|not buying)\b/i.test(turn))
-    || (inbound.length >= 2 && inbound.every((turn) => turn.trim().split(/\s+/).length <= 3));
-  const outbound = turns("outbound");
-  if (disengaging || (outbound.length === 2 && outbound.every((turn) => turn.includes("?")))) return null;
-  return `no variant keeps the conversation going: after answering, end this reply with one light, curious friend question that moves toward "${checkpoint}" (${knowledgeObjective(checkpoint)}) — not a sales question`;
-}
-
 /** Keep a valid generated variant even when another variant (or the validator) fails. */
 export function selectBestFriendCandidates<T>(
   original: T[],
