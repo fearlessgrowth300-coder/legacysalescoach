@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  friendHardDecline,
   friendHygieneIssues,
-  friendNoPitchReasons,
-  friendSellerEvidence,
+  friendObjections,
   isSoftFriendIssue,
   rankOpenerPrinciples,
   sentLineSet,
@@ -30,39 +30,6 @@ describe("Friend conversation hygiene", () => {
     expect(friendHygieneIssues(long, convo).some((i) => i.startsWith("too long"))).toBe(true);
   });
 
-  it("stops the pitch after a real no, and treats it as strict", () => {
-    const convo = [{ direction: "inbound", content: "I'm working with a mentor currently but that's great it is working for you!" }];
-    const issues = friendHygieneIssues("Love that! I actually found a mentor who rebuilt my funnel, want the link?", convo);
-    const pitch = issues.find((i) => i.startsWith("pitches after"));
-    expect(pitch).toContain("already has a mentor");
-    expect(isSoftFriendIssue(pitch!)).toBe(false);
-    expect(friendHygieneIssues("That's so good to hear, having support makes such a difference 💜", convo).some((i) => i.startsWith("pitches"))).toBe(false);
-  });
-
-  it("reads real no-signals", () => {
-    expect(friendNoPitchReasons(["I dnt have the funds right now"])).toContain("has no funds");
-    expect(friendNoPitchReasons(["It sounds like this might be more for MLM content creators"])).toContain("is worried it is MLM or a scam");
-    expect(friendNoPitchReasons(["Not yet😊 I'm not really pushing for sales with this page right now."])).toContain("is not focused on selling");
-    expect(friendNoPitchReasons(["No sales yet, I keep posting reels but nothing"])).toEqual([]);
-  });
-
-  it("flags sellers but not stuck beginners", () => {
-    expect(friendSellerEvidence(["But I'm a digital marketer too like you so I got other pages where I post n guide people through that too"])).toBeTruthy();
-    expect(friendSellerEvidence(["I'm already earning from my travel business and residually from the network marketing side."])).toBeTruthy();
-    expect(friendSellerEvidence(["I bought DWA but have no sales yet and I'm overwhelmed by the modules"])).toBeNull();
-  });
-
-  it("flags sellers from their bio before the first DM (real bios)", () => {
-    expect(friendSellerEvidence(["🚀MAMA turning naptime into income Helping New Digital Marketers build Faceless income online 3figure in 7 weeks 🎁 Grab My Free Guide below ↓"])).toBeTruthy();
-    expect(friendSellerEvidence(["Digital creator | This mum is building wealth 💛 Faceless digital marketing 💰0-$499 on day 12 ✨ DM INFO For mums who wants more"])).toBeTruthy();
-    expect(friendSellerEvidence(["Building my second shift after 9-5 💛✨ Getting unstuck & helping YOU do the same. Better messaging • Less guessing"])).toBeTruthy();
-    expect(friendSellerEvidence(["Mom of 3 | learning digital marketing | coffee lover ☕ | 0 sales but not giving up"])).toBeNull();
-  });
-
-  it("flags the 2026-10-04 'remote.freedom.sally' bio", () => {
-    expect(friendSellerEvidence(["Helping busy people work smarter remotely 💜⬇️⬇️⬇️"])).toBeTruthy();
-  });
-
   it("prefers opener teachings and rotates away from the always-locked principle", () => {
     const pool = [
       { id: "cf", principle_name: "Conversational Fluidity over Script Adherence" },
@@ -74,5 +41,26 @@ describe("Friend conversation hygiene", () => {
     // "op" was locked on the last 3 openers -> the other opener principle gets a turn
     expect(rankOpenerPrinciples(pool, { op: 3 })[0].id).toBe("ally");
     expect(rankOpenerPrinciples([pool[0], pool[1]], { cf: 5 })[0].id).toBe("gap");
+  });
+
+  it("treats mentor / new / try-alone / afraid / fine / no-funds as objections to handle, not refusals", () => {
+    const said = (text: string) => friendObjections([text]).map((o) => o.objection);
+    expect(said("I'm working with a mentor currently but that's great it is working for you!")).toContain("has a mentor");
+    expect(said("I'm still new to all of this")).toContain("is new");
+    expect(said("I want to try it myself first")).toContain("wants to try it alone first");
+    expect(said("It sounds like this might be more for MLM content creators")).toContain("is afraid or has been burned");
+    expect(said("Not yet😊 I'm not really pushing for sales with this page right now.")).toContain("says they are fine");
+    expect(said("I dnt have the funds right now")).toContain("has no funds right now");
+    expect(friendHardDecline(["I'm working with a mentor currently"])).toBe(false);
+  });
+
+  it("only an explicit refusal blocks the pitch (strict)", () => {
+    const mentor = [{ direction: "inbound", content: "I'm working with a mentor currently" }];
+    const pitch = "Love that! The team that rebuilt my funnel does a free audit, want the link?";
+    expect(friendHygieneIssues(pitch, mentor).some((i) => i.startsWith("pitches"))).toBe(false);
+    const refused = [{ direction: "inbound", content: "Not interested, please stop messaging me" }];
+    const issue = friendHygieneIssues(pitch, refused).find((i) => i.startsWith("pitches"));
+    expect(issue).toBeTruthy();
+    expect(isSoftFriendIssue(issue!)).toBe(false);
   });
 });

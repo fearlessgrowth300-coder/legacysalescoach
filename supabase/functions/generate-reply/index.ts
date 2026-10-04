@@ -30,7 +30,7 @@ import {
   deriveEvidenceGatedFriendStage,
   deterministicFriendQualityIssues,
   friendHygieneIssues,
-  friendNoPitchReasons,
+  friendObjections,
   isSoftFriendIssue,
   sentLineSet,
   formatFriendKnowledgeApplicationContract,
@@ -929,8 +929,7 @@ FRAMEWORK SELECTION:
 - A natural peer response may use no formal framework. One message has one objective and at most one optional question.
 - Do not ask a question if your previous message already asked one: react, relate, or share one of Brianna's approved stories instead.
 - Keep it about as long as the prospect's last message (never a wall of text). Write every line fresh; never reuse stock probe lines.
-- If the prospect has said they have a mentor, are not focused on selling, have no funds, worry it is MLM/a scam, or already teach/sell in this niche, stay a friendly peer: no mentor, team, link, audit, or call.${friendNoPitchReasons(history.filter((turn: any) => turn.direction === "inbound").slice(-3).map((turn: any) => String(turn.content || ""))).length ? `
-- THIS PROSPECT HAS SIGNALED NO-PITCH: ${friendNoPitchReasons(history.filter((turn: any) => turn.direction === "inbound").slice(-3).map((turn: any) => String(turn.content || ""))).join("; ")}.` : ""}
+- A stated objection (has a mentor, is new, wants to try alone first, is afraid or burned, says they are fine, has no funds) is NOT a refusal: handle it honestly, one step at a time, using Brianna's real story and the retrieved objection-handling lessons. Never argue, never push past the same objection twice. Only an explicit refusal (not interested, stop messaging me, leave me alone) ends the pitch.${friendObjections(history.filter((turn: any) => turn.direction === "inbound").slice(-3).map((turn: any) => String(turn.content || ""))).length ? `\n- THIS PROSPECT'S OBJECTIONS AND HOW TO HANDLE THEM:\n${friendObjections(history.filter((turn: any) => turn.direction === "inbound").slice(-3).map((turn: any) => String(turn.content || ""))).map((o) => `  - ${o.objection}: ${o.approach}`).join("\n")}` : ""}
 
 REPLY-ACT RULES:
 - relate: recognize the specific experience and create common ground.
@@ -1169,7 +1168,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           const repairResponse = await userChat(chat, {
             model: chat.models.fast,
             messages: [
-              { role: "system", content: "Return ONLY valid JSON with exactly three objects in variants. Rewrite each Friend reply so it is short, natural, grounded in the stated prospect fact, applies the selected lesson, asks at most one question (none if our previous message asked one), does not repeat a previous question or reuse a stock line, stays about as long as the prospect's message, and drops any pitch when the prospect signaled no. Do not add claims, pressure, or a pitch." },
+              { role: "system", content: "Return ONLY valid JSON with exactly three objects in variants. Rewrite each Friend reply so it is short, natural, grounded in the stated prospect fact, applies the selected lesson, asks at most one question (none if our previous message asked one), does not repeat a previous question or reuse a stock line, stays about as long as the prospect's message, handles any stated objection honestly instead of pushing past it, and drops the pitch only after an explicit refusal. Do not add claims, pressure, or a pitch." },
               { role: "user", content: JSON.stringify({ stage: friendStageResult.stage, checkpoint: friendStageResult.checkpoint, prospect_fact: friendKnowledgeContract?.prospectFact, selected_principle: friendKnowledgeContract?.principleName, selected_source: friendKnowledgeContract?.sourceName, selected_lesson: friendKnowledgeContract?.lesson || friendKnowledgeContract?.howToApply, latest_message: message, issues: candidateIssues, drafts: candidateVariants }) },
             ],
             temperature: 0.25,

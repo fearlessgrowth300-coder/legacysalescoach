@@ -915,37 +915,37 @@ export function deterministicFriendQualityIssues(
 export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for"];
 export const isSoftFriendIssue = (issue: string) => FRIEND_SOFT_ISSUE_PREFIXES.some((prefix) => issue.startsWith(prefix));
 
-const NO_PITCH_SIGNALS: Array<[RegExp, string]> = [
-  [/\b(?:have|got|working with|found|with)\s+(?:a|my)\s+(?:mentor|coach)\b|\bmy (?:mentor|coach)\b/i, "already has a mentor"],
-  [/\bnot\s+(?:really\s+)?(?:pushing\s+(?:for\s+)?sales|selling|looking to buy)\b/i, "is not focused on selling"],
-  [/\b(?:don'?t|dnt|do not)\s+have\s+(?:the\s+)?(?:funds|money)\b|\bcan'?t\s+afford\b|\bno\s+(?:funds|money)\b|\bbroke\b/i, "has no funds"],
-  [/\b(?:mlm|pyramid|scam)\b/i, "is worried it is MLM or a scam"],
-];
-const SELLER_SIGNAL = new RegExp([
-  // what they say in chat
-  String.raw`\b(?:i'?m|i am)\s+(?:also\s+)?a\s+digital\s+marketer\b`, String.raw`\bdigital\s+marketer\s+too\b`,
-  String.raw`\bmy\s+(?:students|clients|mentees)\b`, String.raw`\bi\s+(?:teach|coach|mentor|guide)\s+(?:people|women|moms|mums|others)\b`,
-  String.raw`\bguide\s+people\s+through\b`, String.raw`\bnetwork\s+marketing\b`,
-  // what their bio says
-  String.raw`\bhelping\s+(?:\w+\s+){0,2}?(?:you|new|other|others|people|women|moms|mums|mamas|beginners|creators|families)\b[^\n]{0,60}?\b(?:income|online|digital|faceless|marketers?|business|remote(?:ly)?|from home|earn\w*|money)\b`,
-  String.raw`\bhelping\s+you\s+do\s+the\s+same\b`, String.raw`\bDM\s+(?:me\s+)?["“']?(?:info|start|guide|yes)\b`, String.raw`\b(?:grab|get)\s+my\s+free\s+(?:guide|roadmap|training|course)\b`,
-].join("|"), "i");
+// The audience is marketers reselling MRR/digital products who are not making
+// sales yet. "I have a mentor", "I'm new", "I want to try it myself", "I'm
+// afraid", "I'm fine", "no funds" are objections to handle honestly (Brianna
+// had each one herself), not refusals. Only an explicit refusal ends the pitch.
+const HARD_DECLINE = /\b(?:not interested|no thanks|don'?t contact|do not contact|leave me alone|stop (?:messaging|texting|dming|contacting)|please stop|not buying)\b/i;
 const PITCH_WORDS = /\b(?:mentor|the team|legacy falcons|audit|program|book a call|hop on a call|link|someone who (?:helped|fixed|rebuilt)|rebuil[dt]|set ?up (?:fee|requirement)s?)\b/i;
+const OBJECTION_PLAYBOOK: Array<[RegExp, string, string]> = [
+  [/\b(?:have|got|working with|found|with)\s+(?:a|my)\s+(?:mentor|coach)\b|\bmy (?:mentor|coach)\b/i, "has a mentor",
+    "Respect the mentor and never criticize them. Ask what results they are actually seeing so far; offer the team only as a second pair of eyes on the funnel, alongside the mentor."],
+  [/\b(?:i'?m|i am|still)\s+(?:so\s+)?(?:new|a beginner|just starting)\b|\bjust started\b/i, "is new",
+    "Normalize it with Brianna's real start (she was new too). Suggest one small first step; no overwhelm, no hard pitch yet."],
+  [/\b(?:try|figure|do)\s+(?:it|this|things)\s+(?:out\s+)?(?:by\s+)?my\s*self\b|\bmyself first\b|\bon my own\b/i, "wants to try it alone first",
+    "Respect it. Share that Brianna tried alone first too; offer the quick audit so their own effort goes into the right thing."],
+  [/\b(?:afraid|scared|nervous|burn(?:ed|t)|scam(?:med)?|mlm|pyramid|don'?t trust)\b/i, "is afraid or has been burned",
+    "Acknowledge the fear honestly without defending. Be transparent about who the team is and offer the free 10-15 min audit with nothing to pay up front."],
+  [/\bnot (?:really )?(?:pushing|focused on) (?:for )?sales\b|\bdon'?t need (?:any )?help\b|\b(?:i'?m|doing) (?:good|fine|okay) (?:with|on) (?:my|it)\b/i, "says they are fine",
+    "Gently check reality without arguing: is 'fine' meaning sales, or mostly views and engagement? Let them name the gap in their own words."],
+  [/\b(?:don'?t|dnt|do not)\s+have\s+(?:the\s+)?(?:funds|money)\b|\bcan'?t\s+afford\b|\bno\s+(?:funds|money)\b|\bbroke\b/i, "has no funds right now",
+    "No pressure and never ask for money in this message. Lead with value and the free audit."],
+];
 
-/** Prospect text that shows they teach or sell in this same niche. */
-export function friendSellerEvidence(inbound: string[]): string | null {
-  for (const text of inbound) {
-    const match = String(text || "").match(SELLER_SIGNAL);
-    if (match) return match[0];
-  }
-  return null;
+/** True only for an explicit refusal; this is the one signal that ends the pitch. */
+export function friendHardDecline(inbound: string[]): boolean {
+  return inbound.some((text) => HARD_DECLINE.test(String(text || "")));
 }
 
-/** Reasons the prospect has given that mean: stay a friend, do not pitch. */
-export function friendNoPitchReasons(inbound: string[]): string[] {
-  const reasons = NO_PITCH_SIGNALS.filter(([pattern]) => inbound.some((text) => pattern.test(String(text || "")))).map(([, reason]) => reason);
-  if (friendSellerEvidence(inbound)) reasons.push("already teaches or sells in this niche");
-  return reasons;
+/** Objections in the prospect's recent messages, each with Brianna's honest way through it. */
+export function friendObjections(inbound: string[]): Array<{ objection: string; approach: string }> {
+  return OBJECTION_PLAYBOOK
+    .filter(([pattern]) => inbound.some((text) => pattern.test(String(text || ""))))
+    .map(([, objection, approach]) => ({ objection, approach }));
 }
 
 const normalizeLine = (line: string) => line.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -978,9 +978,8 @@ export function friendHygieneIssues(
   const latestInbound = recentInbound[recentInbound.length - 1] || "";
   const limit = Math.max(180, Math.round(latestInbound.length * 1.2));
   if (message.length > limit) issues.push(`too long for this chat (${message.length} chars, keep under ${limit}); match their length`);
-  const noPitch = friendNoPitchReasons(recentInbound);
-  if (noPitch.length && PITCH_WORDS.test(message)) {
-    issues.push(`pitches after the prospect signaled no (${noPitch.join("; ")}); stay a friendly peer and drop the mentor/team/link`);
+  if (friendHardDecline(recentInbound) && PITCH_WORDS.test(message)) {
+    issues.push("pitches after the prospect explicitly declined; respect it and drop the mentor/team/link");
   }
   return issues;
 }
