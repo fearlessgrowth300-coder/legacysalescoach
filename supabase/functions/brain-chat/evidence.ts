@@ -31,21 +31,22 @@ APPLICATION: ${clip(p.how_to_apply, 220)}
 WHY: ${clip(p.the_deep_why, 120)}
 USE WHEN: ${clip(p.when_to_use, 120)}
 AVOID WHEN: ${clip(p.when_not_to_use, 140)}
-EXAMPLE (not the user's personal experience): ${clip(p.real_example_or_story || p.exact_words_to_use, 160)}`;
+EXACT WORDS FROM SOURCE: ${clip(p.exact_words_to_use, 280) || "(none)"}
+EXAMPLE (not the user's personal experience): ${clip(p.real_example_or_story, 160) || "(none)"}`;
 }
 
 export function buildBrainEvidencePack(input: {
   selected: SelectedPrinciple[]; evidence_principles: Principle[]; supporting_chunks: Chunk[];
 }) {
   const selected = pack(input.selected, s =>
-    principleText(s.full, s.source_title || s.full.source_title || s.full.source_name), 5000);
+    principleText(s.full, s.source_title || s.full.source_title || s.full.source_name), 6500);
   const evidence = pack(input.evidence_principles, p =>
     principleText(p, p.source_title || p.source_name), 3600);
   const chunks = pack(input.supporting_chunks, c => `PASSAGE ID: ${c.id}
 SOURCE: "${c.source_title || "Uploaded content"}"
 LOCATION: ${clip(c.locator || "Not provided", 140)}
 TYPE: ${c.chunk_kind === "source_passage" ? "Original source excerpt" : "Extracted summary"}
-TEXT: ${clip(c.content, 950)}`, 6000);
+TEXT: ${clip(c.content, 1600)}`, 9000);
   return {
     selected: selected.included, evidence_principles: evidence.included, supporting_chunks: chunks.included,
     selectedBlock: selected.text, evidenceBlock: evidence.text, chunksBlock: chunks.text,

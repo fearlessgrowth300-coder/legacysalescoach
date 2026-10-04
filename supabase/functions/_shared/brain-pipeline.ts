@@ -7,7 +7,7 @@
 // the shared user-ai helper — NO Lovable-AI fallback.
 
 import { generateEmbedding } from "./embeddings.ts";
-import { deduplicatePrinciples, deduplicateChunks, mergeByIdPriority } from "./dedup.ts";
+import { deduplicatePrinciples, deduplicateChunks, mergeByIdPriority, collapseSimilarPrincipleNames } from "./dedup.ts";
 import type { UserChatTarget } from "./user-ai.ts";
 
 
@@ -1122,8 +1122,11 @@ export async function runPipelineFast(opts: {
     const powerBoost = clamp(power - 5, 0, 5) * 2; // +0 (avg) … +10 (10/10)
     return clamp(base + powerBoost + (p._explicit_source ? 45 : 0), 0, 100);
   };
-  const scored = semP.map((p) => ({ p, score: scoreOf(p) }))
+  const ranked = semP.map((p) => ({ p, score: scoreOf(p) }))
     .sort((a, b) => b.score - a.score);
+  // Collapse renamed copies of the same idea from one source (best score wins).
+  const distinctIds = new Set(collapseSimilarPrincipleNames(ranked.map((r) => r.p)).map((p) => p.id));
+  const scored = ranked.filter((r) => distinctIds.has(r.p.id));
 
   // Relevance-first ordering with a SOFT source cap. We keep the strongest-fitting
   // principles in score order; a single source may contribute up to SOFT_SOURCE_CAP

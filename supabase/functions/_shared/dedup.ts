@@ -137,3 +137,38 @@ export function mergeByIdPriority<T extends { id?: string }>(
 
   return merged;
 }
+
+const NAME_STOP_WORDS = new Set(["the", "a", "an", "of", "for", "and", "to", "in", "on", "vs", "with", "your", "my"]);
+
+/** Content words of a principle name, lightly stemmed ("Identity Forking" -> identity, fork). */
+export function principleNameTokens(name: string): string[] {
+  return [...new Set(String(name || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
+    .filter((word) => word && !NAME_STOP_WORDS.has(word))
+    .map((word) => word.length > 5 && word.endsWith("ing") ? word.slice(0, -3) : word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word))];
+}
+
+/** Same idea, different wording: equal token sets, or one name contained in the other with 2+ shared words. */
+export function principleNamesMatch(a: string, b: string): boolean {
+  const ta = principleNameTokens(a), tb = principleNameTokens(b);
+  if (!ta.length || !tb.length) return false;
+  const shared = ta.filter((t) => tb.includes(t)).length;
+  if (shared === ta.length && shared === tb.length) return true;
+  return shared >= 2 && (shared === ta.length || shared === tb.length);
+}
+
+/**
+ * Extraction often produces many renamed copies of one idea from the same
+ * source ("Identity Labeling", "Identity Labeling for Conversion", ...), which
+ * crowd other books out of the context. Keep the best-scoring one per source.
+ * Non-destructive: only affects which rows reach the model. Expects best-first order.
+ */
+export function collapseSimilarPrincipleNames<T extends { principle_name?: string; source_id?: string | null; source_name?: string | null }>(items: T[]): T[] {
+  const kept: T[] = [];
+  for (const item of items) {
+    const source = item.source_id || item.source_name || "";
+    const duplicate = kept.some((k) => (k.source_id || k.source_name || "") === source &&
+      principleNamesMatch(k.principle_name || "", item.principle_name || ""));
+    if (!duplicate) kept.push(item);
+  }
+  return kept;
+}

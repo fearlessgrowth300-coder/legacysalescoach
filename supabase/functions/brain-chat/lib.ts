@@ -1,3 +1,4 @@
+import { principleNameTokens, principleNamesMatch } from "../_shared/dedup.ts";
 export function isAllowedBrainChatOrigin(origin: string, configuredOrigins: string[] = []): boolean {
   return origin.endsWith(".lovable.app") ||
     origin.endsWith(".lovableproject.com") ||
@@ -68,10 +69,23 @@ export function imageAnalysisShowsConversation(analysis: string): boolean {
 
 export function responseMentionsUnknownSources(content: string, allowedTitles: string[]): string[] {
   const allowed = new Set(allowedTitles.map((title) => title.trim().toLowerCase()).filter(Boolean));
-  const found = [...String(content || "").matchAll(/\(Source:\s*["“]([^"”]+)["”](?:,\s*Chapter\s+[^)]+)?\)/gi)]
+  // Allow Markdown emphasis around the title: (Source: *"Title"*) slipped past this check.
+  const found = [...String(content || "").matchAll(/\(Source:\s*[*_]*["“]([^"”]+)["”][*_]*(?:,\s*Chapter\s+[^)]+)?\)/gi)]
     .map((match) => match[1].trim())
     .filter((title) => title && !allowed.has(title.toLowerCase()));
   return [...new Set(found)];
+}
+
+/**
+ * Principle names the answer attributes to a source ("**Name** (Source: ...)")
+ * that match no retrieved principle. Catches blended or invented names like
+ * "Downsell / Payment Anchor Framing". Slash-joined names are checked per part.
+ */
+export function responseCitesUnknownPrinciples(content: string, retrievedNames: string[]): string[] {
+  const cited = [...String(content || "").matchAll(/\*\*([^*\n]{3,120})\*\*\s*\(Source:/gi)].map((m) => m[1].trim());
+  const unknown = cited.filter((name) => name.split(/\s*\/\s*/).some((part) =>
+    principleNameTokens(part).length > 0 && !retrievedNames.some((known) => principleNamesMatch(part, known))));
+  return [...new Set(unknown)];
 }
 
 /** Checks the worked-example presentation, not whether the advice is true. */

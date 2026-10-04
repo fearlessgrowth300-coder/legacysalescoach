@@ -17,6 +17,7 @@ import {
   isAllowedBrainChatOrigin,
   isSimpleBrainChatSmallTalk,
   responseMentionsUnknownSources,
+  responseCitesUnknownPrinciples,
   simpleBrainChatResponse,
   type BrainChatIntent,
 } from "./lib.ts";
@@ -88,6 +89,7 @@ async function validateGroundedBrainResponse(args: {
   userRequest: string;
   draft: string;
   allowedSourceTitles: string[];
+  allowedPrincipleNames: string[];
   requestedSourceTitles: string[];
   evidencePack: string;
   durableMemory: string;
@@ -95,10 +97,11 @@ async function validateGroundedBrainResponse(args: {
   decisionHistory: string;
   decisionFlags: string[];
 }): Promise<{ response: string; repaired: boolean; issues: string[]; mode: "model"; resolvedIssues: string[] }> {
-  const { chat, intent, userRequest, draft, allowedSourceTitles, requestedSourceTitles, evidencePack, durableMemory, recentContext, decisionHistory, decisionFlags } = args;
+  const { chat, intent, userRequest, draft, allowedSourceTitles, allowedPrincipleNames, requestedSourceTitles, evidencePack, durableMemory, recentContext, decisionHistory, decisionFlags } = args;
   // Every provider gets the same evidence check. Never mark an unchecked draft
   // as validated when the provider has no quota for source verification.
   const unknownSources = responseMentionsUnknownSources(draft, allowedSourceTitles);
+  const unknownPrinciples = responseCitesUnknownPrinciples(draft, allowedPrincipleNames);
   const draftStructureIssues = intent === "conversation_coaching" ? conversationCoachingStructureIssues(draft) : [];
   const prompt = `You are the final grounding and answer-quality validator for a Knowledge-Base-powered AI Chat.
 
@@ -113,7 +116,7 @@ VERIFIED USER-NAMED SOURCES PRESENT IN THE VAULT:
 ${requestedSourceTitles.map((title) => `- ${title}`).join("\n") || "- none"}
 
 RETRIEVED EVIDENCE:
-${clampText(evidencePack, 9000)}
+${clampText(evidencePack, 16000)}
 
 DURABLE CONVERSATION MEMORY:
 ${clampText(durableMemory, 2400)}
@@ -132,13 +135,14 @@ ${clampText(draft, 11000)}
 
 KNOWN DETERMINISTIC ISSUES:
 ${unknownSources.length ? `The draft names unapproved sources: ${unknownSources.join(", ")}` : "none"}
+${unknownPrinciples.length ? `The draft cites principle names that were not retrieved (renamed, merged, or invented): ${unknownPrinciples.join(", ")}. Use the exact retrieved PRINCIPLE names or drop the attribution.` : ""}
 ${draftStructureIssues.length ? `The draft lacks the requested worked-example structure: ${draftStructureIssues.join(", ")}` : ""}
 
 Validate all of these:
 1. It answers every material part of the user's latest request.
 2. Its structure matches REQUEST MODE. Only conversation_coaching may force buyer psychology or a copy-paste sales reply.
 3. Every named source is in ALLOWED SOURCE TITLES.
-4. Every attributed teaching is supported by RETRIEVED EVIDENCE.
+4. Every attributed teaching is supported by RETRIEVED EVIDENCE: each cited principle name exists there exactly, its application respects that principle's USE WHEN / AVOID WHEN conditions, and any quote attributed to a source appears in its EXACT WORDS or excerpt.
 5. Buyer/client facts agree with memory or visible request; no invented facts, payments, results, guarantees, relationships, or promises.
 6. It distinguishes weak evidence from certainty.
 7. It is concise enough for the request and does not expose hidden reasoning.
@@ -166,7 +170,10 @@ or
     if (!response.ok) throw new Error(`validator_http_${response.status}`);
     const data = await response.json();
     const raw = String(data.choices?.[0]?.message?.content || "").trim();
-    const verdict = readGroundingVerdict(raw, draft, text => responseMentionsUnknownSources(text, allowedSourceTitles));
+    const verdict = readGroundingVerdict(raw, draft, text => [
+      ...responseMentionsUnknownSources(text, allowedSourceTitles),
+      ...responseCitesUnknownPrinciples(text, allowedPrincipleNames),
+    ]);
     return { ...verdict, mode: "model", resolvedIssues: verdict.resolvedIssues || [] };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown_validator_error";
@@ -400,7 +407,7 @@ ${responseMode}
 
 ${BRAIN_PERSONA}
 
-For this AI Chat, the persona sets the tone, not the facts. Directness never means claiming to know an unspoken motive or promising a result. Do not imitate a source's distinctive wording; apply its verified teaching in your own words.
+For this AI Chat, the persona sets the tone, not the facts. Directness never means claiming to know an unspoken motive or promising a result. Apply each source's teaching faithfully, under the conditions it states — never stretch it to a situation its USE WHEN/AVOID WHEN rules out (for example, a small refundable deposit is not license for a non-refundable fee).
 
 Use the vault as your primary evidence. Retrieve only the material relevant to this exact request; do not dump every source or force unrelated sales advice. Original passages are evidence. Structured principles, techniques, psychology, examples, and graph relationships are your reasoning tools.
 
@@ -417,7 +424,9 @@ SOURCE RULES:
 - If the user names a source listed under VERIFIED USER-NAMED SOURCES, answer from that source first. Never claim it is missing from the vault. If its retrieved passages do not support the precise question, say that narrower limitation instead.
 - Never require a fixed number of sources, never fabricate citations, and never add a source dump at the end.
 - If the vault does not support a claim strongly, say what is uncertain instead of pretending.
-- Do not expose source passages as long quotes. Summarize and apply them.
+- When you cite a principle, show what the source actually says: one short verbatim quote (under 30 words) from its EXACT WORDS FROM SOURCE or an original source excerpt, e.g. The source says: "…". Never paste long passages.
+- Name principles exactly as retrieved (PRINCIPLE: field). Do not rename, merge two into one, or invent a principle name.
+- In a script, adapt the source's exact words when they fit the moment instead of inventing new lines.
 
 CONVERSATION-COACHING RULES (only in that mode):
 - Follow RESPONSE MODE's diagnostic narrative -> applied Sales Brain teaching -> strategy -> script -> phrase-level rationale -> Brain's Advice. These are not five generic fields to fill. Use Markdown headings, bold key ideas, and a visibly separate script so the user can scan and copy it as in a skilled coach's worked example.
@@ -1220,6 +1229,10 @@ serve(async (req) => {
             userRequest: hasImageAttachment ? `${userInstruction}\n\n${conversationText}` : (lastUserText || retrievalQuery),
             draft: clampText(draft, VALIDATION_DRAFT_CHAR_LIMIT),
             allowedSourceTitles: sourceTitles,
+            allowedPrincipleNames: [
+              ...pipeline.selected.map((s: any) => s.principle_name || s.full?.principle_name),
+              ...pipeline.evidence_principles.map((p: any) => p.principle_name),
+            ].filter(Boolean),
             requestedSourceTitles: pipeline.debug.requested_source_titles || [],
             evidencePack: evidencePack.text,
             durableMemory: durableMemoryText,
