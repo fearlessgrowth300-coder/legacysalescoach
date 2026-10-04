@@ -29,6 +29,10 @@ import {
   buildFriendStageDirective,
   deriveEvidenceGatedFriendStage,
   deterministicFriendQualityIssues,
+  friendHygieneIssues,
+  friendNoPitchReasons,
+  isSoftFriendIssue,
+  sentLineSet,
   formatFriendKnowledgeApplicationContract,
   hydrateFriendKnowledgeApplication,
   prioritizeFriendDirectQuestion,
@@ -923,6 +927,10 @@ FRAMEWORK SELECTION:
 - Add a second technique only when it materially improves the reply.
 - Never stack frameworks merely to sound sophisticated.
 - A natural peer response may use no formal framework. One message has one objective and at most one optional question.
+- Do not ask a question if your previous message already asked one: react, relate, or share one of Brianna's approved stories instead.
+- Keep it about as long as the prospect's last message (never a wall of text). Write every line fresh; never reuse stock probe lines.
+- If the prospect has said they have a mentor, are not focused on selling, have no funds, worry it is MLM/a scam, or already teach/sell in this niche, stay a friendly peer: no mentor, team, link, audit, or call.${friendNoPitchReasons(history.filter((turn: any) => turn.direction === "inbound").slice(-3).map((turn: any) => String(turn.content || ""))).length ? `
+- THIS PROSPECT HAS SIGNALED NO-PITCH: ${friendNoPitchReasons(history.filter((turn: any) => turn.direction === "inbound").slice(-3).map((turn: any) => String(turn.content || ""))).join("; ")}.` : ""}
 
 REPLY-ACT RULES:
 - relate: recognize the specific experience and create common ground.
@@ -1136,10 +1144,20 @@ ${winningPatternsText.substring(0, 2000)}`;
 
       // Keep a locally valid source-grounded draft. If any non-negotiable
       // check fails, attempt a single compact rewrite and check it again.
-      const issuesForVariant = (variant: any) => deterministicFriendQualityIssues(
-        variant?.message || "", friendStageResult.stage, analysisJson, history,
-        variant, friendKnowledgeContract,
-      );
+      // Lines already sent to other prospects: identical probes went to up to 14 people.
+      const { data: sentElsewhere } = await supabase.from("chat_messages")
+        .select("content")
+        .eq("user_id", user.id).eq("thread_type", "friend").eq("direction", "outbound")
+        .neq("prospect_id", prospectId)
+        .order("created_at", { ascending: false }).limit(400);
+      const sentLines = sentLineSet((sentElsewhere || []).map((row: any) => String(row.content || "")));
+      const issuesForVariant = (variant: any) => [
+        ...deterministicFriendQualityIssues(
+          variant?.message || "", friendStageResult.stage, analysisJson, history,
+          variant, friendKnowledgeContract,
+        ),
+        ...friendHygieneIssues(variant?.message || "", history, sentLines),
+      ];
       let selected = selectBestFriendCandidates(originalVariants, [], issuesForVariant);
       let candidateVariants = selected.candidates;
       let candidateIssuesByIndex = selected.issues;
@@ -1151,7 +1169,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           const repairResponse = await userChat(chat, {
             model: chat.models.fast,
             messages: [
-              { role: "system", content: "Return ONLY valid JSON with exactly three objects in variants. Rewrite each Friend reply so it is short, natural, grounded in the stated prospect fact, applies the selected lesson, asks at most one question, and does not repeat a previous question. Do not add claims, pressure, or a pitch." },
+              { role: "system", content: "Return ONLY valid JSON with exactly three objects in variants. Rewrite each Friend reply so it is short, natural, grounded in the stated prospect fact, applies the selected lesson, asks at most one question (none if our previous message asked one), does not repeat a previous question or reuse a stock line, stays about as long as the prospect's message, and drops any pitch when the prospect signaled no. Do not add claims, pressure, or a pitch." },
               { role: "user", content: JSON.stringify({ stage: friendStageResult.stage, checkpoint: friendStageResult.checkpoint, prospect_fact: friendKnowledgeContract?.prospectFact, selected_principle: friendKnowledgeContract?.principleName, selected_source: friendKnowledgeContract?.sourceName, selected_lesson: friendKnowledgeContract?.lesson || friendKnowledgeContract?.howToApply, latest_message: message, issues: candidateIssues, drafts: candidateVariants }) },
             ],
             temperature: 0.25,
@@ -1179,6 +1197,12 @@ ${winningPatternsText.substring(0, 2000)}`;
           console.warn("[generate-reply] Compact Friend repair unavailable:", repairError instanceof Error ? repairError.message : repairError);
         }
       }
+      // Style issues (reused line, back-to-back question, length) earn one rewrite,
+      // never a swap to the generic fallback.
+      candidateIssuesByIndex = candidateIssuesByIndex.map((issues) => issues.filter((issue) => !isSoftFriendIssue(issue)));
+      candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
+        issues.map((issue) => `variant ${index + 1}: ${issue}`)
+      );
       const useDeterministicFallback = candidateIssues.length > 0;
       if (useDeterministicFallback) {
         const fallbackMessages = buildDeterministicFriendFallbackMessages(

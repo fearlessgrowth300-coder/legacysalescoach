@@ -907,6 +907,76 @@ export function deterministicFriendQualityIssues(
   return issues;
 }
 
+// ---- Conversation hygiene (from a review of all 276 Friend conversations:
+// 95% ended on our unanswered message, 93% of our messages asked a question,
+// identical probe lines went to up to 14 people, and "no" signals were pushed past).
+
+/** Issues that deserve one AI rewrite but must never swap a valid reply for the generic fallback. */
+export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for"];
+export const isSoftFriendIssue = (issue: string) => FRIEND_SOFT_ISSUE_PREFIXES.some((prefix) => issue.startsWith(prefix));
+
+const NO_PITCH_SIGNALS: Array<[RegExp, string]> = [
+  [/\b(?:have|got|working with|found|with)\s+(?:a|my)\s+(?:mentor|coach)\b|\bmy (?:mentor|coach)\b/i, "already has a mentor"],
+  [/\bnot\s+(?:really\s+)?(?:pushing\s+(?:for\s+)?sales|selling|looking to buy)\b/i, "is not focused on selling"],
+  [/\b(?:don'?t|dnt|do not)\s+have\s+(?:the\s+)?(?:funds|money)\b|\bcan'?t\s+afford\b|\bno\s+(?:funds|money)\b|\bbroke\b/i, "has no funds"],
+  [/\b(?:mlm|pyramid|scam)\b/i, "is worried it is MLM or a scam"],
+];
+const SELLER_SIGNAL = /\b(?:i'?m|i am)\s+(?:also\s+)?a\s+digital\s+marketer\b|\bdigital\s+marketer\s+too\b|\bmy\s+(?:students|clients|mentees)\b|\bi\s+(?:teach|coach|mentor|guide)\s+(?:people|women|moms|mums|others)\b|\bguide\s+people\s+through\b|\bnetwork\s+marketing\b/i;
+const PITCH_WORDS = /\b(?:mentor|the team|legacy falcons|audit|program|book a call|hop on a call|link|someone who (?:helped|fixed|rebuilt)|rebuil[dt]|set ?up (?:fee|requirement)s?)\b/i;
+
+/** Prospect text that shows they teach or sell in this same niche. */
+export function friendSellerEvidence(inbound: string[]): string | null {
+  for (const text of inbound) {
+    const match = String(text || "").match(SELLER_SIGNAL);
+    if (match) return match[0];
+  }
+  return null;
+}
+
+/** Reasons the prospect has given that mean: stay a friend, do not pitch. */
+export function friendNoPitchReasons(inbound: string[]): string[] {
+  const reasons = NO_PITCH_SIGNALS.filter(([pattern]) => inbound.some((text) => pattern.test(String(text || "")))).map(([, reason]) => reason);
+  if (friendSellerEvidence(inbound)) reasons.push("already teaches or sells in this niche");
+  return reasons;
+}
+
+const normalizeLine = (line: string) => line.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+
+/** Normalized sentences (35+ chars) from messages already sent to OTHER prospects. */
+export function sentLineSet(outboundElsewhere: string[]): Set<string> {
+  const lines = new Set<string>();
+  for (const message of outboundElsewhere) {
+    for (const sentence of String(message || "").split(/(?<=[.!?])\s+/)) {
+      const line = normalizeLine(sentence);
+      if (line.length >= 35) lines.add(line);
+    }
+  }
+  return lines;
+}
+
+export function friendHygieneIssues(
+  message: string,
+  conversation: FriendConversationMessage[],
+  sentLines: Set<string> = new Set(),
+): string[] {
+  const issues: string[] = [];
+  const reused = String(message || "").split(/(?<=[.!?])\s+/).map(normalizeLine).find((line) => line.length >= 35 && sentLines.has(line));
+  if (reused) issues.push(`reuses a line already sent to other prospects ("${reused.slice(0, 80)}"); write it fresh for this person`);
+  const lastOutbound = [...conversation].reverse().find((turn) => turn.direction === "outbound" && String(turn.content || "").trim())?.content || "";
+  if (message.includes("?") && String(lastOutbound).includes("?")) {
+    issues.push("asks again right after our last question; share something from Brianna's approved stories or react to what they said instead");
+  }
+  const recentInbound = conversation.filter((turn) => turn.direction === "inbound").slice(-3).map((turn) => String(turn.content || ""));
+  const latestInbound = recentInbound[recentInbound.length - 1] || "";
+  const limit = Math.max(180, Math.round(latestInbound.length * 1.2));
+  if (message.length > limit) issues.push(`too long for this chat (${message.length} chars, keep under ${limit}); match their length`);
+  const noPitch = friendNoPitchReasons(recentInbound);
+  if (noPitch.length && PITCH_WORDS.test(message)) {
+    issues.push(`pitches after the prospect signaled no (${noPitch.join("; ")}); stay a friendly peer and drop the mentor/team/link`);
+  }
+  return issues;
+}
+
 /** Keep a valid generated variant even when another variant (or the validator) fails. */
 export function selectBestFriendCandidates<T>(
   original: T[],

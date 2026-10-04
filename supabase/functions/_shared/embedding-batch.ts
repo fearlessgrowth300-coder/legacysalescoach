@@ -7,12 +7,14 @@ import type { UserEmbedTarget } from "./user-ai.ts";
 // (Mixing OpenAI + Gemini vectors made semantic search return noise.)
 export const LOCAL_EMBED_MODEL = "embeddinggemma-300m";
 export function localEmbedTarget(): UserEmbedTarget | null {
-  const url = Deno.env.get("LOCAL_EMBED_URL");
+  // Deno only exists in Edge Functions; unit tests import this module under Node.
+  const env = (globalThis as { Deno?: { env: { get(key: string): string | undefined } } }).Deno?.env;
+  const url = env?.get("LOCAL_EMBED_URL");
   if (!url) return null;
   return {
     provider: "local",
     url,
-    headers: { Authorization: `Bearer ${Deno.env.get("LOCAL_EMBED_TOKEN") || ""}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${env?.get("LOCAL_EMBED_TOKEN") || ""}`, "Content-Type": "application/json" },
     model: LOCAL_EMBED_MODEL,
     dimensions: 768,
   };

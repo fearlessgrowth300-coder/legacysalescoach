@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { friendSellerEvidence } from "../../supabase/functions/_shared/friend-conversation-engine";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -261,6 +262,10 @@ export default function Chats() {
     },
     enabled: !!selectedProspectId,
   });
+  // People who already teach/sell in this niche rarely buy; flag them so effort goes to "no sales yet" prospects.
+  const sellerEvidence = useMemo(() => currentThreadType === "friend"
+    ? friendSellerEvidence((messages || []).filter((m) => m.direction === "inbound").map((m) => m.content || ""))
+    : null, [messages, currentThreadType]);
 
   // Fetch selected prospect directly (handles TikTok prospects not in sidebar)
   const { data: selectedProspectData } = useQuery({
@@ -1844,7 +1849,14 @@ export default function Chats() {
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 min-w-0">
-                <h3 className="font-medium text-sm md:text-base truncate">{selectedProspect?.name}</h3>
+                <h3 className="font-medium text-sm md:text-base truncate flex items-center gap-2">
+                  <span className="truncate">{selectedProspect?.name}</span>
+                  {sellerEvidence && (
+                    <Badge variant="outline" className="shrink-0 border-amber-500 text-amber-600" title={`They said: "${sellerEvidence}" — they already teach or sell in this niche, so they are unlikely to buy. The AI will stay friendly and not pitch.`}>
+                      Already sells this
+                    </Badge>
+                  )}
+                </h3>
                 <p className="text-xs text-muted-foreground truncate">
                   {isMobile
                     ? ((selectedProspect as any)?.platform === "tiktok"
