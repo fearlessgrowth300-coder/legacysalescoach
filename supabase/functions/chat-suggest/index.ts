@@ -43,6 +43,7 @@ import {
   friendStageToDatabase,
   selectRelevantConversationPassages,
   rankOpenerPrinciples,
+  cleanConversationExamples,
 } from "../_shared/friend-conversation-engine.ts";
 
 
@@ -273,7 +274,7 @@ function buildFriendModeInstructions(workspace: any, brainChunks?: string, perso
   const keyThemes = embeddedPersona.key_themes || niche;
   const instagramBio = personaApproved ? String(storedPersona.instagram_bio || "").trim() : "";
   const behaviorGuidelines = personaApproved ? String(storedPersona.behavior_guidelines || "").trim() : "";
-  const conversationExamples = personaApproved ? String(storedPersona.conversation_examples || "").trim() : "";
+  const conversationExamples = personaApproved ? cleanConversationExamples(String(storedPersona.conversation_examples || "")) : "";
   const strategyName = personaApproved ? String(storedPersona.strategy_name || "").trim() : "";
   const strategyWebsite = personaApproved ? String(storedPersona.strategy_website || "").trim() : "";
   const strategyDescription = personaApproved ? String(storedPersona.strategy_description || "").trim() : "";
@@ -813,7 +814,7 @@ serve(async (req) => {
       ? workspaceForPrompt.friend_persona as Record<string, any>
       : {};
     const approvedConversationExamples = activeThreadType === "friend"
-      ? String(approvedPersonaForPrompt.conversation_examples || "").trim()
+      ? cleanConversationExamples(String(approvedPersonaForPrompt.conversation_examples || ""))
       : "";
 
     // Get ALL conversation history for summarization

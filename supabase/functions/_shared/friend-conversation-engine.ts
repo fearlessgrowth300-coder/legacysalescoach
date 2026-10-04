@@ -936,6 +936,21 @@ const OBJECTION_PLAYBOOK: Array<[RegExp, string, string]> = [
     "No pressure and never ask for money in this message. Lead with value and the free audit."],
 ];
 
+// Lines from real past conversations that stop being true when reused in a new
+// chat: urgency about a profile link "expiring", and earnings tied to a past day
+// ("yesterday my total earnings amounted to $30,545.97").
+const STALE_CLAIM = /\blink\s+(?:will|is going to|might|may)\s+expire\b|\b(?:yesterday|today|this morning|last night)\b[^.!?\n]{0,80}\$\s?\d/i;
+
+/** Owner-provided example conversations, minus lines the AI must not copy into new chats. */
+export function cleanConversationExamples(examples: string): string {
+  return String(examples || "")
+    .split(/(?<=[.!?])\s+|\n/)
+    .filter((piece) => !STALE_CLAIM.test(piece))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /** True only for an explicit refusal; this is the one signal that ends the pitch. */
 export function friendHardDecline(inbound: string[]): boolean {
   return inbound.some((text) => HARD_DECLINE.test(String(text || "")));
@@ -978,6 +993,9 @@ export function friendHygieneIssues(
   const latestInbound = recentInbound[recentInbound.length - 1] || "";
   const limit = Math.max(180, Math.round(latestInbound.length * 1.2));
   if (message.length > limit) issues.push(`too long for this chat (${message.length} chars, keep under ${limit}); match their length`);
+  if (STALE_CLAIM.test(message)) {
+    issues.push("repeats a claim that is no longer true in a new chat (an expiring link or earnings from 'yesterday'); drop the urgency and use only current, provable results");
+  }
   if (friendHardDecline(recentInbound) && PITCH_WORDS.test(message)) {
     issues.push("pitches after the prospect explicitly declined; respect it and drop the mentor/team/link");
   }

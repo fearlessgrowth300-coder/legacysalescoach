@@ -39,6 +39,7 @@ import {
   selectBestFriendCandidates,
   friendStageToDatabase,
   selectRelevantConversationPassages,
+  cleanConversationExamples,
 } from "../_shared/friend-conversation-engine.ts";
 
 
@@ -479,7 +480,7 @@ serve(async (req) => {
       ? workspace.approved_stories.slice(0, 12)
       : [];
     const approvedConversationExamples = friendPersonaApproved
-      ? String(approvedFriendPersona.conversation_examples || "").trim()
+      ? cleanConversationExamples(String(approvedFriendPersona.conversation_examples || ""))
       : "";
     const approvedProofText = friendPersonaApproved && (approvedProofAssets || []).length > 0
       ? (approvedProofAssets || []).map((proof: any) =>
