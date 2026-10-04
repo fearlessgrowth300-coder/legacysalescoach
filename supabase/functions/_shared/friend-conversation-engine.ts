@@ -927,7 +927,7 @@ const SELLER_SIGNAL = new RegExp([
   String.raw`\bmy\s+(?:students|clients|mentees)\b`, String.raw`\bi\s+(?:teach|coach|mentor|guide)\s+(?:people|women|moms|mums|others)\b`,
   String.raw`\bguide\s+people\s+through\b`, String.raw`\bnetwork\s+marketing\b`,
   // what their bio says
-  String.raw`\bhelping\s+(?:you|new|other|women|moms|mums|mamas|beginners)\b[^\n]{0,60}?\b(?:income|online|digital|faceless|marketers?|business)\b`,
+  String.raw`\bhelping\s+(?:\w+\s+){0,2}?(?:you|new|other|others|people|women|moms|mums|mamas|beginners|creators|families)\b[^\n]{0,60}?\b(?:income|online|digital|faceless|marketers?|business|remote(?:ly)?|from home|earn\w*|money)\b`,
   String.raw`\bhelping\s+you\s+do\s+the\s+same\b`, String.raw`\bDM\s+(?:me\s+)?["“']?(?:info|start|guide|yes)\b`, String.raw`\b(?:grab|get)\s+my\s+free\s+(?:guide|roadmap|training|course)\b`,
 ].join("|"), "i");
 const PITCH_WORDS = /\b(?:mentor|the team|legacy falcons|audit|program|book a call|hop on a call|link|someone who (?:helped|fixed|rebuilt)|rebuil[dt]|set ?up (?:fee|requirement)s?)\b/i;
@@ -983,6 +983,28 @@ export function friendHygieneIssues(
     issues.push(`pitches after the prospect signaled no (${noPitch.join("; ")}); stay a friendly peer and drop the mentor/team/link`);
   }
   return issues;
+}
+
+const OPENER_CRAFT = /\b(?:opener|opening|first (?:message|dm|touch|contact)|cold (?:dm|message|outreach)|outreach|prospecting|pattern interrupt|hook|curiosity|ice ?breaker|rapport)\b/i;
+
+/**
+ * First messages: prefer principles about opening a conversation, and rotate
+ * away from principles locked on recent openers. Without this, the one
+ * principle that once got replies ("Conversational Fluidity…") was locked onto
+ * every new opener, so no other teaching was ever tried. Stable otherwise.
+ */
+export function rankOpenerPrinciples<T extends { id?: string; principle_name?: string | null; when_to_use?: string | null; what_i_learned?: string | null }>(
+  principles: T[],
+  recentOpenerUse: Record<string, number> = {},
+): T[] {
+  return principles
+    .map((principle, index) => {
+      const text = `${principle.principle_name || ""} ${principle.when_to_use || ""} ${principle.what_i_learned || ""}`;
+      const score = -index + (OPENER_CRAFT.test(text) ? 10 : 0) - 6 * (recentOpenerUse[principle.id || ""] || 0);
+      return { principle, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.principle);
 }
 
 /** Keep a valid generated variant even when another variant (or the validator) fails. */

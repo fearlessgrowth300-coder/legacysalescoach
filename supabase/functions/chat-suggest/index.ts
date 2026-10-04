@@ -42,6 +42,7 @@ import {
   selectBestFriendCandidates,
   friendStageToDatabase,
   selectRelevantConversationPassages,
+  rankOpenerPrinciples,
 } from "../_shared/friend-conversation-engine.ts";
 
 
@@ -1390,6 +1391,28 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
         paths: [...decisionGraphTraversal.paths, ...selectedGraphContext.paths],
         nodeByPrinciple: selectedGraphContext.nodeByPrinciple,
       };
+    }
+    if (activeThreadType === "friend" && mode === "first_message") {
+      // Bring the vault's opener teachings into the pool, then prefer them and
+      // rotate away from principles locked on the last 10 openers.
+      const [{ data: openerHits }, { data: recentOpeners }] = await Promise.all([
+        supabase.rpc("search_sales_knowledge", {
+          search_query: "opener OR opening OR outreach OR prospecting OR hook OR curiosity OR icebreaker OR rapport",
+          p_user_id: user.id, match_count: 40,
+        }),
+        supabase.from("sales_decisions").select("selected_sales_brain_id")
+          .eq("user_id", user.id).eq("thread_type", "friend")
+          .contains("score_breakdown", { mode: "first_message" })
+          .order("created_at", { ascending: false }).limit(10),
+      ]);
+      const openerPrinciples = (openerHits || [])
+        .filter((hit: any) => hit.kind === "principle" && hit.record?.source_type === "sales_principle")
+        .map((hit: any) => hit.record).slice(0, 8);
+      const recentUse: Record<string, number> = {};
+      for (const row of recentOpeners || []) {
+        if (row.selected_sales_brain_id) recentUse[row.selected_sales_brain_id] = (recentUse[row.selected_sales_brain_id] || 0) + 1;
+      }
+      topPrinciples = rankOpenerPrinciples(mergeByIdPriority(topPrinciples, openerPrinciples), recentUse).slice(0, principlesCap);
     }
     const lockedFriendPrinciple = activeThreadType === "friend" ? topPrinciples[0] || null : null;
     const lockedFriendSource = lockedFriendPrinciple

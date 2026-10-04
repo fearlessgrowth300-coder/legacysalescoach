@@ -4,6 +4,7 @@ import {
   friendNoPitchReasons,
   friendSellerEvidence,
   isSoftFriendIssue,
+  rankOpenerPrinciples,
   sentLineSet,
 } from "../../supabase/functions/_shared/friend-conversation-engine";
 
@@ -56,5 +57,22 @@ describe("Friend conversation hygiene", () => {
     expect(friendSellerEvidence(["Digital creator | This mum is building wealth 💛 Faceless digital marketing 💰0-$499 on day 12 ✨ DM INFO For mums who wants more"])).toBeTruthy();
     expect(friendSellerEvidence(["Building my second shift after 9-5 💛✨ Getting unstuck & helping YOU do the same. Better messaging • Less guessing"])).toBeTruthy();
     expect(friendSellerEvidence(["Mom of 3 | learning digital marketing | coffee lover ☕ | 0 sales but not giving up"])).toBeNull();
+  });
+
+  it("flags the 2026-10-04 'remote.freedom.sally' bio", () => {
+    expect(friendSellerEvidence(["Helping busy people work smarter remotely 💜⬇️⬇️⬇️"])).toBeTruthy();
+  });
+
+  it("prefers opener teachings and rotates away from the always-locked principle", () => {
+    const pool = [
+      { id: "cf", principle_name: "Conversational Fluidity over Script Adherence" },
+      { id: "gap", principle_name: "The Gap Analysis Framework" },
+      { id: "op", principle_name: "The 'Main Intent' Setter Opener" },
+      { id: "ally", principle_name: "The Ally, Not Attacker Opening" },
+    ];
+    expect(rankOpenerPrinciples(pool)[0].id).toBe("op");
+    // "op" was locked on the last 3 openers -> the other opener principle gets a turn
+    expect(rankOpenerPrinciples(pool, { op: 3 })[0].id).toBe("ally");
+    expect(rankOpenerPrinciples([pool[0], pool[1]], { cf: 5 })[0].id).toBe("gap");
   });
 });
