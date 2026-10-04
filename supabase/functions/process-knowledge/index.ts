@@ -20,12 +20,23 @@ function chatTarget(ai: AiProvider, gatewayModel: string): { url: string; header
   }
   const tier: "fast" | "balanced" | "reasoning" =
     gatewayModel.includes("flash-lite") ? "fast" : gatewayModel.includes("gemini-3") ? "reasoning" : "balanced";
+  // Gemini auth ("AQ." keys) needs x-goog-api-key; user-ai.ts already sends both.
+  const key = ai.key.replace(/^Bearer\s+/i, "").trim();
   return {
     url: ai.chatUrl,
-    headers: { Authorization: `Bearer ${ai.key}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${key}`,
+      ...(ai.name === "gemini" ? { "x-goog-api-key": key } : {}),
+      "Content-Type": "application/json",
+    },
     model: ai.model(tier),
   };
 }
+
+// Last provider rejection seen during insight extraction, surfaced on the item
+// so a failed upload says why ("HTTP 401: API key not valid") instead of
+// "AI returned no structured insights".
+let lastExtractionProviderError = "";
 import { extractPdfBytes, looksScanned, ocrPdfWithVision } from "./pdf-extract.ts";
 
 const defaultCorsHeaders = {
@@ -236,6 +247,7 @@ Return a single JSON object with this exact shape: { "principles": [ ...principl
     if (!response.ok) {
       const errBody = await response.text().catch(() => "");
       console.error("Structured learnings API error:", response.status, errBody.substring(0, 500));
+      lastExtractionProviderError = `HTTP ${response.status}: ${errBody.replace(/\s+/g, " ").substring(0, 240)}`;
       return [];
     }
 
@@ -1868,6 +1880,7 @@ serve(async (req) => {
       book_brief: { ...previousBrief, insight_extraction: activeProgress },
     }).eq("id", itemId);
 
+    lastExtractionProviderError = "";
     const batchResults = await Promise.all(batch.windows.map((window, offset) =>
       extractStructuredLearningsChunk(
         window,
@@ -1884,7 +1897,8 @@ serve(async (req) => {
     );
 
     if (learnings.length === 0) {
-      const message = `AI returned no structured insights for source windows ${batch.cursor + 1}-${batch.nextCursor}.`;
+      const message = `AI returned no structured insights for source windows ${batch.cursor + 1}-${batch.nextCursor}.`
+        + (lastExtractionProviderError ? ` AI provider said: ${lastExtractionProviderError}` : "");
       console.error(`${message} Item ${itemId} was left retryable instead of silently marked ready.`);
       await supabase.from("knowledge_base_items").update({
         status: "error",
