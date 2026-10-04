@@ -262,10 +262,6 @@ export default function Chats() {
     },
     enabled: !!selectedProspectId,
   });
-  // People who already teach/sell in this niche rarely buy; flag them so effort goes to "no sales yet" prospects.
-  const sellerEvidence = useMemo(() => currentThreadType === "friend"
-    ? friendSellerEvidence((messages || []).filter((m) => m.direction === "inbound").map((m) => m.content || ""))
-    : null, [messages, currentThreadType]);
 
   // Fetch selected prospect directly (handles TikTok prospects not in sidebar)
   const { data: selectedProspectData } = useQuery({
@@ -282,6 +278,14 @@ export default function Chats() {
     enabled: !!selectedProspectId,
   });
   const selectedProspect = selectedProspectData || prospects?.find((p) => p.id === selectedProspectId);
+  // People who already teach/sell in this niche rarely buy; flag them (from bio or
+  // their messages) so openers and effort go to "no sales yet" prospects.
+  const sellerEvidence = useMemo(() => currentThreadType === "friend"
+    ? friendSellerEvidence([
+      String(selectedProspect?.detected_interests || ""),
+      ...(messages || []).filter((m) => m.direction === "inbound").map((m) => m.content || ""),
+    ])
+    : null, [messages, currentThreadType, selectedProspect?.detected_interests]);
 
   const refreshSelectedProspectAvatar = useCallback(async () => {
     if (!selectedProspectId || !selectedProspect || !activeWorkspace?.id || !user?.id) return;

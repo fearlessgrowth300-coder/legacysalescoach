@@ -50,4 +50,11 @@ describe("Friend conversation hygiene", () => {
     expect(friendSellerEvidence(["I'm already earning from my travel business and residually from the network marketing side."])).toBeTruthy();
     expect(friendSellerEvidence(["I bought DWA but have no sales yet and I'm overwhelmed by the modules"])).toBeNull();
   });
+
+  it("flags sellers from their bio before the first DM (real bios)", () => {
+    expect(friendSellerEvidence(["🚀MAMA turning naptime into income Helping New Digital Marketers build Faceless income online 3figure in 7 weeks 🎁 Grab My Free Guide below ↓"])).toBeTruthy();
+    expect(friendSellerEvidence(["Digital creator | This mum is building wealth 💛 Faceless digital marketing 💰0-$499 on day 12 ✨ DM INFO For mums who wants more"])).toBeTruthy();
+    expect(friendSellerEvidence(["Building my second shift after 9-5 💛✨ Getting unstuck & helping YOU do the same. Better messaging • Less guessing"])).toBeTruthy();
+    expect(friendSellerEvidence(["Mom of 3 | learning digital marketing | coffee lover ☕ | 0 sales but not giving up"])).toBeNull();
+  });
 });

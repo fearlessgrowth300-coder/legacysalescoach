@@ -943,7 +943,13 @@ serve(async (req) => {
       prospect.conversation_stage || "",
       prospect.instagram_username || "",
     ].filter(Boolean).join(" ");
-    const brainQuery = keepHeadAndLatest(`${message} ${screenshotContext} ${prospectProfile} ${last3Messages}`, 2400, 500);
+    // A first message has no conversation yet; searching only the prospect's
+    // topic (soccer trips, 9-5) found topic-matching principles, not opener
+    // craft. Lead with the task so prospecting/hook material ranks first.
+    const openerIntent = mode === "first_message"
+      ? "How to write a cold first DM that earns a reply: specific observation of their post, pattern interrupt, curiosity, rapport before any pitch, prospecting first touch. "
+      : "";
+    const brainQuery = keepHeadAndLatest(`${openerIntent}${message} ${screenshotContext} ${prospectProfile} ${last3Messages}`, 2400, 500);
 
     // Generate embedding for semantic search (runs in parallel with DB queries)
     const embeddingPromise = generateEmbedding(brainQuery.substring(0, 1000), supabase, user.id);

@@ -921,7 +921,15 @@ const NO_PITCH_SIGNALS: Array<[RegExp, string]> = [
   [/\b(?:don'?t|dnt|do not)\s+have\s+(?:the\s+)?(?:funds|money)\b|\bcan'?t\s+afford\b|\bno\s+(?:funds|money)\b|\bbroke\b/i, "has no funds"],
   [/\b(?:mlm|pyramid|scam)\b/i, "is worried it is MLM or a scam"],
 ];
-const SELLER_SIGNAL = /\b(?:i'?m|i am)\s+(?:also\s+)?a\s+digital\s+marketer\b|\bdigital\s+marketer\s+too\b|\bmy\s+(?:students|clients|mentees)\b|\bi\s+(?:teach|coach|mentor|guide)\s+(?:people|women|moms|mums|others)\b|\bguide\s+people\s+through\b|\bnetwork\s+marketing\b/i;
+const SELLER_SIGNAL = new RegExp([
+  // what they say in chat
+  String.raw`\b(?:i'?m|i am)\s+(?:also\s+)?a\s+digital\s+marketer\b`, String.raw`\bdigital\s+marketer\s+too\b`,
+  String.raw`\bmy\s+(?:students|clients|mentees)\b`, String.raw`\bi\s+(?:teach|coach|mentor|guide)\s+(?:people|women|moms|mums|others)\b`,
+  String.raw`\bguide\s+people\s+through\b`, String.raw`\bnetwork\s+marketing\b`,
+  // what their bio says
+  String.raw`\bhelping\s+(?:you|new|other|women|moms|mums|mamas|beginners)\b[^\n]{0,60}?\b(?:income|online|digital|faceless|marketers?|business)\b`,
+  String.raw`\bhelping\s+you\s+do\s+the\s+same\b`, String.raw`\bDM\s+(?:me\s+)?["“']?(?:info|start|guide|yes)\b`, String.raw`\b(?:grab|get)\s+my\s+free\s+(?:guide|roadmap|training|course)\b`,
+].join("|"), "i");
 const PITCH_WORDS = /\b(?:mentor|the team|legacy falcons|audit|program|book a call|hop on a call|link|someone who (?:helped|fixed|rebuilt)|rebuil[dt]|set ?up (?:fee|requirement)s?)\b/i;
 
 /** Prospect text that shows they teach or sell in this same niche. */
