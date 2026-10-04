@@ -36,7 +36,10 @@ export function selectFriendSourcePassage(
 export async function loadFriendSupportingPassage(
   supabase: any,
   userId: string,
-  principle: { id?: string; source_id?: string | null } | null | undefined,
+  principle: {
+    id?: string; source_id?: string | null; principle_name?: string | null;
+    what_i_learned?: string | null; how_to_apply?: string | null; exact_words_to_use?: string | null;
+  } | null | undefined,
   chunks: FriendKnowledgePassage[],
 ): Promise<string> {
   if (!principle?.source_id) return "";
@@ -68,7 +71,44 @@ export async function loadFriendSupportingPassage(
       console.warn("[friend-knowledge-search] linked evidence unavailable", error);
     }
   }
-  return String(selectFriendSourcePassage(chunks, principle.source_id)?.content || "");
+  // Links usually point at summary chunks, and the retrieved pool rarely holds
+  // an original passage from this exact source. Read the source's own
+  // passages and take the one sharing the most words with the lesson.
+  const retrieved = selectFriendSourcePassage(chunks, principle.source_id);
+  if (retrieved?.chunk_kind === "source_passage") return String(retrieved.content || "");
+  try {
+    const { data: passages } = await supabase.from("knowledge_chunks")
+      .select("content")
+      .eq("user_id", userId)
+      .eq("source_id", principle.source_id)
+      .eq("chunk_kind", "source_passage")
+      .limit(200);
+    const best = bestMatchingPassage((passages || []).map((p: { content?: string }) => String(p.content || "")),
+      [principle.principle_name, principle.what_i_learned, principle.how_to_apply, principle.exact_words_to_use].join(" "));
+    if (best) return best;
+  } catch (error) {
+    console.warn("[friend-knowledge-search] source passages unavailable", error);
+  }
+  // Summary-only sources: the extracted exact words are the closest thing to
+  // what the author said.
+  const exactWords = String(principle.exact_words_to_use || "").trim();
+  if (exactWords) return `Source's exact words: ${exactWords}`;
+  return String(retrieved?.content || "");
+}
+
+const PASSAGE_STOP_WORDS = new Set(["the", "and", "that", "this", "with", "you", "your", "for", "are", "they", "their", "what", "when", "have", "from", "will", "not", "but", "can", "about", "into", "just", "like", "them", "then", "than", "more", "who", "how", "why", "was", "were", "has", "had", "its", "our", "out", "all", "any"]);
+
+/** Passage sharing the most content words with the lesson; null when nothing overlaps. */
+export function bestMatchingPassage(passages: string[], lesson: string): string | null {
+  const words = (text: string) => new Set((text.toLowerCase().match(/[a-z]{3,}/g) || []).filter((w) => !PASSAGE_STOP_WORDS.has(w)));
+  const lessonWords = words(lesson);
+  let best: string | null = null, bestScore = 0;
+  for (const passage of passages) {
+    let score = 0;
+    for (const word of words(passage)) if (lessonWords.has(word)) score++;
+    if (score > bestScore) { best = passage; bestScore = score; }
+  }
+  return bestScore >= 3 ? best : null;
 }
 
 export function buildFriendLexicalQuery(
