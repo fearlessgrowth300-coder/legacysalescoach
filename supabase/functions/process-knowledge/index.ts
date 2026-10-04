@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { describeApiKey, getLatestUserApiKey, getAllUserApiKeys } from "../_shared/api-key-utils.ts";
 import { resolveAiProvider, aiEmbed, type AiProvider } from "../_shared/ai-provider.ts";
+import { embeddingModelTag } from "../_shared/embedding-batch.ts";
 import { shouldOmitGeminiSamplingParameters } from "../_shared/gemini-models.ts";
 import { extractSalesOntology, persistSalesKnowledgeGraph } from "../_shared/sales-superbrain.ts";
 
@@ -825,6 +826,7 @@ async function persistSourcePassages(
           ...passage.metadata,
           source_title: sourceName,
           source_index_version: SOURCE_INDEX_VERSION,
+          ...(embeddings[i] && embeddingModelTag() ? { embedding_model: embeddingModelTag() } : {}),
         },
       });
       if (!error) {
@@ -959,7 +961,10 @@ async function persistLearning(
     works_best_for: learning.works_best_for || null,
     connected_principles: learning.connected_principles || null,
     relevance_score: learning.power_level ? Number(learning.power_level) * 10 : 70,
-    metadata: { source: sourceName, chapter: learning._chapter || null },
+    metadata: {
+      source: sourceName, chapter: learning._chapter || null,
+      ...(embedding && embeddingModelTag() ? { embedding_model: embeddingModelTag() } : {}),
+    },
     embedding,
     workspace_id: null,
     knowledge_types: ontology.knowledgeTypes,

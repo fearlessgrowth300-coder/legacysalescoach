@@ -18,6 +18,12 @@ export function localEmbedTarget(): UserEmbedTarget | null {
   };
 }
 
+// metadata.embedding_model for rows embedded now, so Repair Search (reindex)
+// skips them. Same format backfill-embeddings writes. Only known for local.
+export function embeddingModelTag(): string | null {
+  return localEmbedTarget() ? `local:${LOCAL_EMBED_MODEL}:768` : null;
+}
+
 // Batch requests reduce quota consumption during resumable indexing. Keep row
 // positions stable and reject malformed vectors instead of silently saving them.
 // `kind` picks EmbeddingGemma's retrieval prompt: stored text is a "document",

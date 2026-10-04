@@ -27,7 +27,7 @@ const blankCourse = (): FriendCourse => ({ name: "", website: "", description: "
 const friendSetupErrorMessage = (error: any) => {
   const message = error?.message || String(error || "Friend setup failed");
   if (/schema cache|friend_persona_status|friend_setup_mode|workspace_proof_assets|workspace-proof/i.test(message)) {
-    return "Friend Setup needs its Lovable Cloud database upgrade. Apply the included Friend Persona migration, reload the schema, then try again.";
+    return "Friend Setup needs its database upgrade. Apply the included Friend Persona migration in Supabase, reload the schema, then try again.";
   }
   return message;
 };

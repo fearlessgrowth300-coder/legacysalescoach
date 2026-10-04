@@ -870,7 +870,7 @@ export default function KnowledgeBase() {
       });
       if (error || data?.error) throw new Error(data?.error || error?.message || "Insight extraction failed");
       if (Number(data?.pipelineVersion || 0) < 4 || data?.jobType !== "structured_insights") {
-        throw new Error("Lovable Cloud returned the legacy process-knowledge payload. Deploy Edge Function pipeline v4 (publishing the website alone does not update it).");
+        throw new Error("The server returned the legacy process-knowledge payload. Redeploy the process-knowledge Edge Function (publishing the website alone does not update it).");
       }
       return item.id;
     },

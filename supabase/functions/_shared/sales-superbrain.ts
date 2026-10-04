@@ -807,7 +807,7 @@ export async function loadKnowledgeGraphContext(
       to_type: nodeMap.get(edge.to_node_id)?.node_type || "concept",
       confidence: edge.confidence,
     }));
-    const text = paths.map((path) =>
+    const text = paths.map((path: any) =>
       `- ${path.from} --${path.relationship}--> ${path.to} [${path.to_type}; confidence ${path.confidence}]`
     ).join("\n");
     return { text: text || "(no graph paths)", paths, nodeByPrinciple };
