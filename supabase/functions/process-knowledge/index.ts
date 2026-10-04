@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { describeApiKey, getLatestUserApiKey, getAllUserApiKeys } from "../_shared/api-key-utils.ts";
 import { resolveAiProvider, aiEmbed, type AiProvider } from "../_shared/ai-provider.ts";
 import { embeddingModelTag } from "../_shared/embedding-batch.ts";
-import { shouldOmitGeminiSamplingParameters } from "../_shared/gemini-models.ts";
+import { GEMINI_VISION_FALLBACK_MODELS, shouldOmitGeminiSamplingParameters } from "../_shared/gemini-models.ts";
 import { extractSalesOntology, persistSalesKnowledgeGraph } from "../_shared/sales-superbrain.ts";
 
 function compatibleTemperature(ai: AiProvider, model: string, value: number): number | undefined {
@@ -109,11 +109,16 @@ async function extractStructuredLearningsChunk(
     const chunkLabel = totalChunks > 1 ? ` (Part ${chunkIndex + 1}/${totalChunks})` : "";
     const maxPrinciples = options.maxPrinciples ?? 12;
     const _t = chatTarget(ai, "google/gemini-2.5-flash");
-    const response = await fetch(_t.url, {
-      method: "POST",
-      headers: _t.headers,
-      body: JSON.stringify({
-        model: _t.model,
+    // Each Gemini model has its own free quota: on 429/503 try the next model
+    // instead of failing the upload (AI Chat's userChat already does this).
+    const models = ai.name === "gemini" ? [...new Set([_t.model, ...GEMINI_VISION_FALLBACK_MODELS])] : [_t.model];
+    let response!: Response;
+    for (const model of models) {
+      response = await fetch(_t.url, {
+        method: "POST",
+        headers: _t.headers,
+        body: JSON.stringify({
+        model,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -236,13 +241,17 @@ Return a single JSON object with this exact shape: { "principles": [ ...principl
             content: `Extract ALL learnings from this material titled "${sourceName}"${chunkLabel}:\n\n${content}`,
           },
         ],
-        temperature: compatibleTemperature(ai, _t.model, 0.3),
+        temperature: compatibleTemperature(ai, model, 0.3),
         // Keep output bounded so one difficult PDF chapter cannot outlive the
         // Edge background-task wall clock and leave the book stuck in extracting.
         max_tokens: options.maxTokens ?? 8000,
       }),
-      signal: AbortSignal.timeout(options.timeoutMs ?? 45000),
-    });
+        signal: AbortSignal.timeout(options.timeoutMs ?? 45000),
+      });
+      if (response.status !== 429 && response.status !== 503) break;
+      lastExtractionProviderError = `HTTP ${response.status} on ${model}: ${(await response.text().catch(() => "")).replace(/\s+/g, " ").substring(0, 200)}`;
+      console.warn("[process-knowledge] extraction model unavailable, trying next:", lastExtractionProviderError);
+    }
 
     if (!response.ok) {
       const errBody = await response.text().catch(() => "");
