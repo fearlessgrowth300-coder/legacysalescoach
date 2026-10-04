@@ -34,8 +34,9 @@ export async function embedBatch(
   if (!texts.length) return [];
   target = localEmbedTarget() || target;
   const local = target.provider === "local";
-  // EmbeddingGemma reads at most 2048 tokens; ~6000 chars keeps well under that.
-  const input = texts.map(text => text.trim().slice(0, local ? 6000 : 24000))
+  // EmbeddingGemma reads at most 2048 tokens. 6000 chars hit 2077 tokens on a real
+  // passage (that failed the whole batch); 4000 stays under even for dense text.
+  const input = texts.map(text => text.trim().slice(0, local ? 4000 : 24000))
     .map(text => !local || !text ? text
       : kind === "document" ? `title: none | text: ${text}` : `task: search result | query: ${text}`);
   if (input.some(text => !text)) throw new Error("Empty embedding input");
