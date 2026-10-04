@@ -194,10 +194,10 @@ var log_prospect_message_default = defineTool5({
 });
 
 // src/lib/mcp/index.ts
-var projectRef = "xbliaagchrfnhhwnnayo";
+var projectRef = "iyqwrgqyfsfqgqqhlbec";
 var mcp_default = defineMcp({
   name: "code-mirror-hub",
-  title: "Code Mirror Hub",
+  title: "Legacy Sales Coach",
   version: "0.1.0",
   instructions: "Tools for the user's AI sales coach workspace. Use `list_prospects` to find prospects, `get_prospect_thread` to read a conversation, `search_sales_brain` to pull the user's own extracted sales principles before advising, `list_knowledge_items` to check knowledge sources and extraction status, and `log_prospect_message` to append a message to a thread. All data is scoped to the signed-in user.",
   auth: auth.oauth.issuer({

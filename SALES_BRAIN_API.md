@@ -51,3 +51,13 @@ const context = await response.json();
 Keys expire after 90 days by default, allow up to 30 requests per minute, and can be revoked immediately. The endpoint rejects browser CORS intentionally so website owners keep their key server-side. Invalid/expired keys return 401, insufficient scope 403, rate limits 429 (`Retry-After: 60`), and provider/search outages 503. Requests are bounded to a current message of 8,000 characters and 12 prior turns of 2,000 characters each.
 
 Deployment requires migration `20260927010000_external_sales_brain_api.sql`, then deployment of `manage-sales-brain-access` and `sales-brain-api` with JWT verification disabled for these two functions. The API validates its own opaque key; the management function validates the signed-in Supabase user JWT. Do not use `supabase db push` against a migrated project until its older migration history is reconciled.
+
+## Connect an AI app (MCP)
+
+AI apps that support MCP connectors (Claude, ChatGPT, Cursor and others) can use the Sales Brain without an API key. Add a custom connector with this URL:
+
+`https://iyqwrgqyfsfqgqqhlbec.supabase.co/functions/v1/mcp`
+
+The app opens a Legacy Sales Coach sign-in and approval page; after you approve, it can call `search_sales_brain` (your extracted principles), `list_knowledge_items`, `list_prospects`, `get_prospect_thread` and `log_prospect_message`, always limited to your own account. Remove the app's access from the AI app's connector settings at any time.
+
+Use an API key (above) for your own servers and websites; use the MCP connector for AI chat apps.
