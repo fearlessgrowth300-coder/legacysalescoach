@@ -135,6 +135,15 @@ describe("Friend conversation hygiene", () => {
     expect(rankFriendPrinciplesForStage(pool, "logical_certainty", { cf: 3 })[0].id).toBe("rap");
   });
 
+  it("never locks a post-purchase lesson for a Friend prospect (2026-10-05 05:52 Katie)", () => {
+    const pool = [
+      { id: "pp", principle_name: "The Post-Purchase Review Solicitation Framework", category: "Follow Up", when_to_use: "Immediately after delivering a product or service to a customer." },
+      { id: "story", principle_name: "Personal Story Bridge" },
+    ];
+    expect(rankFriendPrinciplesForStage(pool, "emotional_certainty")[0].id).toBe("story");
+    expect(rankFriendPrinciplesForStage(pool, "intent")[0].id).toBe("story");
+  });
+
   it("puts a reply that asks back first when the prospect asked us (2026-10-05 04:39 set)", () => {
     const convo = [{ direction: "inbound", content: "I've made a few adjustments and use my time wisely. How is everything going for you?" }];
     const variants = [

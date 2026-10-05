@@ -1037,6 +1037,7 @@ export function rankOpenerPrinciples<T extends { id?: string; principle_name?: s
 }
 
 const EARLY_RAPPORT_FIT = /\b(?:rapport|trust|curiosity|curious|listen\w*|relat\w*|empath\w*|connect\w*|storytelling|personal stor(?:y|ies)|mirror\w*|label\w*|validat\w*|open(?:er|ing)?|first impression|likab\w*|common ground|genuine|compliment|warm|question\w*)\b/i;
+const POST_SALE = /\b(?:post-?purchase|after (?:delivering|the (?:sale|purchase)|(?:they|customers?) (?:buy|bought|purchase))|existing customers?|review solicitation|testimonial request|upsell\w*|onboarding|retention|repeat (?:buyers?|purchases?))\b/i;
 const LATE_ONLY = /\b(?:clos(?:e|ing)|price|pricing|cost|discount|payment|invest(?:ment)?|deposit|objection|urgency|scarcity|deal)\b/i;
 
 /**
@@ -1050,7 +1051,9 @@ export function rankFriendPrinciplesForStage<T extends { id?: string; principle_
 ): T[] {
   // Rotate away from lessons locked on recent Friend replies: one generic lesson
   // ("Conversational Fluidity…") that once earned replies was winning every turn.
-  const rotation = (principle: T) => -6 * (recentUse[principle.id || ""] || 0);
+  // Friend prospects haven't bought: "after delivering a product" lessons never fit.
+  const rotation = (principle: T) => -6 * (recentUse[principle.id || ""] || 0)
+    - (POST_SALE.test(`${principle.principle_name || ""} ${principle.category || ""} ${principle.when_to_use || ""}`) ? 30 : 0);
   if (stage !== "intent") {
     return principles.map((principle, index) => ({ principle, score: -index + rotation(principle) }))
       .sort((a, b) => b.score - a.score).map((entry) => entry.principle);
