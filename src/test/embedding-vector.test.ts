@@ -24,3 +24,15 @@ describe("coerceEmbeddingDimensions", () => {
     expect(coerceEmbeddingDimensions([...Array.from({ length: 767 }, () => 1), Number.NaN])).toBeNull();
   });
 });
+
+import { cosineSimilarity, isNearDuplicateVector, NEAR_DUPLICATE_SIMILARITY } from "../../supabase/functions/_shared/embedding-vector";
+
+describe("near-duplicate principles", () => {
+  it("skips renamed copies but keeps distinct ideas at the measured cut-off", () => {
+    expect(NEAR_DUPLICATE_SIMILARITY).toBe(0.85);
+    expect(cosineSimilarity([1, 0], [1, 0])).toBeCloseTo(1);
+    expect(isNearDuplicateVector([1, 0.3], [[1, 0.32]])).toBe(true);  // ~0.9998
+    expect(isNearDuplicateVector([1, 0], [[0.6, 0.8]])).toBe(false); // 0.6
+    expect(isNearDuplicateVector([1, 0], [])).toBe(false);
+  });
+});

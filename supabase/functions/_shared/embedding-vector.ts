@@ -17,3 +17,20 @@ export function coerceEmbeddingDimensions(
   if (!Number.isFinite(magnitude) || magnitude === 0) return null;
   return vector.map((item) => item / magnitude);
 }
+
+/**
+ * Near-duplicate cut-off for principles from ONE source (EmbeddingGemma).
+ * Measured on a real reel: renamed copies of one idea scored 0.866-0.886,
+ * genuinely different principles from the same source scored <= 0.823.
+ */
+export const NEAR_DUPLICATE_SIMILARITY = 0.85;
+
+export function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < Math.min(a.length, b.length); i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  return na && nb ? dot / Math.sqrt(na * nb) : 0;
+}
+
+export function isNearDuplicateVector(vector: number[], seen: number[][], threshold = NEAR_DUPLICATE_SIMILARITY): boolean {
+  return seen.some((other) => cosineSimilarity(vector, other) >= threshold);
+}

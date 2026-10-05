@@ -38,6 +38,7 @@ function chatTarget(ai: AiProvider, gatewayModel: string): { url: string; header
 // "AI returned no structured insights".
 let lastExtractionProviderError = "";
 import { extractPdfBytes, looksScanned, ocrPdfWithVision } from "./pdf-extract.ts";
+import { NEAR_DUPLICATE_SIMILARITY, isNearDuplicateVector } from "../_shared/embedding-vector.ts";
 
 const defaultCorsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -946,6 +947,7 @@ async function persistLearning(
   learning: any,
   ai: AiProvider,
   seenChunkContent: Set<string>,
+  seenPrincipleVectors: number[][] = [],
 ): Promise<any | null> {
   const principleName = (learning.principle_name || "Untitled Principle").trim();
   const embeddingText = [
@@ -959,6 +961,22 @@ async function persistLearning(
     learning.trigger_phrases,
   ].filter((s) => typeof s === "string" && s.trim().length > 0).join(" | ");
   const embedding = await generateEmbedding(embeddingText, ai);
+  // Extraction often returns renamed copies of one idea ("Non-Monetary
+  // Micro-Commitment Lock" / "Non-Price Micro-Commitment Lock"). Skip a principle
+  // that is near-identical to one already stored from THIS source (earlier
+  // windows: database; this batch: in memory - checked and recorded with no
+  // await in between, so parallel saves cannot both slip through).
+  if (embedding) {
+    const { data: near } = await supabase.rpc("match_sales_brain", {
+      query_embedding: JSON.stringify(embedding), match_count: 5,
+      match_threshold: NEAR_DUPLICATE_SIMILARITY, p_user_id: userId,
+    });
+    if ((near || []).some((row: any) => row.source_id === itemId) || isNearDuplicateVector(embedding, seenPrincipleVectors)) {
+      console.log(`[process-knowledge] skipped near-duplicate principle "${principleName}"`);
+      return null;
+    }
+    seenPrincipleVectors.push(embedding);
+  }
   const ontology = extractSalesOntology(learning);
 
   const brainRow = {
@@ -1926,12 +1944,13 @@ serve(async (req) => {
 
     const storedLearnings: any[] = [];
     const seenChunkContent = new Set<string>();
+    const seenPrincipleVectors: number[][] = [];
     try {
       const persistConcurrency = 6;
       for (let offset = 0; offset < learnings.length; offset += persistConcurrency) {
         const storedBatch = await Promise.all(learnings.slice(offset, offset + persistConcurrency).map((learning) =>
           persistLearning(
-            supabase, user.id, itemId, item.brain_type, sourceName, learning, ai, seenChunkContent,
+            supabase, user.id, itemId, item.brain_type, sourceName, learning, ai, seenChunkContent, seenPrincipleVectors,
           )
         ));
         for (const stored of storedBatch) {
