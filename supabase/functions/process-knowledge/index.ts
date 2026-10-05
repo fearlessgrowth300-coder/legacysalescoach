@@ -37,6 +37,33 @@ function chatTarget(ai: AiProvider, gatewayModel: string): { url: string; header
 // so a failed upload says why ("HTTP 401: API key not valid") instead of
 // "AI returned no structured insights".
 let lastExtractionProviderError = "";
+const isQuotaError = (message: string) => /HTTP 429/.test(message);
+
+// Each Gemini model has its own free quota: on 429/503 try the next model
+// instead of failing (AI Chat's userChat already does this). Used by both the
+// video/insight path and the book chapter path.
+async function postChatWithModelFallback(
+  ai: AiProvider,
+  target: { url: string; headers: Record<string, string>; model: string },
+  body: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<Response> {
+  const models = ai.name === "gemini" ? [...new Set([target.model, ...GEMINI_VISION_FALLBACK_MODELS])] : [target.model];
+  let response!: Response;
+  for (const model of models) {
+    const temperature = typeof body.temperature === "number" ? { temperature: compatibleTemperature(ai, model, body.temperature) } : {};
+    response = await fetch(target.url, {
+      method: "POST",
+      headers: target.headers,
+      body: JSON.stringify({ ...body, model, ...temperature }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (response.status !== 429 && response.status !== 503) return response;
+    lastExtractionProviderError = `HTTP ${response.status} on ${model}: ${(await response.text().catch(() => "")).replace(/\s+/g, " ").substring(0, 200)}`;
+    console.warn("[process-knowledge] model unavailable, trying next:", lastExtractionProviderError);
+  }
+  return response;
+}
 import { extractPdfBytes, looksScanned, ocrPdfWithVision } from "./pdf-extract.ts";
 import { NEAR_DUPLICATE_SIMILARITY, isNearDuplicateVector } from "../_shared/embedding-vector.ts";
 
@@ -110,17 +137,8 @@ async function extractStructuredLearningsChunk(
     const chunkLabel = totalChunks > 1 ? ` (Part ${chunkIndex + 1}/${totalChunks})` : "";
     const maxPrinciples = options.maxPrinciples ?? 12;
     const _t = chatTarget(ai, "google/gemini-2.5-flash");
-    // Each Gemini model has its own free quota: on 429/503 try the next model
-    // instead of failing the upload (AI Chat's userChat already does this).
-    const models = ai.name === "gemini" ? [...new Set([_t.model, ...GEMINI_VISION_FALLBACK_MODELS])] : [_t.model];
-    let response!: Response;
-    for (const model of models) {
-      response = await fetch(_t.url, {
-        method: "POST",
-        headers: _t.headers,
-        body: JSON.stringify({
-        model,
-        response_format: { type: "json_object" },
+    const response = await postChatWithModelFallback(ai, _t, {
+                response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
@@ -242,17 +260,11 @@ Return a single JSON object with this exact shape: { "principles": [ ...principl
             content: `Extract ALL learnings from this material titled "${sourceName}"${chunkLabel}:\n\n${content}`,
           },
         ],
-        temperature: compatibleTemperature(ai, model, 0.3),
+        temperature: 0.3,
         // Keep output bounded so one difficult PDF chapter cannot outlive the
         // Edge background-task wall clock and leave the book stuck in extracting.
         max_tokens: options.maxTokens ?? 8000,
-      }),
-        signal: AbortSignal.timeout(options.timeoutMs ?? 45000),
-      });
-      if (response.status !== 429 && response.status !== 503) break;
-      lastExtractionProviderError = `HTTP ${response.status} on ${model}: ${(await response.text().catch(() => "")).replace(/\s+/g, " ").substring(0, 200)}`;
-      console.warn("[process-knowledge] extraction model unavailable, trying next:", lastExtractionProviderError);
-    }
+      }, options.timeoutMs ?? 45000);
 
     if (!response.ok) {
       const errBody = await response.text().catch(() => "");
@@ -531,11 +543,8 @@ async function extractBookLearningsChunk(
 ): Promise<any[]> {
   try {
     const _t = chatTarget(ai, "google/gemini-2.5-flash-lite");
-    const response = await fetch(_t.url, {
-      method: "POST",
-      headers: _t.headers,
-      body: JSON.stringify({
-        model: _t.model,
+    const response = await postChatWithModelFallback(ai, _t, {
+        
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: `You are an elite sales student taking EXHAUSTIVE notes on this book section. Extract every distinct, valuable learning — leave nothing important behind.
@@ -582,10 +591,11 @@ RULES:
         ],
         temperature: compatibleTemperature(ai, _t.model, 0.2),
         max_tokens: 5500,
-      }),
-      signal: AbortSignal.timeout(28000),
-    });
-    if (!response.ok) return [];
+      }, 28000);
+    if (!response.ok) {
+      lastExtractionProviderError = `HTTP ${response.status}: ${(await response.text().catch(() => "")).replace(/\s+/g, " ").substring(0, 200)}`;
+      return [];
+    }
     const data = await response.json();
     return parsePrinciplesJson(data.choices?.[0]?.message?.content || "").map((learning) => ({
       ...learning,
@@ -1380,11 +1390,18 @@ serve(async (req) => {
         const hasOpenWork = chapters.some((c: any) => c.status === "pending" || c.status === "extracting");
         if (!hasOpenWork) {
           await markSourceIndexReady(supabase, user.id, itemId);
+          // A book where no chapter produced principles is not "ready" - it used
+          // to look done while the AI knew nothing from it. Flag quota failures
+          // so the background queue retries after the daily quota reset.
+          const anyPrinciples = chapters.some((c: any) => (c.principle_count || 0) > 0);
           await supabase.from("knowledge_base_items").update({
-            book_brief: { ...brief, chapters },
-            status: "ready",
+            book_brief: {
+              ...brief, chapters,
+              ...(!anyPrinciples && isQuotaError(lastExtractionProviderError) ? { quota_blocked_at: new Date().toISOString() } : {}),
+            },
+            status: anyPrinciples ? "ready" : "error",
           }).eq("id", itemId);
-          console.log(`Book pipeline marked ready for ${itemId}.`);
+          console.log(`Book pipeline finished for ${itemId}: ${anyPrinciples ? "ready" : "error (no principles)"}.`);
         }
       };
       const seenChunkContent = new Set<string>();
@@ -1718,7 +1735,7 @@ serve(async (req) => {
           if (storedCount === 0) {
             const failChapters = extractingChapters.map((c: any) =>
               c.index === nextMeta.index
-                ? { ...c, status: "failed", error: "AI returned no principles — try retrying this section" }
+                ? { ...c, status: "failed", error: `AI returned no principles — try retrying this section${lastExtractionProviderError ? ` (AI provider said: ${lastExtractionProviderError})` : ""}` }
                 : c,
             );
             await supabase.from("knowledge_base_items").update({
@@ -1931,6 +1948,7 @@ serve(async (req) => {
         status: "error",
         book_brief: {
           ...previousBrief,
+          ...(isQuotaError(lastExtractionProviderError) ? { quota_blocked_at: new Date().toISOString() } : {}),
           insight_extraction: {
             ...activeProgress,
             status: "failed",

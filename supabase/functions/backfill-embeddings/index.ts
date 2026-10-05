@@ -52,7 +52,27 @@ async function indexBatch(db: any, userId: string, reindex: boolean) {
  * request the Re-extract button sends (the owner's own AI key is used). Only one
  * extraction runs at a time so free Gemini quotas are not burst.
  */
+/** Gemini free quotas reset at midnight Pacific; 08:00 UTC is safely after it all year. */
+export function quotaResumeAt(blockedAt: string): Date {
+  const blocked = new Date(blockedAt);
+  const resume = new Date(Date.UTC(blocked.getUTCFullYear(), blocked.getUTCMonth(), blocked.getUTCDate(), 8));
+  if (resume <= blocked) resume.setUTCDate(resume.getUTCDate() + 1);
+  return resume;
+}
+
 async function startNextQueuedExtraction(db: any, serviceKey: string) {
+  // Free AI quota exhausted: don't burn the rest of the queue on guaranteed
+  // failures. Wait for the reset, then put the quota-blocked items back in line.
+  const { data: blocked } = await db.from("knowledge_base_items").select("id, book_brief")
+    .eq("status", "error").not("book_brief->>quota_blocked_at", "is", null).limit(200);
+  const now = new Date();
+  const waiting = (blocked || []).filter((row: any) => quotaResumeAt(row.book_brief.quota_blocked_at) > now);
+  if (waiting.length) {
+    return { queue: "paused_quota", resume_at: quotaResumeAt(waiting[0].book_brief.quota_blocked_at).toISOString() };
+  }
+  if (blocked?.length) {
+    await db.from("knowledge_base_items").update({ status: "queued" }).in("id", blocked.map((row: any) => row.id));
+  }
   const busySince = new Date(Date.now() - 20 * 60_000).toISOString();
   const { data: busy } = await db.from("knowledge_base_items").select("id")
     .in("status", ["processing", "mapping", "extracting"]).gt("updated_at", busySince).limit(1);
