@@ -125,6 +125,18 @@ describe("Friend conversation hygiene", () => {
     expect(out[0].message).toBe(withDetail);
   });
 
+  it("flags a reaction-only reply after the prospect answered our question (2026-10-05 06:08 Katie)", () => {
+    const convo = [
+      { direction: "outbound", content: "How has building a neurospicy-friendly setup been going for you so far?" },
+      { direction: "inbound", content: "Trial and error, but I make the business work around my brain now. I keep things sooo much simpler." },
+    ];
+    const dead = "so relatable \u{1F90D} giving yourself grace is half the battle.";
+    expect(friendHygieneIssues(dead, convo).some((i) => i.startsWith("reacts only, a dead end"))).toBe(true);
+    expect(isSoftFriendIssue("reacts only, a dead end: x")).toBe(true);
+    const shared = "so relatable \u{1F90D} things only changed for me when I stopped trying to do everything and stuck to one system.";
+    expect(friendHygieneIssues(shared, convo).some((i) => i.startsWith("reacts only"))).toBe(false);
+  });
+
   it("rotates away from the lesson locked on recent replies", () => {
     const pool = [
       { id: "cf", principle_name: "Conversational Fluidity over Script Adherence" },

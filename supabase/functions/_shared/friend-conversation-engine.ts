@@ -919,7 +919,7 @@ export function deterministicFriendQualityIssues(
 // identical probe lines went to up to 14 people, and "no" signals were pushed past).
 
 /** Issues that deserve one AI rewrite but must never swap a valid reply for the generic fallback. */
-export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question", "doesn't share a real Brianna detail",
+export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question", "doesn't share a real Brianna detail", "reacts only, a dead end",
   // Knowledge-application bookkeeping (lesson notes, cited names, anchoring):
   // worth a rewrite, but never worth swapping a lesson-based reply for the
   // knowledge-free generic fallback.
@@ -1003,6 +1003,12 @@ export function friendHygieneIssues(
   const prospectAskedUs = String([...conversation].reverse().find((turn) => turn.direction === "inbound")?.content || "").includes("?");
   if (message.includes("?") && String(lastOutbound).includes("?") && !prospectAskedUs) {
     issues.push("asks again right after our last question; share something from Brianna's approved stories or react to what they said instead");
+  }
+  // No question allowed, so a bare reaction ("so relatable!") is a dead end
+  // (2026-10-05 Katie). Give them something of Brianna's to reply to.
+  const latestTurn = [...conversation].reverse().find((turn) => turn.direction === "inbound" || turn.direction === "outbound");
+  if (latestTurn?.direction === "inbound" && !message.includes("?") && String(lastOutbound).includes("?") && !prospectAskedUs && !HARD_DECLINE.test(String(latestTurn.content || "")) && !sharesOwnDetail(message)) {
+    issues.push("reacts only, a dead end: add one short concrete line from Brianna's Approved True Stories that relates to what they just said, so they have something to reply to");
   }
   const recentInbound = conversation.filter((turn) => turn.direction === "inbound").slice(-3).map((turn) => String(turn.content || ""));
   const latestInbound = recentInbound[recentInbound.length - 1] || "";
