@@ -41,6 +41,7 @@ import {
   selectRelevantConversationPassages,
   cleanConversationExamples,
   rankFriendPrinciplesForStage,
+  friendReciprocityIssue,
 } from "../_shared/friend-conversation-engine.ts";
 
 
@@ -828,8 +829,29 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
     const friendStageDirective = activeThreadType === "friend"
       ? buildFriendStageDirective(friendStageResult)
       : "Expert mode does not use the Friend journey.";
-    // Early rapport replies apply rapport/story lessons, not closing scripts.
-    if (activeThreadType === "friend") replyTopPrinciples = rankFriendPrinciplesForStage(replyTopPrinciples, friendStageResult.stage);
+    // Early rapport replies apply rapport/story lessons, not closing scripts, and
+    // rotate away from lessons locked on the last 10 Friend replies.
+    if (activeThreadType === "friend") {
+      const [{ data: recentDecisions }, rapportHits] = await Promise.all([
+        supabase.from("sales_decisions").select("selected_sales_brain_id")
+          .eq("user_id", user.id).eq("thread_type", "friend")
+          .order("created_at", { ascending: false }).limit(10),
+        friendStageResult.stage === "intent"
+          ? supabase.rpc("search_sales_knowledge", {
+            search_query: "rapport OR trust OR curiosity OR storytelling OR connection OR listening OR relate OR empathy",
+            p_user_id: user.id, match_count: 30,
+          })
+          : Promise.resolve({ data: [] }),
+      ]);
+      const recentUse: Record<string, number> = {};
+      for (const row of recentDecisions || []) {
+        if (row.selected_sales_brain_id) recentUse[row.selected_sales_brain_id] = (recentUse[row.selected_sales_brain_id] || 0) + 1;
+      }
+      const rapportPrinciples = ((rapportHits as any)?.data || [])
+        .filter((hit: any) => hit.kind === "principle" && hit.record?.source_type === "sales_principle")
+        .map((hit: any) => hit.record).slice(0, 8);
+      replyTopPrinciples = rankFriendPrinciplesForStage(mergeByIdPriority(replyTopPrinciples, rapportPrinciples), friendStageResult.stage, recentUse);
+    }
     const lockedReplyPrinciple = activeThreadType === "friend" ? replyTopPrinciples[0] || null : null;
     const lockedReplySource = lockedReplyPrinciple
       ? (lockedReplyPrinciple.source_id && kbMap[lockedReplyPrinciple.source_id]
@@ -1162,7 +1184,12 @@ ${winningPatternsText.substring(0, 2000)}`;
         ),
         ...friendHygieneIssues(variant?.message || "", history, sentLines),
       ];
-      let selected = selectBestFriendCandidates(originalVariants, [], issuesForVariant);
+      // Set-level: the prospect asked us something and no reply asks back.
+      const withReciprocity = (picked: { candidates: any[]; issues: string[][] }) => {
+        const issue = friendReciprocityIssue(picked.candidates.map((variant: any) => variant?.message || ""), history);
+        return issue ? { ...picked, issues: picked.issues.map((list, i) => i === 0 ? [...list, issue] : list) } : picked;
+      };
+      let selected = withReciprocity(selectBestFriendCandidates(originalVariants, [], issuesForVariant));
       let candidateVariants = selected.candidates;
       let candidateIssuesByIndex = selected.issues;
       let candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
@@ -1188,7 +1215,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           const repaired = (Array.isArray(repairJson.variants) ? repairJson.variants : [])
             .map((variant: any) => hydrateFriendKnowledgeApplication(variant, friendKnowledgeContract));
           if (repaired.length !== 3) throw new Error("Compact Friend repair returned an incomplete variant set");
-          selected = selectBestFriendCandidates(candidateVariants, repaired, issuesForVariant);
+          selected = withReciprocity(selectBestFriendCandidates(candidateVariants, repaired, issuesForVariant));
           if (selected.issues.flat().length < candidateIssuesByIndex.flat().length) {
             candidateVariants = selected.candidates;
             candidateIssuesByIndex = selected.issues;

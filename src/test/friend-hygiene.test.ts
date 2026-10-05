@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   friendHardDecline,
+  friendReciprocityIssue,
   friendHygieneIssues,
   friendObjections,
   isSoftFriendIssue,
@@ -85,5 +86,33 @@ describe("Friend conversation hygiene", () => {
     expect(friendHygieneIssues(reply, convo).some((i) => i.startsWith("asks again"))).toBe(false);
     const noQuestionFromThem = [convo[0], { direction: "inbound", content: "About a year now." }];
     expect(friendHygieneIssues(reply, noQuestionFromThem).some((i) => i.startsWith("asks again"))).toBe(true);
+  });
+
+  it("asks for a question back when the prospect asked us one and no reply does (2026-10-05 Amanda replies)", () => {
+    const convo = [
+      { direction: "outbound", content: "Are you finding it tricky balancing building this out with your main job?" },
+      { direction: "inbound", content: "I wouldn't say it's tricky but I've made a few adjustments. How is everything going for you?" },
+    ];
+    const replies = [
+      "Things are going great on my end, thank you! Finding that groove with your daily schedule is honestly half the battle.",
+      "Doing really well over here, thanks for asking! Love that you've already found a rhythm that works for you.",
+      "Doing good over here, thanks! Getting that daily routine dialed in is half the battle.",
+    ];
+    const issue = friendReciprocityIssue(replies, convo);
+    expect(issue).toBeTruthy();
+    expect(isSoftFriendIssue(issue!)).toBe(true);
+    expect(friendReciprocityIssue([...replies.slice(0, 2), "Doing good! Juggling it around my 9-5 took me a while too 😅 What are you working on right now?"], convo)).toBeNull();
+    expect(friendReciprocityIssue(replies, [{ direction: "inbound", content: "About a year now." }])).toBeNull();
+    expect(friendReciprocityIssue(replies, [{ direction: "inbound", content: "Not interested, stop messaging me?" }])).toBeNull();
+  });
+
+  it("rotates away from the lesson locked on recent replies", () => {
+    const pool = [
+      { id: "cf", principle_name: "Conversational Fluidity over Script Adherence" },
+      { id: "rap", principle_name: "Building Rapport Through Common Ground" },
+      { id: "story", principle_name: "Personal Story Bridge" },
+    ];
+    expect(rankFriendPrinciplesForStage(pool, "intent", { rap: 4 })[0].id).toBe("story");
+    expect(rankFriendPrinciplesForStage(pool, "logical_certainty", { cf: 3 })[0].id).toBe("rap");
   });
 });

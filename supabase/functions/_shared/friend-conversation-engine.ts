@@ -916,7 +916,7 @@ export function deterministicFriendQualityIssues(
 // identical probe lines went to up to 14 people, and "no" signals were pushed past).
 
 /** Issues that deserve one AI rewrite but must never swap a valid reply for the generic fallback. */
-export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for"];
+export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question"];
 export const isSoftFriendIssue = (issue: string) => FRIEND_SOFT_ISSUE_PREFIXES.some((prefix) => issue.startsWith(prefix));
 
 // The audience is marketers reselling MRR/digital products who are not making
@@ -1036,18 +1036,38 @@ const LATE_ONLY = /\b(?:clos(?:e|ing)|price|pricing|cost|discount|payment|invest
  * Early ("intent") Friend replies should apply rapport/curiosity/story lessons,
  * not closing or pricing scripts; later stages keep retrieval order. Stable.
  */
-export function rankFriendPrinciplesForStage<T extends { principle_name?: string | null; category?: string | null; when_to_use?: string | null }>(
+export function rankFriendPrinciplesForStage<T extends { id?: string; principle_name?: string | null; category?: string | null; when_to_use?: string | null }>(
   principles: T[],
   stage: string,
+  recentUse: Record<string, number> = {},
 ): T[] {
-  if (stage !== "intent") return principles;
+  // Rotate away from lessons locked on recent Friend replies: one generic lesson
+  // ("Conversational Fluidity…") that once earned replies was winning every turn.
+  const rotation = (principle: T) => -6 * (recentUse[principle.id || ""] || 0);
+  if (stage !== "intent") {
+    return principles.map((principle, index) => ({ principle, score: -index + rotation(principle) }))
+      .sort((a, b) => b.score - a.score).map((entry) => entry.principle);
+  }
   return principles
     .map((principle, index) => {
       const text = `${principle.principle_name || ""} ${principle.category || ""} ${principle.when_to_use || ""}`;
-      return { principle, score: -index + (EARLY_RAPPORT_FIT.test(text) ? 12 : 0) - (LATE_ONLY.test(text) ? 12 : 0) };
+      return { principle, score: -index + (EARLY_RAPPORT_FIT.test(text) ? 12 : 0) - (LATE_ONLY.test(text) ? 12 : 0) + rotation(principle) };
     })
     .sort((a, b) => b.score - a.score)
     .map((entry) => entry.principle);
+}
+
+/**
+ * The prospect asked US something ("How is everything going for you?") and all
+ * three replies just answer and close the topic. Friends answer, share a little,
+ * and ask back. Charged to the primary variant as a soft issue (one rewrite,
+ * never the generic fallback). Silent unless the prospect's latest message asked.
+ */
+export function friendReciprocityIssue(messages: string[], conversation: FriendConversationMessage[]): string | null {
+  const latestInbound = [...conversation].reverse().find((turn) => turn.direction === "inbound")?.content || "";
+  if (!String(latestInbound).includes("?") || HARD_DECLINE.test(String(latestInbound))) return null;
+  if (messages.some((message) => String(message || "").includes("?"))) return null;
+  return "doesn't return the prospect's question: answer it, add one short real detail from Brianna's own story, then ask one light, curious question back (a friend question, not a sales question)";
 }
 
 /** Keep a valid generated variant even when another variant (or the validator) fails. */
