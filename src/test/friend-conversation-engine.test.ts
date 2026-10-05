@@ -80,6 +80,17 @@ describe("Friend conversation engine", () => {
     expect(deriveEvidenceGatedFriendStage(emotionalComplete, 12).stage).toBe("pitch");
   });
 
+  it("stays at intent after one long first reply even when every gate looks filled (2026-10-05 Katie)", () => {
+    const full = {
+      tangible_goal: "consistent sales", motivation: "freedom", past_experiences: ["trial and error"],
+      problem_status: "active", problem_gap: "routines don't stick", root_cause: "forcing routines",
+      consequences: "guilt", need_for_change_reason: "has to fit her brain",
+    };
+    expect(deriveEvidenceGatedFriendStage(full, 2).stage).toBe("intent");
+    expect(deriveEvidenceGatedFriendStage(full, 4).stage).toBe("logical_certainty");
+    expect(deriveEvidenceGatedFriendStage(full, 6).stage).toBe("emotional_certainty");
+  });
+
   it("does not treat a resolved historical problem as current pain", () => {
     const result = deriveEvidenceGatedFriendStage({
       motivation: "freedom",

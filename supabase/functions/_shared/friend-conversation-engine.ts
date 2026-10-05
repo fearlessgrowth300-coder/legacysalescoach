@@ -537,10 +537,13 @@ export function deriveEvidenceGatedFriendStage(
   const logicalComplete = intentComplete && evidence.activeProblem && evidence.rootCause && evidence.consequences && evidence.needForChange;
   const emotionalComplete = logicalComplete && evidence.inactionPattern && evidence.detailedFutureOutcome;
 
+  // The analysis can "fill" every gate from one long first reply (2026-10-05:
+  // Katie's first message landed at emotional_certainty). Each stage also needs
+  // real back-and-forth: messageCount counts both sides.
   let stage: FriendStage = "intent";
-  if (intentComplete) stage = "logical_certainty";
-  if (logicalComplete) stage = "emotional_certainty";
-  if (emotionalComplete && evidence.wantsHelp) stage = "pitch";
+  if (intentComplete && messageCount >= 4) stage = "logical_certainty";
+  if (logicalComplete && messageCount >= 6) stage = "emotional_certainty";
+  if (emotionalComplete && evidence.wantsHelp && messageCount >= 6) stage = "pitch";
   if (evidence.acceptedHandoff) stage = "handoff";
 
   // Explicit boundaries are not conversion stages. Keep the truthful stage for
