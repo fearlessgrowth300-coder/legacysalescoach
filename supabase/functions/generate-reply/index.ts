@@ -42,6 +42,7 @@ import {
   cleanConversationExamples,
   rankFriendPrinciplesForStage,
   friendReciprocityIssue,
+  promoteReciprocalVariant,
 } from "../_shared/friend-conversation-engine.ts";
 
 
@@ -1267,6 +1268,8 @@ ${winningPatternsText.substring(0, 2000)}`;
           ? variant
           : { ...originalVariants[index], ...variant }
       );
+      // The prospect asked us something: lead with a reply that asks back.
+      replyJson.variants = promoteReciprocalVariant(replyJson.variants || [], history);
       replyJson.qualityValidation = {
         passed: true,
         repaired: JSON.stringify(repairedVariants) !== JSON.stringify(originalVariants),

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   friendHardDecline,
   friendReciprocityIssue,
+  promoteReciprocalVariant,
   friendHygieneIssues,
   friendObjections,
   isSoftFriendIssue,
@@ -114,5 +115,23 @@ describe("Friend conversation hygiene", () => {
     ];
     expect(rankFriendPrinciplesForStage(pool, "intent", { rap: 4 })[0].id).toBe("story");
     expect(rankFriendPrinciplesForStage(pool, "logical_certainty", { cf: 3 })[0].id).toBe("rap");
+  });
+
+  it("puts a reply that asks back first when the prospect asked us (2026-10-05 04:39 set)", () => {
+    const convo = [{ direction: "inbound", content: "I've made a few adjustments and use my time wisely. How is everything going for you?" }];
+    const variants = [
+      { variant: "primary", message: "Things are going great on my end, thanks for asking! Finding that groove is half the battle." },
+      { variant: "alternative", message: "Doing well, thank you 😊 What has made the biggest difference?" },
+      { variant: "casual", message: "I'm good! What changed in how you plan your time?" },
+    ];
+    const out = promoteReciprocalVariant(variants, convo);
+    expect(out[0].message).toContain("What has made the biggest difference?");
+    expect(out.map((v) => v.variant)).toEqual(["primary", "alternative", "casual"]);
+    expect(promoteReciprocalVariant(variants, [{ direction: "inbound", content: "About a year now." }])).toBe(variants);
+  });
+
+  it("treats 'not anchored to the prospect fact' as a rewrite, not a reason for the generic fallback", () => {
+    expect(isSoftFriendIssue("reply is not anchored to the locked prospect fact")).toBe(true);
+    expect(isSoftFriendIssue("pitches after the prospect explicitly declined; respect it")).toBe(false);
   });
 });

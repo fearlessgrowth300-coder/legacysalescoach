@@ -916,7 +916,7 @@ export function deterministicFriendQualityIssues(
 // identical probe lines went to up to 14 people, and "no" signals were pushed past).
 
 /** Issues that deserve one AI rewrite but must never swap a valid reply for the generic fallback. */
-export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question"];
+export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question", "reply is not anchored to the locked prospect fact"];
 export const isSoftFriendIssue = (issue: string) => FRIEND_SOFT_ISSUE_PREFIXES.some((prefix) => issue.startsWith(prefix));
 
 // The audience is marketers reselling MRR/digital products who are not making
@@ -1068,6 +1068,20 @@ export function friendReciprocityIssue(messages: string[], conversation: FriendC
   if (!String(latestInbound).includes("?") || HARD_DECLINE.test(String(latestInbound))) return null;
   if (messages.some((message) => String(message || "").includes("?"))) return null;
   return "doesn't return the prospect's question: answer it, add one short real detail from Brianna's own story, then ask one light, curious question back (a friend question, not a sales question)";
+}
+
+/**
+ * When the prospect asked us a question, make sure the PRIMARY reply asks one
+ * back: promote the first variant that does (labels follow position). Returns
+ * the input unchanged otherwise.
+ */
+export function promoteReciprocalVariant<T extends { message?: string; variant?: string }>(variants: T[], conversation: FriendConversationMessage[]): T[] {
+  if (!variants.length || !friendReciprocityIssue([String(variants[0]?.message || "")], conversation)) return variants;
+  const index = variants.findIndex((variant) => String(variant?.message || "").includes("?"));
+  if (index <= 0) return variants;
+  const reordered = [variants[index], ...variants.filter((_, i) => i !== index)];
+  const labels = ["primary", "alternative", "casual"];
+  return reordered.map((variant, i) => (variant && typeof variant === "object" && "variant" in variant ? { ...variant, variant: labels[i] || variant.variant } : variant));
 }
 
 /** Keep a valid generated variant even when another variant (or the validator) fails. */
