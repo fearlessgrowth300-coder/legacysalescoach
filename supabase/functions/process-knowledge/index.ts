@@ -66,6 +66,7 @@ async function postChatWithModelFallback(
 }
 import { extractPdfBytes, looksScanned, ocrPdfWithVision } from "./pdf-extract.ts";
 import { NEAR_DUPLICATE_SIMILARITY, isNearDuplicateVector } from "../_shared/embedding-vector.ts";
+import { fetchSubtitleText, pickSubtitleUrl, pickVideoFileUrl, transcribeVideoUrl } from "../_shared/video-transcript.ts";
 
 const defaultCorsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -2248,13 +2249,54 @@ async function extractPdfContent(
 async function extractUrlContent(url: string, supabaseUrl: string, supabaseKey: string, supabase: any, userId: string | null = null): Promise<string> {
   const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
   const isInstagram = url.includes("instagram.com") || url.includes("instagr.am");
+  const isTikTok = /(^|\.)tiktok\.com\//i.test(url.replace(/^https?:\/\//, ""));
 
   if (isInstagram) {
     return await extractInstagramContent(url, supabaseUrl, supabaseKey, supabase);
+  } else if (isTikTok) {
+    return await extractTikTokContent(url);
   } else if (isYouTube) {
     return await extractYouTubeContent(url, userId, supabase);
   } else {
     return await extractWebContent(url);
+  }
+}
+
+async function extractTikTokContent(url: string): Promise<string> {
+  const APIFY_API_KEY = Deno.env.get("APIFY_API_KEY");
+  if (!APIFY_API_KEY) return `TikTok URL: ${url}.`;
+  try {
+    const response = await fetch(
+      `https://api.apify.com/v2/acts/clockworks~tiktok-scraper/run-sync-get-dataset-items?token=${APIFY_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ postURLs: [url], resultsPerPage: 1, shouldDownloadVideos: true, shouldDownloadSubtitles: true }),
+        signal: AbortSignal.timeout(90_000),
+      },
+    );
+    if (!response.ok) {
+      console.error("Apify TikTok post error:", response.status, (await response.text()).slice(0, 300));
+      return `TikTok URL: ${url}.`;
+    }
+    const items = await response.json();
+    const video = Array.isArray(items) ? items[0] : null;
+    if (!video) return `TikTok URL: ${url}.`;
+    // TikTok's own captions first (free, instant), then Whisper on the video file.
+    let transcript = await fetchSubtitleText(pickSubtitleUrl(video));
+    if (transcript.length < 50) transcript = await transcribeVideoUrl(pickVideoFileUrl(video) || "");
+    if (!transcript) console.warn("[process-knowledge] TikTok transcript unavailable; using caption only", Object.keys(video).slice(0, 40));
+    return [
+      ...(transcript ? [`Transcript:
+${transcript}`, ""] : []),
+      `TikTok video by @${video.authorMeta?.name || video.author?.uniqueId || "unknown"}`,
+      `Caption: ${video.text || video.desc || "No caption"}`,
+      `Views: ${video.playCount ?? 0} | Likes: ${video.diggCount ?? 0} | Comments: ${video.commentCount ?? 0} | Shares: ${video.shareCount ?? 0}`,
+    ].join("
+");
+  } catch (error) {
+    console.error("TikTok extraction error:", error);
+    return `TikTok URL: ${url}.`;
   }
 }
 
@@ -2278,7 +2320,12 @@ async function extractInstagramContent(url: string, supabaseUrl: string, supabas
         const results = await actorRes.json();
         const post = Array.isArray(results) && results.length > 0 ? results[0] : null;
         if (post) {
+          // A reel's value is what is SAID in it; the caption alone taught the brain nothing.
+          const transcript = post.type === "Video" ? await transcribeVideoUrl(pickVideoFileUrl(post) || "") : "";
+          if (post.type === "Video" && !transcript) console.warn("[process-knowledge] Instagram reel transcript unavailable; using caption only", Object.keys(post).slice(0, 40));
           content = [
+            ...(transcript ? [`Transcript:
+${transcript}`, ""] : []),
             `Instagram ${post.type === "Video" ? "Reel/Video" : "Post"} by @${post.ownerUsername || "unknown"}`,
             `Caption: ${post.caption || "No caption"}`,
             `Likes: ${post.likesCount || 0} | Comments: ${post.commentsCount || 0}`,
