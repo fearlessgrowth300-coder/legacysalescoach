@@ -88,12 +88,23 @@ export default function KnowledgeBase() {
     enabled: !!user,
   });
 
+  // A source whose principle extraction failed (quota, or every book chapter
+  // empty) must stay "error" so it can be retried - flipping it to "ready" hid
+  // four sources with 0 principles on 2026-10-05.
+  const extractionReallyFailed = (item: any) => {
+    const brief = item.book_brief || {};
+    if (brief.quota_blocked_at) return true;
+    if (brief.insight_extraction?.status === "failed") return true;
+    const chapters = Array.isArray(brief.chapters) ? brief.chapters : [];
+    return chapters.length > 0 && chapters.every((c: any) => !(Number(c.principle_count) > 0));
+  };
+
   // Sources never extracted, failed, or extracted by the old pipeline (no stored
   // original passages). The 5-minute background job re-extracts queued items one
   // at a time with the user's own AI key, so no tab has to stay open.
   const outdatedItems = (items || []).filter((item: any) =>
     item.status === "pending" || item.status === "error" ||
-    (item.status === "ready" && Number(item.source_index_version || 0) < 2));
+    (item.status === "ready" && (Number(item.source_index_version || 0) < 2 || extractionReallyFailed(item))));
   const queueOutdated = useMutation({
     mutationFn: async () => {
       const ids = outdatedItems.map((item: any) => item.id);
@@ -115,6 +126,7 @@ export default function KnowledgeBase() {
     const completedButErrored = (items || []).filter((item: any) =>
       item.status === "error"
       && hasFullSourceIndex(item)
+      && !extractionReallyFailed(item)
       && !completedIndexRepairRef.current.has(item.id)
     );
     if (completedButErrored.length === 0) return;
