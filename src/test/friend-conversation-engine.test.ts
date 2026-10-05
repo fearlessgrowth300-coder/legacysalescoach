@@ -273,7 +273,7 @@ describe("Friend conversation engine", () => {
     expect(friendKnowledgeApplicationIssues(applied, contract)).toEqual([]);
   });
 
-  it("does not force Knowledge Base technique into simple early peer rapport", () => {
+  it("applies a Sales Brain lesson even in early peer rapport (owner decision 2026-10-05)", () => {
     const contract = buildFriendKnowledgeApplicationContract({
       analysis: { reply_act: "relate", knowledge_need: "none", contact_status: "active" },
       checkpoint: "tangible_goal",
@@ -286,8 +286,8 @@ describe("Friend conversation engine", () => {
       },
       sourceName: "Sales Course",
     });
-    expect(contract.requested).toBe(false);
-    expect(contract.required).toBe(false);
+    expect(contract.requested).toBe(true);
+    expect(contract.required).toBe(true);
   });
 
   it("answers a direct social question during provider fallback instead of asking a funnel question", () => {
@@ -311,7 +311,7 @@ describe("Friend conversation engine", () => {
     }
   });
 
-  it("lets a connection-first prospect set the pace without forcing a sales lesson or question", () => {
+  it("lets a connection-first prospect set the pace without a pushy question (lesson still applied privately)", () => {
     const latest = "Not yet😊 I'm not really pushing for sales with this page right now. I'm just enjoying building it and connecting with people first.";
     const analysis = { reply_act: "probe", sales_status: "unknown", result_verification_status: "unverified" };
     const contract = buildFriendKnowledgeApplicationContract({
@@ -321,7 +321,7 @@ describe("Friend conversation engine", () => {
       latestProspectMessage: latest,
       principle: { principle_name: "Diagnose the sales gap", source_name: "Sales Course", what_i_learned: "Ask about sales results." },
     });
-    expect(contract.required).toBe(false);
+    expect(contract.required).toBe(true);
     expect(deterministicFriendQualityIssues(
       "That makes sense. Enjoying the page and getting to know people sounds important to you.",
       "logical_certainty", analysis, [{ direction: "inbound", content: latest }],

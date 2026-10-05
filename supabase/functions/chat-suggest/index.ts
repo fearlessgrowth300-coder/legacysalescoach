@@ -44,6 +44,7 @@ import {
   selectRelevantConversationPassages,
   rankOpenerPrinciples,
   cleanConversationExamples,
+  rankFriendPrinciplesForStage,
 } from "../_shared/friend-conversation-engine.ts";
 
 
@@ -1415,6 +1416,7 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
       }
       topPrinciples = rankOpenerPrinciples(mergeByIdPriority(topPrinciples, openerPrinciples), recentUse).slice(0, principlesCap);
     }
+    if (activeThreadType === "friend" && mode !== "first_message") topPrinciples = rankFriendPrinciplesForStage(topPrinciples, precomputedFriendStage.stage);
     const lockedFriendPrinciple = activeThreadType === "friend" ? topPrinciples[0] || null : null;
     const lockedFriendSource = lockedFriendPrinciple
       ? (lockedFriendPrinciple.source_id && kbMap[lockedFriendPrinciple.source_id]

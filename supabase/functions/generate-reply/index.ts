@@ -40,6 +40,7 @@ import {
   friendStageToDatabase,
   selectRelevantConversationPassages,
   cleanConversationExamples,
+  rankFriendPrinciplesForStage,
 } from "../_shared/friend-conversation-engine.ts";
 
 
@@ -827,6 +828,8 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
     const friendStageDirective = activeThreadType === "friend"
       ? buildFriendStageDirective(friendStageResult)
       : "Expert mode does not use the Friend journey.";
+    // Early rapport replies apply rapport/story lessons, not closing scripts.
+    if (activeThreadType === "friend") replyTopPrinciples = rankFriendPrinciplesForStage(replyTopPrinciples, friendStageResult.stage);
     const lockedReplyPrinciple = activeThreadType === "friend" ? replyTopPrinciples[0] || null : null;
     const lockedReplySource = lockedReplyPrinciple
       ? (lockedReplyPrinciple.source_id && kbMap[lockedReplyPrinciple.source_id]
@@ -928,7 +931,8 @@ FRAMEWORK SELECTION:
 - Add a second technique only when it materially improves the reply.
 - Never stack frameworks merely to sound sophisticated.
 - A natural peer response may use no formal framework. One message has one objective and at most one optional question.
-- Do not ask a question if your previous message already asked one: react, relate, or share one of Brianna's approved stories instead.
+- Do not ask a question if your previous message already asked one: react, relate, or share one of Brianna's approved stories instead. Exception: when the prospect asked you a question, answer it and you may ask one light question back.
+- Every reply quietly applies the locked Sales Brain lesson (from the owner's books, PDFs and video transcripts) in Brianna's friend voice - it shapes what she says, it is never named or taught. When it fits, include one short real detail from Brianna's own story so it feels two-way.
 - Keep it about as long as the prospect's last message (never a wall of text). Write every line fresh; never reuse stock probe lines.
 - A stated objection (has a mentor, is new, wants to try alone first, is afraid or burned, says they are fine, has no funds) is NOT a refusal: handle it honestly, one step at a time, using Brianna's real story and the retrieved objection-handling lessons. Never argue, never push past the same objection twice. Only an explicit refusal (not interested, stop messaging me, leave me alone) ends the pitch.${friendObjections(history.filter((turn: any) => turn.direction === "inbound").slice(-3).map((turn: any) => String(turn.content || ""))).length ? `\n- THIS PROSPECT'S OBJECTIONS AND HOW TO HANDLE THEM:\n${friendObjections(history.filter((turn: any) => turn.direction === "inbound").slice(-3).map((turn: any) => String(turn.content || ""))).map((o) => `  - ${o.objection}: ${o.approach}`).join("\n")}` : ""}
 

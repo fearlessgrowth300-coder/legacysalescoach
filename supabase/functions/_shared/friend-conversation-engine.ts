@@ -157,11 +157,15 @@ export function buildFriendKnowledgeApplicationContract(input: {
     || includesAny(analysis.sales_status, ["no_sales", "first_sale", "inconsistent_sales", "wants_more_sales"]);
   const connectionFirst = /\b(?:not\s+(?:really\s+)?pushing\s+(?:for\s+)?sales|not\s+selling|just\s+enjoying\s+building|connecting\s+with\s+people\s+first)\b/i
     .test(input.latestProspectMessage || "");
+  // Owner decision (2026-10-05): every Friend reply applies a real Sales Brain
+  // lesson (books, PDFs, video transcripts) - privately, in the friend's voice -
+  // including early rapport and "not pushing sales" replies. Only an ended or
+  // refused conversation skips it. Stage-fit is handled when the principle is
+  // chosen (rankFriendPrinciplesForStage).
+  void strategicAct; void activeSalesGap; void knowledgeNeed; void connectionFirst;
   const requested = contactStatus !== "do_not_contact"
     && contactStatus !== "not_a_fit"
-    && input.checkpoint !== "complete"
-    && !connectionFirst
-    && (input.stage !== "intent" || activeSalesGap || strategicAct || (known(knowledgeNeed) && knowledgeNeed !== "none"));
+    && input.checkpoint !== "complete";
 
   const principleName = cleanContractText(input.principle?.principle_name, 220);
   const sourceName = cleanContractText(input.sourceName || input.principle?.source_name, 260);
@@ -986,7 +990,8 @@ export function friendHygieneIssues(
   const reused = String(message || "").split(/(?<=[.!?])\s+/).map(normalizeLine).find((line) => line.length >= 35 && sentLines.has(line));
   if (reused) issues.push(`reuses a line already sent to other prospects ("${reused.slice(0, 80)}"); write it fresh for this person`);
   const lastOutbound = [...conversation].reverse().find((turn) => turn.direction === "outbound" && String(turn.content || "").trim())?.content || "";
-  if (message.includes("?") && String(lastOutbound).includes("?")) {
+  const prospectAskedUs = String([...conversation].reverse().find((turn) => turn.direction === "inbound")?.content || "").includes("?");
+  if (message.includes("?") && String(lastOutbound).includes("?") && !prospectAskedUs) {
     issues.push("asks again right after our last question; share something from Brianna's approved stories or react to what they said instead");
   }
   const recentInbound = conversation.filter((turn) => turn.direction === "inbound").slice(-3).map((turn) => String(turn.content || ""));
@@ -1019,6 +1024,27 @@ export function rankOpenerPrinciples<T extends { id?: string; principle_name?: s
       const text = `${principle.principle_name || ""} ${principle.when_to_use || ""} ${principle.what_i_learned || ""}`;
       const score = -index + (OPENER_CRAFT.test(text) ? 10 : 0) - 6 * (recentOpenerUse[principle.id || ""] || 0);
       return { principle, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.principle);
+}
+
+const EARLY_RAPPORT_FIT = /\b(?:rapport|trust|curiosity|curious|listen\w*|relat\w*|empath\w*|connect\w*|storytelling|personal stor(?:y|ies)|mirror\w*|label\w*|validat\w*|open(?:er|ing)?|first impression|likab\w*|common ground|genuine|compliment|warm|question\w*)\b/i;
+const LATE_ONLY = /\b(?:clos(?:e|ing)|price|pricing|cost|discount|payment|invest(?:ment)?|deposit|objection|urgency|scarcity|deal)\b/i;
+
+/**
+ * Early ("intent") Friend replies should apply rapport/curiosity/story lessons,
+ * not closing or pricing scripts; later stages keep retrieval order. Stable.
+ */
+export function rankFriendPrinciplesForStage<T extends { principle_name?: string | null; category?: string | null; when_to_use?: string | null }>(
+  principles: T[],
+  stage: string,
+): T[] {
+  if (stage !== "intent") return principles;
+  return principles
+    .map((principle, index) => {
+      const text = `${principle.principle_name || ""} ${principle.category || ""} ${principle.when_to_use || ""}`;
+      return { principle, score: -index + (EARLY_RAPPORT_FIT.test(text) ? 12 : 0) - (LATE_ONLY.test(text) ? 12 : 0) };
     })
     .sort((a, b) => b.score - a.score)
     .map((entry) => entry.principle);

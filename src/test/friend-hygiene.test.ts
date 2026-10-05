@@ -4,6 +4,7 @@ import {
   friendHygieneIssues,
   friendObjections,
   isSoftFriendIssue,
+  rankFriendPrinciplesForStage,
   rankOpenerPrinciples,
   sentLineSet,
 } from "../../supabase/functions/_shared/friend-conversation-engine";
@@ -62,5 +63,27 @@ describe("Friend conversation hygiene", () => {
     const issue = friendHygieneIssues(pitch, refused).find((i) => i.startsWith("pitches"));
     expect(issue).toBeTruthy();
     expect(isSoftFriendIssue(issue!)).toBe(false);
+  });
+
+  it("early replies prefer rapport lessons over closing scripts; later stages keep retrieval order", () => {
+    const pool = [
+      { principle_name: "Eliminating Self-Limiting Stories", category: "Mindset", when_to_use: "slump, fear of prospecting" },
+      { principle_name: "The 4-Step Nonchalant Closing Framework", category: "Closing" },
+      { principle_name: "Building Rapport Through Common Ground", category: "Trust Building" },
+    ];
+    expect(rankFriendPrinciplesForStage(pool, "intent")[0].principle_name).toBe("Building Rapport Through Common Ground");
+    expect(rankFriendPrinciplesForStage(pool, "intent").at(-1)!.principle_name).toBe("The 4-Step Nonchalant Closing Framework");
+    expect(rankFriendPrinciplesForStage(pool, "logical_certainty")).toEqual(pool);
+  });
+
+  it("allows one question back when the prospect asked us a question (real Amanda message)", () => {
+    const convo = [
+      { direction: "outbound", content: "Hey Amanda! Love your post. How long have you been building?" },
+      { direction: "inbound", content: "I have had to make a few adjustments and use my time wisely. How is everything going for you?" },
+    ];
+    const reply = "Doing good! Juggling it around my 9-5 took me a while too 😅 What are you working on right now?";
+    expect(friendHygieneIssues(reply, convo).some((i) => i.startsWith("asks again"))).toBe(false);
+    const noQuestionFromThem = [convo[0], { direction: "inbound", content: "About a year now." }];
+    expect(friendHygieneIssues(reply, noQuestionFromThem).some((i) => i.startsWith("asks again"))).toBe(true);
   });
 });
