@@ -618,8 +618,8 @@ SPEAKER SAFETY: YOU/OUTBOUND rows are the app user's messages. PROSPECT/INBOUND 
 LINKED EXPERT (only if relevant):\n${linkedExpertContext.substring(0, 900)}
 KNOWN PROSPECT MEMORY (newer evidence overrides):\n${JSON.stringify(existingFriendProfile).substring(0, 2800)}
 FACT AND STRATEGY LEDGER:\n${prospectDecisionHistory.substring(0, 2600)}
-PROSPECT INBOUND EVIDENCE:\n${keepHeadAndLatest(prospectEvidenceLedger, 2600, 350)}
-RECENT CONVERSATION (YOU/OUTBOUND versus PROSPECT/INBOUND):\n${keepHeadAndLatest(formatConversationHistory(history), 6500, 1100)}
+PROSPECT INBOUND EVIDENCE:\n${keepHeadAndLatest(prospectEvidenceLedger, 30000, 4000)}
+FULL CONVERSATION FROM THE START (YOU/OUTBOUND versus PROSPECT/INBOUND):\n${keepHeadAndLatest(formatConversationHistory(history), 60000, 6000)}
 SCREENSHOT CONTEXT:\n${(screenshotContext || "none").substring(0, 750)}
 LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}`;
     const selectedAnalysisPrompt = activeThreadType === "friend" ? friendAnalysisPrompt : analysisPrompt;
@@ -945,6 +945,8 @@ Use SPIN only as a silent diagnostic. question_needed=${Boolean(analysisJson.que
 You are given the analysis result (including objection radar and SPIN stage), workspace profile, style fingerprint, conversation history, and brain principles.
 
 ${modeInstruction}
+
+Before writing, read CONVERSATION_HISTORY from the very first message to the end so you know everything already said; then reply to the LATEST PROSPECT MESSAGE. Never re-ask what they already told you or repeat what you already sent.
 
 Generate exactly 3 reply variants as JSON. Each must sound EXACTLY like the person in WORKSPACE_PROFILE and STYLE_FINGERPRINT. Never sound like AI.
 

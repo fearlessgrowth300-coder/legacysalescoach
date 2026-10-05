@@ -854,19 +854,13 @@ serve(async (req) => {
     // prompt. Declare it before either path can consume it: the previous order
     // read it during outcome-aware ranking and crashed every first-message call
     // with a temporal-dead-zone ReferenceError.
-    const conversationHistory = recentMessages
+    // The whole conversation, word for word: every reply must read it from the start.
+    const conversationHistory = history
       .map((m: any) => `${m.direction === "outbound" ? "You" : m.direction === "context" ? "Salesperson note" : m.direction === "unknown" ? "Unknown speaker" : "Prospect"}: ${m.content}`)
       .join("\n") || "";
-    const olderMessages = history.slice(0, -recentCount);
-    
+
     let conversationMemory = "";
-    if (olderMessages.length > 0) {
-      const olderSummary = olderMessages
-        .map((m: any) => `${m.direction === "outbound" ? "You" : m.direction === "context" ? "Salesperson note" : m.direction === "unknown" ? "Unknown speaker" : "Prospect"}: ${m.content.substring(0, 150)}`)
-        .join("\n");
-      conversationMemory = `EARLIER CONVERSATION SUMMARY (${olderMessages.length} older messages):\n${olderSummary}\n\n`;
-    }
-    
+
     // Use existing conversation_summary from prospect if available
     if (prospect.conversation_summary) {
       conversationMemory = `CONVERSATION CONTEXT (AI summary):\n${prospect.conversation_summary}\n\n` + conversationMemory;
@@ -1153,7 +1147,7 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
             },
             {
               role: "user",
-              content: `CURRENT PROSPECT MEMORY:\n${friendLearningContext.substring(0, 4000)}\n\nFACT AND PREVIOUS STRATEGY LEDGER:\n${prospectDecisionHistory.substring(0, 6000)}\n\nPROSPECT EVIDENCE LEDGER (every unique inbound turn):\n${evidenceLedger}\n\nCONVERSATION HEAD + LATEST:\n${keepHeadAndLatest(decisionHistory, 7000, 1200)}\n\nLATEST INPUT:\n${message}\n\nSCREENSHOT CONTEXT:\n${screenshotContext || "none"}`,
+              content: `CURRENT PROSPECT MEMORY:\n${friendLearningContext.substring(0, 4000)}\n\nFACT AND PREVIOUS STRATEGY LEDGER:\n${prospectDecisionHistory.substring(0, 6000)}\n\nPROSPECT EVIDENCE LEDGER (every unique inbound turn):\n${evidenceLedger}\n\nFULL CONVERSATION (from the start):\n${keepHeadAndLatest(decisionHistory, 60000, 6000)}\n\nLATEST INPUT:\n${message}\n\nSCREENSHOT CONTEXT:\n${screenshotContext || "none"}`,
             },
           ],
           temperature: 0.2,
@@ -1894,7 +1888,7 @@ ${jsonFormat}
           selected_principle: lockedFriendPrinciple?.principle_name || "",
           selected_source: lockedFriendSource || lockedFriendPrinciple?.source_name || "",
           selected_lesson: lockedFriendPrinciple?.what_i_learned || lockedFriendPrinciple?.how_to_apply || "",
-          recent_turns: speakerMessages.slice(-8),
+          all_turns: speakerMessages.map((m: any) => ({ direction: m.direction, content: m.content })),
         });
         const recoveryResponse = await userChat(chat, {
           model: chat.models.fast,
@@ -2086,7 +2080,7 @@ ${jsonFormat}
             { role: "system", content: buildFriendQualityValidatorPrompt("suggestions") },
             {
               role: "user",
-              content: `${finalStageDirective}\n\n${finalFriendKnowledgeContractText}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nRECENT CONVERSATION:\n${keepHeadAndLatest(conversationHistory, 10000, 1800)}\n\nFACT AND PREVIOUS STRATEGY LEDGER:\n${prospectDecisionHistory.substring(0, 5000)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nEXACT-MOMENT RETRIEVED KNOWLEDGE:\n${exactMomentKnowledge.substring(0, 12000)}\n\nKNOWLEDGE GRAPH:\n${knowledgeGraphContext.text.substring(0, 3500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
+              content: `${finalStageDirective}\n\n${finalFriendKnowledgeContractText}\n\nLOCKED ANALYSIS:\n${JSON.stringify(combinedFriendLearning || parsed.prospectLearning || {})}\n\nLATEST PROSPECT MESSAGE:\n${message}\n\nFULL CONVERSATION (from the start):\n${keepHeadAndLatest(conversationHistory, 60000, 6000)}\n\nFACT AND PREVIOUS STRATEGY LEDGER:\n${prospectDecisionHistory.substring(0, 5000)}\n\nRELEVANT REFERENCE MOMENTS:\n${relevantReferenceMoments}\n\nEXACT-MOMENT RETRIEVED KNOWLEDGE:\n${exactMomentKnowledge.substring(0, 12000)}\n\nKNOWLEDGE GRAPH:\n${knowledgeGraphContext.text.substring(0, 3500)}\n\nDETERMINISTIC PRECHECK ISSUES:\n${deterministicIssues.join("\n") || "none"}\n\nDRAFT SUGGESTIONS TO VALIDATE AND REPAIR:\n${JSON.stringify(originalSuggestions)}`,
             },
           ],
           temperature: 0.2,
