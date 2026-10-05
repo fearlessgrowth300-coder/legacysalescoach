@@ -916,7 +916,14 @@ export function deterministicFriendQualityIssues(
 // identical probe lines went to up to 14 people, and "no" signals were pushed past).
 
 /** Issues that deserve one AI rewrite but must never swap a valid reply for the generic fallback. */
-export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question", "reply is not anchored to the locked prospect fact"];
+export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question",
+  // Knowledge-application bookkeeping (lesson notes, cited names, anchoring):
+  // worth a rewrite, but never worth swapping a lesson-based reply for the
+  // knowledge-free generic fallback.
+  "reply is not anchored to the locked prospect fact", "does not use the locked Knowledge Base principle",
+  "does not cite the locked Knowledge Base source", "does not explain the actual lesson applied",
+  "does not explain the strategic application", "knowledge application evidence is not an exact visible phrase",
+  "application metadata does not reflect the locked lesson"];
 export const isSoftFriendIssue = (issue: string) => FRIEND_SOFT_ISSUE_PREFIXES.some((prefix) => issue.startsWith(prefix));
 
 // The audience is marketers reselling MRR/digital products who are not making
