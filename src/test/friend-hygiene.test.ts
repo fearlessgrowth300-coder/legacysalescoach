@@ -9,6 +9,7 @@ import {
   rankFriendPrinciplesForStage,
   rankOpenerPrinciples,
   sentLineSet,
+  sharesOwnDetail,
 } from "../../supabase/functions/_shared/friend-conversation-engine";
 
 // Lines and replies taken from the real Friend conversations reviewed on 2026-10-04.
@@ -105,6 +106,23 @@ describe("Friend conversation hygiene", () => {
     expect(friendReciprocityIssue([...replies.slice(0, 2), "Doing good! Juggling it around my 9-5 took me a while too 😅 What are you working on right now?"], convo)).toBeNull();
     expect(friendReciprocityIssue(replies, [{ direction: "inbound", content: "About a year now." }])).toBeNull();
     expect(friendReciprocityIssue(replies, [{ direction: "inbound", content: "Not interested, stop messaging me?" }])).toBeNull();
+  });
+
+  it("asks for a real Brianna detail when replies ask back but only say 'doing great' (2026-10-05 04:56 Amanda set)", () => {
+    const convo = [{ direction: "inbound", content: "I've had to make a few adjustments. How is everything going for you?" }];
+    const replies = [
+      "Things are going great on my end, thank you! It definitely takes some discipline to shift the routine around, so love that you've already found a rhythm that works. Where are you at with your store setup or content strategy these days?",
+      "Doing really well over here, thanks for asking! Finding that groove with your daily schedule is honestly half the battle when you're building something on the side. What kind of setup or approach are you currently focusing on right now?",
+      "Doing good over here, thanks! And honestly good for you for getting that daily routine dialed in. What are you working on building out first?",
+    ];
+    const issue = friendReciprocityIssue(replies, convo);
+    expect(issue).toMatch(/^doesn't share a real Brianna detail/);
+    expect(isSoftFriendIssue(issue!)).toBe(true);
+    const withDetail = "Doing good! I finally stopped trying to do everything and stuck to one system, and it’s made such a difference. What are you building out first?";
+    expect(sharesOwnDetail(withDetail)).toBe(true);
+    expect(friendReciprocityIssue([replies[0], withDetail], convo)).toBeNull();
+    const out = promoteReciprocalVariant(replies.map((message, i) => ({ variant: ["primary", "alternative", "casual"][i], message })).slice(0, 2).concat({ variant: "casual", message: withDetail }), convo);
+    expect(out[0].message).toBe(withDetail);
   });
 
   it("rotates away from the lesson locked on recent replies", () => {

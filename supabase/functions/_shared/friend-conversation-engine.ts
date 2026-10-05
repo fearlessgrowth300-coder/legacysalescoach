@@ -916,7 +916,7 @@ export function deterministicFriendQualityIssues(
 // identical probe lines went to up to 14 people, and "no" signals were pushed past).
 
 /** Issues that deserve one AI rewrite but must never swap a valid reply for the generic fallback. */
-export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question",
+export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question", "doesn't share a real Brianna detail",
   // Knowledge-application bookkeeping (lesson notes, cited names, anchoring):
   // worth a rewrite, but never worth swapping a lesson-based reply for the
   // knowledge-free generic fallback.
@@ -1073,18 +1073,34 @@ export function rankFriendPrinciplesForStage<T extends { id?: string; principle_
 export function friendReciprocityIssue(messages: string[], conversation: FriendConversationMessage[]): string | null {
   const latestInbound = [...conversation].reverse().find((turn) => turn.direction === "inbound")?.content || "";
   if (!String(latestInbound).includes("?") || HARD_DECLINE.test(String(latestInbound))) return null;
-  if (messages.some((message) => String(message || "").includes("?"))) return null;
-  return "doesn't return the prospect's question: answer it, add one short real detail from Brianna's own story, then ask one light, curious question back (a friend question, not a sales question)";
+  const asksBack = messages.filter((message) => String(message || "").includes("?"));
+  if (!asksBack.length) return "doesn't return the prospect's question: answer it, add one short real detail from Brianna's own story, then ask one light, curious question back (a friend question, not a sales question)";
+  if (asksBack.some(sharesOwnDetail)) return null;
+  return "doesn't share a real Brianna detail: \"doing great, thanks\" is not one. Add one short concrete line from her Approved True Stories (what she is working on or went through), then keep the one light question back";
+}
+
+// Words that make up stock answers ("Things are going great on my end, thank you!").
+const PLEASANTRY_WORDS = new Set("things thing are is going great good well doing really pretty so super on my end thank thanks you for asking over here i'm im i am all fine amazing awesome ok okay and too same been everything everything's it's its the a just".split(" "));
+
+/** True when a non-question sentence says something concrete about the sender (not just "doing great, thanks"). */
+export function sharesOwnDetail(message: string): boolean {
+  return String(message || "").replace(/[‘’]/g, "'").split(/[.!?\n]+/).some((sentence) => {
+    const words = sentence.toLowerCase().match(/[a-z0-9']+/g) || [];
+    return words.some((word) => /^(i|i'm|i've|i'd|i'll|my|me|mine|myself)$/.test(word))
+      && words.filter((word) => !PLEASANTRY_WORDS.has(word)).length >= 2;
+  });
 }
 
 /**
  * When the prospect asked us a question, make sure the PRIMARY reply asks one
- * back: promote the first variant that does (labels follow position). Returns
- * the input unchanged otherwise.
+ * back (and, if any does, one that also shares a real detail): promote it
+ * (labels follow position). Returns the input unchanged otherwise.
  */
 export function promoteReciprocalVariant<T extends { message?: string; variant?: string }>(variants: T[], conversation: FriendConversationMessage[]): T[] {
   if (!variants.length || !friendReciprocityIssue([String(variants[0]?.message || "")], conversation)) return variants;
-  const index = variants.findIndex((variant) => String(variant?.message || "").includes("?"));
+  const text = (variant: T) => String(variant?.message || "");
+  let index = variants.findIndex((variant) => text(variant).includes("?") && sharesOwnDetail(text(variant)));
+  if (index < 0) index = variants.findIndex((variant) => text(variant).includes("?"));
   if (index <= 0) return variants;
   const reordered = [variants[index], ...variants.filter((_, i) => i !== index)];
   const labels = ["primary", "alternative", "casual"];
