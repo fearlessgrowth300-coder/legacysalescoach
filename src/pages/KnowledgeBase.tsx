@@ -88,6 +88,27 @@ export default function KnowledgeBase() {
     enabled: !!user,
   });
 
+  // Sources never extracted, failed, or extracted by the old pipeline (no stored
+  // original passages). The 5-minute background job re-extracts queued items one
+  // at a time with the user's own AI key, so no tab has to stay open.
+  const outdatedItems = (items || []).filter((item: any) =>
+    item.status === "pending" || item.status === "error" ||
+    (item.status === "ready" && Number(item.source_index_version || 0) < 2));
+  const queueOutdated = useMutation({
+    mutationFn: async () => {
+      const ids = outdatedItems.map((item: any) => item.id);
+      if (!ids.length) return 0;
+      const { error } = await supabase.from("knowledge_base_items").update({ status: "queued" }).in("id", ids);
+      if (error) throw error;
+      return ids.length;
+    },
+    onSuccess: (count: number) => {
+      toast.success(`${count} sources queued. They update automatically one by one in the background — no need to keep this page open.`);
+      queryClient.invalidateQueries({ queryKey: ["kb-items"] });
+    },
+    onError: (error: any) => toast.error(error.message || "Could not queue sources"),
+  });
+
   // Repair legacy rows where the full source is already indexed but a later,
   // optional principle refresh incorrectly changed the overall status to error.
   useEffect(() => {
@@ -887,6 +908,7 @@ export default function KnowledgeBase() {
 
   const getStatusIcon = (status: string) => {
     if (status === "ready") return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+    if (status === "queued") return <RefreshCw className="h-4 w-4 text-muted-foreground" />;
     if (status === "processing" || status === "mapping" || status === "extracting") {
       return <Loader2 className="h-4 w-4 text-amber-500 animate-spin" />;
     }
@@ -1078,6 +1100,12 @@ export default function KnowledgeBase() {
           <Button variant="outline" size="sm" className="text-xs sm:text-sm" onClick={() => setViewAllLearningsOpen(true)}>
             <BookOpen className="h-4 w-4 mr-1 sm:mr-2" />Brain Learnings
           </Button>
+          {outdatedItems.length > 0 && (
+            <Button variant="default" size="sm" className="text-xs sm:text-sm" onClick={() => queueOutdated.mutate()} disabled={queueOutdated.isPending}>
+              {queueOutdated.isPending ? <Loader2 className="h-4 w-4 mr-1 sm:mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1 sm:mr-2" />}
+              Update outdated sources ({outdatedItems.length})
+            </Button>
+          )}
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
@@ -1716,6 +1744,11 @@ export default function KnowledgeBase() {
                         </div>
                       </div>
                     </>
+                  )}
+                  {item.status === "queued" && (
+                    <p className="mt-3 pt-3 border-t text-xs text-muted-foreground">
+                      Queued for update — it will re-extract automatically in the background (one source at a time).
+                    </p>
                   )}
                   {item.status === "pending" && (
                     <div className="mt-3 pt-3 border-t flex items-center justify-between gap-2">

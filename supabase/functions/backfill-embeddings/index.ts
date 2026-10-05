@@ -47,6 +47,44 @@ async function indexBatch(db: any, userId: string, reindex: boolean) {
 }
 
 /**
+ * Re-extraction queue. The Knowledge Base "Update outdated sources" button marks
+ * items status='queued'; each scheduled run starts the oldest one with the same
+ * request the Re-extract button sends (the owner's own AI key is used). Only one
+ * extraction runs at a time so free Gemini quotas are not burst.
+ */
+async function startNextQueuedExtraction(db: any, serviceKey: string) {
+  const busySince = new Date(Date.now() - 20 * 60_000).toISOString();
+  const { data: busy } = await db.from("knowledge_base_items").select("id")
+    .in("status", ["processing", "mapping", "extracting"]).gt("updated_at", busySince).limit(1);
+  if (busy?.length) return { queue: "waiting", running: busy[0].id };
+  const { data: next } = await db.from("knowledge_base_items")
+    .select("id, user_id, type, url, file_path").eq("status", "queued")
+    .order("updated_at", { ascending: true }).limit(1);
+  const item = next?.[0];
+  if (!item) return { queue: "empty" };
+  await db.from("knowledge_base_items").update({
+    status: "processing", book_brief: null, source_index_version: 0, source_chunk_count: 0, indexed_at: null,
+  }).eq("id", item.id);
+  const body: Record<string, unknown> = { itemId: item.id, type: item.type, userId: item.user_id };
+  if (item.type === "pdf" && item.file_path) {
+    body.filePath = item.file_path;
+    const { data: text } = await db.storage.from("knowledge-files").download(`${item.file_path}.txt`);
+    const extracted = text ? await text.text() : "";
+    if (extracted.length >= 100) body.manualTranscript = extracted;
+  } else if (item.url) {
+    body.url = item.url;
+  }
+  const response = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/process-knowledge`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60_000),
+  }).catch((error) => ({ ok: false, status: 0, error } as any));
+  if (!response.ok) await db.from("knowledge_base_items").update({ status: "error" }).eq("id", item.id);
+  return { queue: "started", itemId: item.id, status: response.status };
+}
+
+/**
  * Scheduled mode (pg_cron every 5 min, x-cron-secret): keep every account's
  * vault indexed with the current model so nobody has to click Repair Search -
  * e.g. rows saved while the embedding server was down, or accounts that still
@@ -84,7 +122,10 @@ serve(async req => {
     const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const db = createClient(Deno.env.get("SUPABASE_URL")!, key);
     const cronSecret = Deno.env.get("CRON_SECRET");
-    if (cronSecret && req.headers.get("x-cron-secret") === cronSecret) return json(await runScheduled(db));
+    if (cronSecret && req.headers.get("x-cron-secret") === cronSecret) {
+      const extraction = await startNextQueuedExtraction(db, key).catch((error) => ({ queue: "failed", error: String(error) }));
+      return json({ ...(await runScheduled(db)), extraction });
+    }
     const token = req.headers.get("Authorization")?.replace(/^Bearer /i, "");
     const auth = token === key && typeof body.user_id === "string"
       ? await db.auth.admin.getUserById(body.user_id) : await db.auth.getUser(token || "");
