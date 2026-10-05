@@ -37,6 +37,8 @@ function chatTarget(ai: AiProvider, gatewayModel: string): { url: string; header
 // so a failed upload says why ("HTTP 401: API key not valid") instead of
 // "AI returned no structured insights".
 let lastExtractionProviderError = "";
+// Why a URL produced no usable content (shown on the Knowledge Base item).
+let lastUrlExtractionNote = "";
 const isQuotaError = (message: string) => /HTTP 429/.test(message);
 
 // Each Gemini model has its own free quota: on 429/503 try the next model
@@ -1310,11 +1312,15 @@ serve(async (req) => {
     } else if (type === "pdf" && (filePath || itemEarly.file_path)) {
       content = await extractPdfContent(filePath || itemEarly.file_path, supabase, itemId, corsHeaders);
     } else if (url || itemEarly.url) {
+      lastUrlExtractionNote = "";
       content = await extractUrlContent(url || itemEarly.url, supabaseUrl, supabaseKey, supabase, user.id);
     }
 
     if (!content || content.length < 20) {
-      await supabase.from("knowledge_base_items").update({ status: "error" }).eq("id", itemId);
+      await supabase.from("knowledge_base_items").update({
+        status: "error",
+        book_brief: { insight_extraction: { status: "failed", error: lastUrlExtractionNote || "Could not extract any content from this source." } },
+      }).eq("id", itemId);
       console.error("Could not extract enough content for item", itemId);
       return;
     }
@@ -2285,13 +2291,12 @@ async function extractTikTokContent(url: string): Promise<string> {
     // TikTok's own captions first (free, instant), then Whisper on the video file.
     let transcript = await fetchSubtitleText(pickSubtitleUrl(video));
     if (transcript.length < 50) transcript = await transcribeVideoUrl(pickVideoFileUrl(video) || "");
-    if (!transcript) console.warn("[process-knowledge] TikTok transcript unavailable; using caption only", Object.keys(video).slice(0, 40));
-    return [
-      ...(transcript ? [`Transcript:\n${transcript}`, ""] : []),
-      `TikTok video by @${video.authorMeta?.name || video.author?.uniqueId || "unknown"}`,
-      `Caption: ${video.text || video.desc || "No caption"}`,
-      `Views: ${video.playCount ?? 0} | Likes: ${video.diggCount ?? 0} | Comments: ${video.commentCount ?? 0} | Shares: ${video.shareCount ?? 0}`,
-    ].join("\n");
+    if (!transcript) {
+      lastUrlExtractionNote = "Couldn't get the spoken transcript for this TikTok. Paste the transcript manually.";
+      return "";
+    }
+    // Knowledge Base keeps only what is SAID in the video - no caption or stats.
+    return `Transcript:\n${transcript}`;
   } catch (error) {
     console.error("TikTok extraction error:", error);
     return `TikTok URL: ${url}.`;
@@ -2318,17 +2323,16 @@ async function extractInstagramContent(url: string, supabaseUrl: string, supabas
         const results = await actorRes.json();
         const post = Array.isArray(results) && results.length > 0 ? results[0] : null;
         if (post) {
-          // A reel's value is what is SAID in it; the caption alone taught the brain nothing.
+          // Knowledge Base keeps only what is SAID in the reel - no caption, likes or comments.
           const transcript = post.type === "Video" ? await transcribeVideoUrl(pickVideoFileUrl(post) || "") : "";
-          if (post.type === "Video" && !transcript) console.warn("[process-knowledge] Instagram reel transcript unavailable; using caption only", Object.keys(post).slice(0, 40));
-          content = [
-            ...(transcript ? [`Transcript:\n${transcript}`, ""] : []),
-            `Instagram ${post.type === "Video" ? "Reel/Video" : "Post"} by @${post.ownerUsername || "unknown"}`,
-            `Caption: ${post.caption || "No caption"}`,
-            `Likes: ${post.likesCount || 0} | Comments: ${post.commentsCount || 0}`,
-            post.type === "Video" ? `Video views: ${post.videoViewCount || 0}` : "",
-            ...(post.latestComments || []).slice(0, 10).map((c: any) => `Comment by @${c.ownerUsername}: ${c.text}`),
-          ].filter(Boolean).join("\n");
+          if (transcript) {
+            content = `Transcript:\n${transcript}`;
+          } else {
+            lastUrlExtractionNote = post.type === "Video"
+              ? "Couldn't get the spoken transcript for this reel. Paste the transcript manually."
+              : "This Instagram post has no video to transcribe.";
+            return "";
+          }
         }
       }
     } catch (e) {
@@ -2356,6 +2360,12 @@ async function extractInstagramContent(url: string, supabaseUrl: string, supabas
   }
 
   if (!content || content.length < 50) {
+    // A reel/post with nothing extracted must not become a placeholder that the
+    // AI "learns" from; report it so the transcript can be pasted instead.
+    if (isPost) {
+      lastUrlExtractionNote ||= "Couldn't read this Instagram reel. Paste the transcript manually.";
+      return "";
+    }
     content = `Instagram URL: ${url}. Please analyze this Instagram profile/post based on the URL.`;
   }
   return content;
