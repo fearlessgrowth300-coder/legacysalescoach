@@ -2287,13 +2287,11 @@ async function extractTikTokContent(url: string): Promise<string> {
     if (transcript.length < 50) transcript = await transcribeVideoUrl(pickVideoFileUrl(video) || "");
     if (!transcript) console.warn("[process-knowledge] TikTok transcript unavailable; using caption only", Object.keys(video).slice(0, 40));
     return [
-      ...(transcript ? [`Transcript:
-${transcript}`, ""] : []),
+      ...(transcript ? [`Transcript:\n${transcript}`, ""] : []),
       `TikTok video by @${video.authorMeta?.name || video.author?.uniqueId || "unknown"}`,
       `Caption: ${video.text || video.desc || "No caption"}`,
       `Views: ${video.playCount ?? 0} | Likes: ${video.diggCount ?? 0} | Comments: ${video.commentCount ?? 0} | Shares: ${video.shareCount ?? 0}`,
-    ].join("
-");
+    ].join("\n");
   } catch (error) {
     console.error("TikTok extraction error:", error);
     return `TikTok URL: ${url}.`;
@@ -2324,8 +2322,7 @@ async function extractInstagramContent(url: string, supabaseUrl: string, supabas
           const transcript = post.type === "Video" ? await transcribeVideoUrl(pickVideoFileUrl(post) || "") : "";
           if (post.type === "Video" && !transcript) console.warn("[process-knowledge] Instagram reel transcript unavailable; using caption only", Object.keys(post).slice(0, 40));
           content = [
-            ...(transcript ? [`Transcript:
-${transcript}`, ""] : []),
+            ...(transcript ? [`Transcript:\n${transcript}`, ""] : []),
             `Instagram ${post.type === "Video" ? "Reel/Video" : "Post"} by @${post.ownerUsername || "unknown"}`,
             `Caption: ${post.caption || "No caption"}`,
             `Likes: ${post.likesCount || 0} | Comments: ${post.commentsCount || 0}`,
