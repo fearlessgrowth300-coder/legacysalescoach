@@ -608,6 +608,9 @@ export async function loadProspectDecisionHistory(
       .eq("user_id", userId)
       .eq("prospect_id", prospectId)
       .eq("thread_type", threadType)
+      // Only moves that were actually sent. Unsent drafts ("suggested") made the
+      // AI copy its own rejected drafts word for word on every regenerate.
+      .neq("status", "suggested")
       .order("created_at", { ascending: false })
       .limit(24),
   ]);
