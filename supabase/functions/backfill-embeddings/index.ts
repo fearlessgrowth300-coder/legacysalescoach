@@ -74,6 +74,21 @@ async function startNextQueuedExtraction(db: any, serviceKey: string) {
     await db.from("knowledge_base_items").update({ status: "queued" }).in("id", blocked.map((row: any) => row.id));
   }
   const busySince = new Date(Date.now() - 20 * 60_000).toISOString();
+  // Extractions killed mid-run sit in "processing" forever, and one bad AI
+  // window fails a whole source (2026-10-08: 4 books stuck, 2 videos failed).
+  // Put them back in line, at most 3 times each so a hopeless one can't burn quota.
+  const [{ data: stuck }, { data: failed }] = await Promise.all([
+    db.from("knowledge_base_items").select("id, auto_retry_count")
+      .in("status", ["processing", "mapping", "extracting"]).lt("updated_at", busySince).limit(50),
+    db.from("knowledge_base_items").select("id, auto_retry_count")
+      .eq("status", "error").eq("book_brief->insight_extraction->>status", "failed").lt("auto_retry_count", 3).limit(50),
+  ]);
+  for (const row of [...(stuck || []), ...(failed || [])]) {
+    const retries = row.auto_retry_count || 0;
+    await db.from("knowledge_base_items")
+      .update(retries < 3 ? { status: "queued", auto_retry_count: retries + 1 } : { status: "error" })
+      .eq("id", row.id);
+  }
   const { data: busy } = await db.from("knowledge_base_items").select("id")
     .in("status", ["processing", "mapping", "extracting"]).gt("updated_at", busySince).limit(1);
   if (busy?.length) return { queue: "waiting", running: busy[0].id };
