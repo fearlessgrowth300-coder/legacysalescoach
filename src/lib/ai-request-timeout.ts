@@ -2,7 +2,8 @@
 // reasoning, generation and a quality repair. Give the backend enough time to
 // finish its bounded retries, while still recovering the UI from a stalled
 // request and retaining the user's draft for an explicit retry.
-export const CONVERSATION_AI_TIMEOUT_MS = 120000;
+// The backend budgets itself to ~110s; 140s leaves room for network + saving.
+export const CONVERSATION_AI_TIMEOUT_MS = 140000;
 
 export class AiRequestTimeoutError extends Error {
   constructor(timeoutMs: number) {

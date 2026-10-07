@@ -149,6 +149,11 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // The app gives up after 120s: every AI step gets what's left of a 110s budget.
+  const startedAt = Date.now();
+  const timings: Record<string, number> = {};
+  const mark = (step: string) => { timings[step] = Date.now() - startedAt; };
+  const budgetMs = (cap: number) => Math.max(0, Math.min(cap, 110_000 - (Date.now() - startedAt)));
   try {
     const { prospectId, message: rawMessage, threadType, styleModifier, screenshotPath, screenshotContext: rawScreenshotContext } = await req.json();
     const activeThreadType: "friend" | "expert" = threadType === "expert" ? "expert" : "friend";
@@ -642,8 +647,10 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
         ],
         temperature: 0.2,
         response_format: { type: "json_object" },
+        reasoning_effort: chat.provider === "gemini" ? "low" : undefined,
         timeout_ms: activeThreadType === "friend" ? 28000 : 12000,
       });
+      mark("analysis");
       if (!analysisResponse.ok) throw new Error(`Analysis AI error: ${analysisResponse.status}`);
       const analysisData = await analysisResponse.json();
       const analysisRaw = analysisData.choices?.[0]?.message?.content || "";
@@ -1089,6 +1096,7 @@ ${winningPatternsText.substring(0, 2000)}`;
 
     let replyJson: any = { variants: [] };
     let replyGenerationFailure = "";
+    mark("before_reply");
     try {
       const replyResponse = await userChat(chat, {
         model: chat.models.balanced,
@@ -1101,8 +1109,9 @@ ${winningPatternsText.substring(0, 2000)}`;
         // profile, source evidence, graph path and reference moments. Twenty
         // two seconds was causing valid Gemini generations to be aborted and
         // replaced by a generic deterministic question.
-        timeout_ms: 30000,
+        timeout_ms: budgetMs(30000),
       });
+      mark("reply");
       if (!replyResponse.ok) throw new Error(`Reply AI error: ${replyResponse.status}`);
       const replyData = await replyResponse.json();
       const replyRaw = replyData.choices?.[0]?.message?.content || "";
@@ -1142,8 +1151,9 @@ ${winningPatternsText.substring(0, 2000)}`;
           ],
           temperature: 0.45,
           response_format: { type: "json_object" },
-          timeout_ms: 18000,
+          timeout_ms: budgetMs(18000),
         });
+        mark("recovery");
         if (!recoveryResponse.ok) throw new Error(`Compact Friend recovery failed: ${recoveryResponse.status}`);
         const recoveryData = await recoveryResponse.json();
         const recoveryContent = recoveryData.choices?.[0]?.message?.content || "";
@@ -1198,7 +1208,7 @@ ${winningPatternsText.substring(0, 2000)}`;
       let candidateIssues = candidateIssuesByIndex.flatMap((issues, index) =>
         issues.map((issue) => `variant ${index + 1}: ${issue}`)
       );
-      if (candidateIssues.length > 0 && originalVariants.length === 3) {
+      if (candidateIssues.length > 0 && originalVariants.length === 3 && budgetMs(18000) >= 8000) {
         try {
           const repairResponse = await userChat(chat, {
             model: chat.models.fast,
@@ -1208,8 +1218,10 @@ ${winningPatternsText.substring(0, 2000)}`;
             ],
             temperature: 0.25,
             response_format: { type: "json_object" },
-            timeout_ms: 18000,
+            reasoning_effort: chat.provider === "gemini" ? "low" : undefined,
+            timeout_ms: budgetMs(18000),
           });
+          mark("repair");
           if (!repairResponse.ok) throw new Error(`Compact Friend repair failed: ${repairResponse.status}`);
           const repairData = await repairResponse.json();
           const repairContent = repairData.choices?.[0]?.message?.content || "";
@@ -1456,6 +1468,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           linked_source_passage_used: Boolean(lockedReplyPassage),
           fallback_reason: replyJson.qualityValidation?.fallbackReason || null,
           fallback_variant_count: replyJson.qualityValidation?.fallbackVariantCount || 0,
+          timings_ms: { ...timings, total: Date.now() - startedAt },
         },
         modelProvider: chat.provider,
         modelName: chat.models.balanced,

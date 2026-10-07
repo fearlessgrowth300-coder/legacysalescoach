@@ -91,6 +91,18 @@ describe("Friend conversation engine", () => {
     expect(deriveEvidenceGatedFriendStage(full, 6).stage).toBe("emotional_certainty");
   });
 
+  it("flags an early sales question the prospect never invited (2026-10-07 Katie)", () => {
+    const convo = [
+      { direction: "outbound", content: "How has building a neurospicy-friendly setup been going?" },
+      { direction: "inbound", content: "Trial and error, but I keep things sooo much simpler now and give myself permission to have low energy days." },
+    ];
+    const pushy = "Such a healthier way to run things. How's that simplified rhythm been working out for actual sales?";
+    expect(deterministicFriendQualityIssues(pushy, "intent", {}, convo).some((i) => i.startsWith("asks about sales too early"))).toBe(true);
+    expect(deterministicFriendQualityIssues("Love that. What does a low-energy day look like for you?", "intent", {}, convo).some((i) => i.startsWith("asks about sales"))).toBe(false);
+    const raised = [...convo, { direction: "inbound", content: "I'm just not getting any sales yet." }];
+    expect(deterministicFriendQualityIssues(pushy, "intent", {}, raised).some((i) => i.startsWith("asks about sales"))).toBe(false);
+  });
+
   it("does not treat a resolved historical problem as current pain", () => {
     const result = deriveEvidenceGatedFriendStage({
       motivation: "freedom",

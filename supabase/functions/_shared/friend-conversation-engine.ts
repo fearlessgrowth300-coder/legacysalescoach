@@ -883,6 +883,13 @@ export function deterministicFriendQualityIssues(
   if (stage === "intent" && /\b(?:expert|mentor|buy|price|link|offer)\b/i.test(message) && !directlyAskedAboutCommercialContext) issues.push("premature expert transition in intent");
   if (stage === "intent" && /\baudience\b/i.test(message) && /struggl|problem|intimidat|overwhelm/i.test(message)) issues.push("asks about the audience instead of the prospect");
   if ((stage === "logical_certainty" || stage === "emotional_certainty") && /(?:sales?|clients?|customers?)/i.test(message) && /what.*(?:journey|inspire|passionate)|how.*feel/i.test(message)) issues.push("ignores a concrete sales gap for generic rapport");
+  // 2026-10-07 Katie: shared her routine, every reply asked "translating into sales yet?".
+  const prospectRaisedSales = conversation.some((turn) => turn.direction === "inbound" && SALES_TALK.test(String(turn.content || "")));
+  const questionPart = message.slice(message.lastIndexOf(".", message.indexOf("?")) + 1);
+  const firstReplyToThem = conversation.filter((turn) => turn.direction === "inbound").length === 1;
+  if (stage === "intent" && firstReplyToThem && message.includes("?") && SALES_TALK.test(questionPart) && !prospectRaisedSales) {
+    issues.push("asks about sales too early: they haven't brought up sales; stay on what they actually said");
+  }
   if (repeatsAnsweredFriendQuestion(message, conversation)) issues.push("repeats an answered question");
   const recentOutbound = conversation
     .filter((turn) => turn.direction === "outbound" && Boolean(String(turn.content || "").trim()))
@@ -919,7 +926,7 @@ export function deterministicFriendQualityIssues(
 // identical probe lines went to up to 14 people, and "no" signals were pushed past).
 
 /** Issues that deserve one AI rewrite but must never swap a valid reply for the generic fallback. */
-export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question", "doesn't share a real Brianna detail", "reacts only, a dead end",
+export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question", "doesn't share a real Brianna detail", "reacts only, a dead end", "asks about sales too early",
   // Knowledge-application bookkeeping (lesson notes, cited names, anchoring):
   // worth a rewrite, but never worth swapping a lesson-based reply for the
   // knowledge-free generic fallback.
@@ -1046,6 +1053,7 @@ export function rankOpenerPrinciples<T extends { id?: string; principle_name?: s
 }
 
 const EARLY_RAPPORT_FIT = /\b(?:rapport|trust|curiosity|curious|listen\w*|relat\w*|empath\w*|connect\w*|storytelling|personal stor(?:y|ies)|mirror\w*|label\w*|validat\w*|open(?:er|ing)?|first impression|likab\w*|common ground|genuine|compliment|warm|question\w*)\b/i;
+const SALES_TALK = /\b(?:sales?|selling|sold|revenue|income|leads?|buyers?|customers?|clients?|money|profit|conversions?|making any)\b/i;
 const POST_SALE = /\b(?:post-?purchase|after (?:delivering|the (?:sale|purchase)|(?:they|customers?) (?:buy|bought|purchase))|existing customers?|review solicitation|testimonial request|upsell\w*|onboarding|retention|repeat (?:buyers?|purchases?))\b/i;
 const LATE_ONLY = /\b(?:clos(?:e|ing)|price|pricing|cost|discount|payment|invest(?:ment)?|deposit|objection|urgency|scarcity|deal)\b/i;
 
