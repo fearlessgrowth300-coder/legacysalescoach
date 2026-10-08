@@ -634,6 +634,23 @@ export function applyEarliestMissingFriendCheckpoint(
   return result;
 }
 
+/**
+ * First reply to a prospect's first message: the "commercial result" checkpoint
+ * made every reply ask "is it bringing in sales yet?" (2026-10-07 Katie, after
+ * one friendly answer). Relate first; the results question waits a turn.
+ */
+export function holdSalesQuestionOnFirstReply(
+  analysis: Record<string, any> | null | undefined,
+  inboundCount: number,
+): Record<string, any> {
+  const result = { ...(analysis || {}) };
+  const salesProbe = result.earliest_missing_checkpoint === "commercial_result"
+    || /commercial[- ]result/i.test(String(result.knowledge_need || "") + String(result.discovery_question_type || ""));
+  if (inboundCount !== 1 || !salesProbe) return result;
+  const action = "respond warmly to what they shared and relate with one short line from Brianna's Approved True Stories; save any results or sales question for a later turn";
+  return { ...result, next_best_action: action, next_objective: action, reply_act: "relate", question_needed: false, discovery_question_type: null, knowledge_need: "rapport" };
+}
+
 /** Answer the buyer's actual question before resuming any discovery checkpoint. */
 export function prioritizeFriendDirectQuestion(
   analysis: Record<string, any> | null | undefined,

@@ -11,6 +11,7 @@ import {
   deriveEarliestMissingFriendCheckpoint,
   deriveEvidenceGatedFriendStage,
   deterministicFriendQualityIssues,
+  holdSalesQuestionOnFirstReply,
   friendStageToDatabase,
   friendKnowledgeApplicationIssues,
   hydrateFriendKnowledgeApplication,
@@ -101,6 +102,16 @@ describe("Friend conversation engine", () => {
     expect(deterministicFriendQualityIssues("Love that. What does a low-energy day look like for you?", "intent", {}, convo).some((i) => i.startsWith("asks about sales"))).toBe(false);
     const raised = [...convo, { direction: "inbound", content: "I'm just not getting any sales yet." }];
     expect(deterministicFriendQualityIssues(pushy, "intent", {}, raised).some((i) => i.startsWith("asks about sales"))).toBe(false);
+  });
+
+  it("holds the sales-results question on the first reply only (2026-10-08 Katie)", () => {
+    const analysis = { earliest_missing_checkpoint: "commercial_result", reply_act: "probe", question_needed: true };
+    const first = holdSalesQuestionOnFirstReply(analysis, 1);
+    expect(first.question_needed).toBe(false);
+    expect(first.reply_act).toBe("relate");
+    expect(first.next_best_action).toMatch(/Approved True Stories/);
+    expect(holdSalesQuestionOnFirstReply(analysis, 2)).toEqual(analysis);
+    expect(holdSalesQuestionOnFirstReply({ earliest_missing_checkpoint: "tangible_goal" }, 1).reply_act).toBeUndefined();
   });
 
   it("does not treat a resolved historical problem as current pain", () => {

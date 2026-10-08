@@ -43,6 +43,7 @@ import {
   rankFriendPrinciplesForStage,
   friendReciprocityIssue,
   promoteReciprocalVariant,
+  holdSalesQuestionOnFirstReply,
 } from "../_shared/friend-conversation-engine.ts";
 
 
@@ -149,11 +150,13 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // The app gives up after 120s: every AI step gets what's left of a 110s budget.
+  // The connection to the app drops at ~100s (2026-10-08: a 104s run "failed"
+  // after saving). AI steps share an 80s budget; bookkeeping runs after the reply.
   const startedAt = Date.now();
   const timings: Record<string, number> = {};
   const mark = (step: string) => { timings[step] = Date.now() - startedAt; };
-  const budgetMs = (cap: number) => Math.max(0, Math.min(cap, 110_000 - (Date.now() - startedAt)));
+  const budgetMs = (cap: number) => Math.max(0, Math.min(cap, 80_000 - (Date.now() - startedAt)));
+  const background: Promise<unknown>[] = [];
   try {
     const { prospectId, message: rawMessage, threadType, styleModifier, screenshotPath, screenshotContext: rawScreenshotContext } = await req.json();
     const activeThreadType: "friend" | "expert" = threadType === "expert" ? "expert" : "friend";
@@ -638,6 +641,7 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
       : selectedAnalysisUserPrompt;
 
     let analysisJson: any = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Deterministic fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything", segment: "other", experience_level: "unknown", sales_status: "unknown", mentor_status: "unknown", current_strategy: "unknown", interests: [], desires: [], pain_points: [], objections: [], motivation: "unknown", intent: "unknown", tangible_goal: "unknown", problem_gap: "unknown", doubt_cause: "unknown", certainty_gap: "unknown", reply_act: "respond naturally", question_needed: false, knowledge_need: "none", readiness: "not_ready", contact_status: "active", next_best_action: "continue discovery", learning_confidence: 0, evidence: [] };
+    mark("before_analysis");
     try {
       const analysisResponse = await userChat(chat, {
         model: screenshotSignedUrl && !chat.isAnthropic ? chat.models.vision : chat.models.fast,
@@ -678,6 +682,7 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
       };
       analysisJson = applyEarliestMissingFriendCheckpoint(analysisJson);
       analysisJson = prioritizeFriendDirectQuestion(analysisJson, message);
+      analysisJson = holdSalesQuestionOnFirstReply(analysisJson, speakerMessages.filter((item: any) => item.direction === "inbound").length);
     }
 
     // Both Friend reply paths use one evidence-gated five-stage journey. A
@@ -1308,7 +1313,7 @@ ${winningPatternsText.substring(0, 2000)}`;
     }
     if (structuredFriendProfile) {
       const latestInbound = [...speakerMessages].reverse().find((item: any) => item.direction === "inbound");
-      await persistProspectFactLedger({
+      background.push(persistProspectFactLedger({
         supabase,
         userId: user.id,
         workspaceId: prospect.workspace_id,
@@ -1318,7 +1323,7 @@ ${winningPatternsText.substring(0, 2000)}`;
         sourceMessageId: latestInbound?.id || null,
         sourceDirection: "inbound",
         sourceMessages: speakerMessages,
-      });
+      }));
     }
 
     // ===== SIDE EFFECTS: Analytics, Learning, Lead Registry =====
@@ -1374,20 +1379,19 @@ ${winningPatternsText.substring(0, 2000)}`;
     // the user gives positive feedback or records a conversion.
     const learningResult: any = null;
     if (message) {
-      await supabase.from("learned_insights").insert({
+      background.push(Promise.resolve(supabase.from("learned_insights").insert({
         user_id: user.id, workspace_id: prospect.workspace_id, prospect_id: prospectId,
         insight_type: "conversation",
         insight: `${prospect.name}: Type=${detectedProspectType}, Tone=${detectedTone}, Stage=${analysisJson.stage}, Warmth=${analysisJson.warmth_score}, Move=${analysisJson.recommended_move}`,
         source: `Chat with ${prospect.name}`,
-      });
-
+      })));
     }
 
     // Every Friend analysis updates a structured memory for this prospect.
     // Only aggregate taxonomy signals cross conversations; never copy personal
     // evidence or generated reply text into another person's memory.
     // Lead registry update
-    if (message) {
+    if (message) background.push((async () => {
       const adviceEntry = { date: new Date().toISOString(), stage: analysisJson.stage, warmth: analysisJson.warmth_score, move: analysisJson.recommended_move, advice: (replyJson.variants?.[0]?.message || "").substring(0, 300) };
       if (leadEntry) {
         const pastAdvice = Array.isArray(leadEntry.past_advice) ? leadEntry.past_advice : [];
@@ -1427,7 +1431,7 @@ ${winningPatternsText.substring(0, 2000)}`;
         });
         if (signalError) console.warn("[generate-reply] could not record Friend audience signals", signalError);
       }
-    }
+    })());
 
     // ===== BUILD RESPONSE =====
     // Map variants to the existing suggestion format for backward compatibility
@@ -1483,6 +1487,11 @@ ${winningPatternsText.substring(0, 2000)}`;
         suggestion.strategyAttemptId = decisionTrace.attemptIds[index] || null;
       });
     }
+
+    // Bookkeeping finishes after the reply is sent (falls back to waiting locally).
+    const bookkeeping = Promise.allSettled(background);
+    const edgeRuntime = (globalThis as any).EdgeRuntime;
+    if (edgeRuntime?.waitUntil) edgeRuntime.waitUntil(bookkeeping); else await bookkeeping;
 
     const sourceTypes = new Set<string>();
     replyTopChunks.forEach((c: any) => sourceTypes.add(c.source_type || "unknown"));

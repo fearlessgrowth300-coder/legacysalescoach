@@ -39,6 +39,7 @@ import {
   formatFriendKnowledgeApplicationContract,
   hydrateFriendKnowledgeApplication,
   prioritizeFriendDirectQuestion,
+  holdSalesQuestionOnFirstReply,
   selectBestFriendCandidates,
   friendStageToDatabase,
   selectRelevantConversationPassages,
@@ -1189,6 +1190,7 @@ Choose a question only when one missing answer is genuinely necessary. Follow In
       };
       friendDecisionAnalysis = applyEarliestMissingFriendCheckpoint(friendDecisionAnalysis);
       friendDecisionAnalysis = prioritizeFriendDirectQuestion(friendDecisionAnalysis, message);
+      friendDecisionAnalysis = holdSalesQuestionOnFirstReply(friendDecisionAnalysis, speakerMessages.filter((item: any) => item.direction === "inbound").length);
     }
 
     const decisionSearchQuery = activeThreadType === "friend"
