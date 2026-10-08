@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { userChat, type UserChatTarget } from "../../supabase/functions/_shared/user-ai.ts";
+import { clearModelAvailability, markModelOverloaded, orderByAvailability, userChat, type UserChatTarget } from "../../supabase/functions/_shared/user-ai.ts";
 
 const geminiTarget: UserChatTarget = {
   provider: "gemini",
@@ -18,9 +18,10 @@ describe("Gemini transient failure recovery", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+    clearModelAvailability();
   });
 
-  it("retries a 503 once before falling back to another model", async () => {
+  it("moves straight to the next model on a 503 'high demand' (no same-model retry with little time)", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0);
     const fetchMock = vi.fn()
@@ -39,7 +40,7 @@ describe("Gemini transient failure recovery", () => {
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).model).toBe("gemini-3.8-flash");
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body).model).toBe("gemini-3.8-flash");
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).model).toBe("gemini-3.7-flash");
   });
 
   it("recovers a successful-but-empty Gemini completion through the native endpoint", async () => {
@@ -113,6 +114,12 @@ describe("Gemini transient failure recovery", () => {
     expect(response.status).toBe(502);
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect((await response.json()).error).toContain("no answer");
+  });
+
+  it("tries a model that just said 'high demand' last (2026-10-08: 3.8 overloaded, 3.7 fine)", () => {
+    const models = ["gemini-3.9-test-a", "gemini-3.9-test-b", "gemini-3.9-test-c"];
+    markModelOverloaded("gemini-3.9-test-a");
+    expect(orderByAvailability(models)).toEqual(["gemini-3.9-test-b", "gemini-3.9-test-c", "gemini-3.9-test-a"]);
   });
 
   it("uses the native Gemini endpoint when the compatible endpoint stays overloaded", async () => {

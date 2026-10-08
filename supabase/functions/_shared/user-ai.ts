@@ -341,19 +341,32 @@ async function tryGeminiNativeChat(
   });
 }
 
+// Models that just answered 503 "high demand" (2026-10-08: 3.8 and 3.6 overloaded
+// for hours while 3.7 and 3.5-lite worked). Tried last for a few minutes so the
+// next call in this worker goes straight to a model that answers.
+const overloadedUntil = new Map<string, number>();
+const OVERLOAD_COOLDOWN_MS = 5 * 60_000;
+export const clearModelAvailability = () => overloadedUntil.clear();
+export const markModelOverloaded = (model: string) => overloadedUntil.set(model, Date.now() + OVERLOAD_COOLDOWN_MS);
+export const orderByAvailability = (models: string[]) => {
+  const now = Date.now();
+  const busy = (model: string) => (overloadedUntil.get(model) || 0) > now;
+  return [...models.filter((m) => !busy(m)), ...models.filter(busy)];
+};
+
 export async function userChat(
   target: UserChatTarget,
   opts: SimpleChatOpts,
 ): Promise<Response> {
   if (!target.isAnthropic) {
     const candidateModels = target.provider === "gemini"
-      ? [
+      ? orderByAvailability([
           normalizeGeminiModel(opts.model),
           normalizeGeminiModel(target.models.balanced),
           "gemini-3.7-flash",
           "gemini-3.6-flash",
           "gemini-3.5-flash-lite",
-        ].filter((m, i, arr) => Boolean(m) && arr.indexOf(m) === i)
+        ].filter((m, i, arr) => Boolean(m) && arr.indexOf(m) === i))
       : [opts.model];
 
     let lastResponse: Response | null = null;
@@ -424,8 +437,9 @@ export async function userChat(
           }
           lastResponse = res;
           if (res.status === 429) rateLimitResponse = res;
+          if (res.status === 503 && target.provider === "gemini") markModelOverloaded(currentModel);
 
-          if (res.status === 503 && attempt === 0 && deadline - Date.now() > 3_500) {
+          if (res.status === 503 && attempt === 0 && deadline - Date.now() > 30_000) {
             const backoffMs = 800 + Math.floor(Math.random() * 400);
             console.warn(`[user-ai] model ${currentModel} returned 503; retrying once after backoff`);
             await new Promise((resolve) => setTimeout(resolve, backoffMs));
