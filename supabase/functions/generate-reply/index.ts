@@ -8,7 +8,7 @@ import {
   deduplicateConversationTurns,
   formatConversationHistory,
 } from "../_shared/conversation-history.ts";
-import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { FRIEND_GEMINI_MODEL, resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
   applyOutcomeAwareStrategyRank,
@@ -195,7 +195,7 @@ serve(async (req) => {
     const user = { id: userId };
     let chat;
     try {
-      chat = await resolveUserChatTarget(supabase, user.id);
+      chat = await resolveUserChatTarget(supabase, user.id, activeThreadType === "friend" ? FRIEND_GEMINI_MODEL : null);
     } catch (e) {
       if (e instanceof NoUserAiKeyError) {
         return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -659,7 +659,6 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
         temperature: 0.2,
         response_format: { type: "json_object" },
         reasoning_effort: chat.provider === "gemini" ? "low" : undefined,
-        hedge: activeThreadType === "friend",
         timeout_ms: activeThreadType === "friend" ? 28000 : 12000,
       });
       mark("analysis");
@@ -1132,7 +1131,6 @@ ${winningPatternsText.substring(0, 2000)}`;
         // Gemini 503s/timeouts (2026-10-08 08:19, 14:01).
         reasoning_effort: chat.provider === "gemini" ? "low" : undefined,
         attempt_timeout_ms: 25000,
-        hedge: activeThreadType === "friend",
         // The grounded Friend prompt contains the prospect ledger, workspace
         // profile, source evidence, graph path and reference moments. Twenty
         // two seconds was causing valid Gemini generations to be aborted and

@@ -9,7 +9,7 @@ import {
   buildProspectEvidenceLedger,
   deduplicateConversationTurns,
 } from "../_shared/conversation-history.ts";
-import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { FRIEND_GEMINI_MODEL, resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { buildFriendDecisionSearchQuery, buildFriendLearningContext, buildFriendProspectProfile } from "../_shared/friend-learning.ts";
 import {
   applyOutcomeAwareStrategyRank,
@@ -1118,7 +1118,7 @@ serve(async (req) => {
 
     let chat;
     try {
-      chat = await resolveUserChatTarget(supabase, user.id);
+      chat = await resolveUserChatTarget(supabase, user.id, activeThreadType === "friend" ? FRIEND_GEMINI_MODEL : null);
     } catch (e) {
       if (e instanceof NoUserAiKeyError) {
         return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });

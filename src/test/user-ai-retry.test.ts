@@ -116,18 +116,6 @@ describe("Gemini transient failure recovery", () => {
     expect((await response.json()).error).toContain("no answer");
   });
 
-  it("hedged call returns the first model that answers while others are overloaded", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: any) => {
-      const model = JSON.parse(init.body).model;
-      return model === "gemini-3.5-flash-lite"
-        ? new Response('{"choices":[{"message":{"content":"from lite"},"finish_reason":"stop"}]}', { status: 200 })
-        : new Response('{"error":{"code":503}}', { status: 503 });
-    }));
-    const res = await userChat(geminiTarget, { model: "gemini-3.8-flash", messages: [{ role: "user", content: "Hi" }], hedge: true, timeout_ms: 5_000 });
-    expect(res.ok).toBe(true);
-    expect((await res.json()).choices[0].message.content).toBe("from lite");
-  });
-
   it("tries a model that just said 'high demand' last (2026-10-08: 3.8 overloaded, 3.7 fine)", () => {
     const models = ["gemini-3.9-test-a", "gemini-3.9-test-b", "gemini-3.9-test-c"];
     markModelOverloaded("gemini-3.9-test-a");

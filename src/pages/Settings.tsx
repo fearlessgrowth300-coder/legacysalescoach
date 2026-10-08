@@ -301,7 +301,7 @@ export default function Settings() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">Select your default Google Gemini reasoning & speed engine.</p>
+                <p className="text-xs text-muted-foreground">Used by AI Chat. If 3.8 is busy, switch to 3.7 here. Friend replies always use Gemini 3.7 Flash.</p>
               </div>
             )}
 
