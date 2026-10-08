@@ -1117,8 +1117,16 @@ serve(async (req) => {
       : "";
 
     let chat;
+    let chatAnalysis;
+    let chatRewrite;
     try {
-      chat = await resolveUserChatTarget(supabase, user.id, activeThreadType === "friend" ? FRIEND_GEMINI_MODEL : null);
+      // One key per step when the owner added extra keys (empty slot = main key).
+      const model = activeThreadType === "friend" ? FRIEND_GEMINI_MODEL : null;
+      [chat, chatAnalysis, chatRewrite] = await Promise.all([
+        resolveUserChatTarget(supabase, user.id, model, "reply"),
+        resolveUserChatTarget(supabase, user.id, model, "analysis"),
+        resolveUserChatTarget(supabase, user.id, model, "rewrite"),
+      ]);
     } catch (e) {
       if (e instanceof NoUserAiKeyError) {
         return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -1135,7 +1143,7 @@ serve(async (req) => {
       ).join("\n");
       const evidenceLedger = buildProspectEvidenceLedger(history);
       try {
-        const decisionResponse = await userChat(chat, {
+        const decisionResponse = await userChat(chatAnalysis, {
           model: chat.models.fast,
           messages: [
             {
@@ -2076,7 +2084,7 @@ ${jsonFormat}
       } else try {
         if (validationFailure) throw new Error(validationFailure);
         if (originalSuggestions.length === 0) throw new Error("Reply generator returned no Friend suggestions");
-        const qualityResponse = await userChat(chat, {
+        const qualityResponse = await userChat(chatRewrite, {
           model: chat.models.fast,
           messages: [
             { role: "system", content: buildFriendQualityValidatorPrompt("suggestions") },
@@ -2128,7 +2136,7 @@ ${jsonFormat}
       // visible message instead of merely visible in the analysis panel.
       if (candidateIssues.length > 0 && originalSuggestions.length === 3) {
         try {
-          const repairResponse = await userChat(chat, {
+          const repairResponse = await userChat(chatRewrite, {
             model: chat.models.fast,
             messages: [
               { role: "system", content: "Return ONLY valid JSON with exactly three objects in suggestions. Rewrite each Friend reply so it is short, natural, grounded in the stated prospect fact, applies the selected lesson, asks at most one question, and does not repeat a previous question. Do not add claims, pressure, or a pitch." },

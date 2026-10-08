@@ -231,7 +231,9 @@ serve(async (req) => {
       });
     }
 
-    const allowedServices = ["supadata", "transcriptapi", "openai", "gemini", "anthropic"];
+    // gemini_<role>: optional extra Gemini key for one step (see user-ai.ts GEMINI_KEY_ROLES).
+    const geminiRoleServices = ["gemini_analysis", "gemini_reply", "gemini_rewrite", "gemini_chat"];
+    const allowedServices = ["supadata", "transcriptapi", "openai", "gemini", "anthropic", ...geminiRoleServices];
     if (!allowedServices.includes(service)) {
       return new Response(JSON.stringify({ error: "Unsupported service" }), {
         status: 400, headers: { ...headers, "Content-Type": "application/json" },
@@ -251,6 +253,8 @@ serve(async (req) => {
       const cleanKey = apiKey.trim();
       if (AI_SERVICES.includes(service as typeof AI_SERVICES[number])) {
         await validateAiProviderKey(service, cleanKey);
+      } else if (geminiRoleServices.includes(service)) {
+        await validateAiProviderKey("gemini", cleanKey);
       }
       const encryptedKey = await encryptValue(cleanKey);
 
@@ -305,13 +309,16 @@ serve(async (req) => {
 
         // One AI provider is active at a time. Remove stale provider rows only
         // after the replacement key was validated and written successfully.
-        const { error: cleanupError } = await supabase
-          .from("user_api_keys")
-          .delete()
-          .eq("user_id", user.id)
-          .in("service", [...AI_SERVICES])
-          .neq("service", service);
-        if (cleanupError) throw cleanupError;
+        // Never for a step key: saving gemini_reply must not delete the main key.
+        if (AI_SERVICES.includes(service as typeof AI_SERVICES[number])) {
+          const { error: cleanupError } = await supabase
+            .from("user_api_keys")
+            .delete()
+            .eq("user_id", user.id)
+            .in("service", [...AI_SERVICES])
+            .neq("service", service);
+          if (cleanupError) throw cleanupError;
+        }
 
         const { data: persisted, error: verifyError } = await supabase
           .from("user_api_keys")

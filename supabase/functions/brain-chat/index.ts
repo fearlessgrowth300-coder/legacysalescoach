@@ -711,7 +711,7 @@ serve(async (req) => {
 
     let chat;
     try {
-      chat = await resolveUserChatTarget(supabaseAdmin, user.id, selected_model);
+      chat = await resolveUserChatTarget(supabaseAdmin, user.id, selected_model, "chat");
     } catch (e) {
       if (e instanceof NoUserAiKeyError) {
         return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });

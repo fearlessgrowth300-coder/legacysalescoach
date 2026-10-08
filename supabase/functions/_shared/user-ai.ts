@@ -108,12 +108,32 @@ export async function getUserAiKey(
 /** Owner choice (2026-10-08): Friend replies run on Gemini 3.7 Flash; AI Chat uses the Settings pick. */
 export const FRIEND_GEMINI_MODEL = "gemini-3.7-flash";
 
+/**
+ * Optional extra Gemini keys, one per step (Settings → "Extra Gemini keys"),
+ * so one key doesn't carry every call. Stored as service `gemini_<role>`.
+ * An empty slot falls back to the main key.
+ */
+export const GEMINI_KEY_ROLES = ["analysis", "reply", "rewrite", "chat"] as const;
+export type GeminiKeyRole = typeof GEMINI_KEY_ROLES[number];
+
+async function getGeminiRoleKey(supabase: any, userId: string, role: GeminiKeyRole): Promise<string | null> {
+  const { data } = await supabase.from("user_api_keys").select("api_key")
+    .eq("user_id", userId).eq("service", `gemini_${role}`)
+    .order("updated_at", { ascending: false }).limit(1).maybeSingle();
+  return data?.api_key ? await decryptStoredApiKey(data.api_key) : null;
+}
+
 export async function resolveUserChatTarget(
   supabase: any,
   userId: string | null,
   preferredModel?: string | null,
+  role?: GeminiKeyRole,
 ): Promise<UserChatTarget> {
-  const found = await getUserAiKey(supabase, userId);
+  let found = await getUserAiKey(supabase, userId);
+  if (role && userId && (!found || found.provider === "gemini")) {
+    const roleKey = await getGeminiRoleKey(supabase, userId, role);
+    if (roleKey) found = { provider: "gemini", key: roleKey };
+  }
   if (!found) {
     const lovable = lovableChatTarget();
     if (lovable) return lovable;

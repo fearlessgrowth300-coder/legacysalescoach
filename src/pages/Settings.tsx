@@ -23,6 +23,82 @@ const AI_PROVIDERS = [
   { value: "anthropic", label: "Anthropic (Claude)", help: "Get a key at console.anthropic.com", placeholder: "sk-ant-..." },
 ] as const;
 
+// One optional Gemini key per step (server: user-ai.ts GEMINI_KEY_ROLES). Empty = main key.
+const GEMINI_STEP_KEYS = [
+  { service: "gemini_analysis", label: "Reading the chat & setting the stage", help: "Friend replies: reads the whole conversation first." },
+  { service: "gemini_reply", label: "Writing the message", help: "Friend replies: writes the 3 reply options." },
+  { service: "gemini_rewrite", label: "Checking & rewriting", help: "Friend replies: fixes a weak draft." },
+  { service: "gemini_chat", label: "AI Chat", help: "The AI Chat page." },
+] as const;
+
+function GeminiStepKeys() {
+  const [saved, setSaved] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState("");
+
+  const load = useCallback(async () => {
+    const entries = await Promise.all(GEMINI_STEP_KEYS.map(async ({ service }) => {
+      const { data } = await supabase.functions.invoke("manage-api-keys", { body: { action: "check", service } });
+      return [service, data?.exists ? data.masked : ""] as const;
+    }));
+    setSaved(Object.fromEntries(entries));
+  }, []);
+  useEffect(() => { load().catch(() => {}); }, [load]);
+
+  const save = async (service: string) => {
+    setBusy(service);
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-api-keys", { body: { action: "save", service, apiKey: (drafts[service] || "").trim() } });
+      if (error || data?.error) throw new Error(data?.error || error?.message || "Could not save key");
+      setDrafts((d) => ({ ...d, [service]: "" }));
+      await load();
+      toast.success("Key saved and checked with Google");
+    } catch (e: any) { toast.error(e.message || "Could not save key"); }
+    finally { setBusy(""); }
+  };
+
+  const remove = async (service: string) => {
+    setBusy(service);
+    try {
+      await supabase.functions.invoke("manage-api-keys", { body: { action: "delete", service } });
+      await load();
+      toast.success("Removed — this step uses your main key again");
+    } finally { setBusy(""); }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg"><Key className="h-5 w-5" />Extra Gemini keys (optional)</CardTitle>
+        <CardDescription>
+          Give each step its own key so one key doesn't carry everything. Empty = uses your main key.
+          Keys only spread the load if they come from different Google accounts/projects.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {GEMINI_STEP_KEYS.map(({ service, label, help }) => (
+          <div key={service} className="space-y-1">
+            <Label htmlFor={service}>{label}</Label>
+            <p className="text-xs text-muted-foreground">{help} {saved[service] ? `Saved: ${saved[service]}` : "Using main key."}</p>
+            <div className="flex gap-2">
+              <Input id={service} type="password" placeholder="AQ..." value={drafts[service] || ""}
+                onChange={(e) => setDrafts((d) => ({ ...d, [service]: e.target.value }))} />
+              <Button onClick={() => save(service)} disabled={busy === service || !(drafts[service] || "").trim()}>
+                <Save className="h-4 w-4" />
+              </Button>
+              {saved[service] && (
+                <Button variant="outline" onClick={() => remove(service)} disabled={busy === service} aria-label={`Remove ${label} key`}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Settings() {
   const { user } = useAuth();
   const [supadataKey, setSupadataKey] = useState("");
@@ -323,6 +399,8 @@ export default function Settings() {
             </Button>
           </CardContent>
         </Card>
+
+        {aiProvider === "gemini" && <GeminiStepKeys />}
 
         <Card>
           <CardHeader>

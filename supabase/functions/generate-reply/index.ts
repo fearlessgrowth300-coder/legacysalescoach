@@ -194,8 +194,16 @@ serve(async (req) => {
     }
     const user = { id: userId };
     let chat;
+    let chatAnalysis;
+    let chatRewrite;
     try {
-      chat = await resolveUserChatTarget(supabase, user.id, activeThreadType === "friend" ? FRIEND_GEMINI_MODEL : null);
+      // One key per step when the owner added extra keys (empty slot = main key).
+      const model = activeThreadType === "friend" ? FRIEND_GEMINI_MODEL : null;
+      [chat, chatAnalysis, chatRewrite] = await Promise.all([
+        resolveUserChatTarget(supabase, user.id, model, "reply"),
+        resolveUserChatTarget(supabase, user.id, model, "analysis"),
+        resolveUserChatTarget(supabase, user.id, model, "rewrite"),
+      ]);
     } catch (e) {
       if (e instanceof NoUserAiKeyError) {
         return new Response(JSON.stringify({ error: e.message }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -650,7 +658,7 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
     let analysisJson: any = { warmth_score: 20, stage: "friend", prospect_psychology: "Unknown", pain_expressed: false, pain_summary: null, signals_detected: [], predicted_next_objection: null, recommended_move: "empathy_mirror", brain_principle_used: null, brain_principle_reason: null, stage_reason: "Deterministic fallback", detectedTone: "neutral", prospectType: "unknown", objection_detected: null, objection_bucket: null, objection_response_type: null, spin_stage: "situation", offer_fit: "uncertain", referral_readiness: "not_ready", next_objective: "Understand the prospect before suggesting anything", segment: "other", experience_level: "unknown", sales_status: "unknown", mentor_status: "unknown", current_strategy: "unknown", interests: [], desires: [], pain_points: [], objections: [], motivation: "unknown", intent: "unknown", tangible_goal: "unknown", problem_gap: "unknown", doubt_cause: "unknown", certainty_gap: "unknown", reply_act: "respond naturally", question_needed: false, knowledge_need: "none", readiness: "not_ready", contact_status: "active", next_best_action: "continue discovery", learning_confidence: 0, evidence: [] };
     mark("before_analysis");
     try {
-      const analysisResponse = await userChat(chat, {
+      const analysisResponse = await userChat(chatAnalysis, {
         model: screenshotSignedUrl && !chat.isAnthropic ? chat.models.vision : chat.models.fast,
         messages: [
           { role: "system", content: selectedAnalysisPrompt },
@@ -1240,7 +1248,7 @@ ${winningPatternsText.substring(0, 2000)}`;
       );
       if (candidateIssues.length > 0 && originalVariants.length === 3 && budgetMs(18000) >= 8000) {
         try {
-          const repairResponse = await userChat(chat, {
+          const repairResponse = await userChat(chatRewrite, {
             model: chat.models.fast,
             messages: [
               { role: "system", content: "Return ONLY valid JSON with exactly three objects in variants. Rewrite each Friend reply so it is short, natural, grounded in the stated prospect fact, applies the selected lesson, ends with exactly one light, curious friend question about what they shared (not a sales question), does not repeat a previous question or reuse a stock line, stays about as long as the prospect's message, handles any stated objection honestly instead of pushing past it, and drops the pitch only after an explicit refusal. Any personal detail must come from approved_true_stories. Do not add claims, pressure, or a pitch." },
