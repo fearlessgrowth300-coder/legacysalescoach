@@ -133,7 +133,8 @@ describe("Gemini transient failure recovery", () => {
         { role: "user", content: "Write a reply." },
       ],
       response_format: { type: "json_object" },
-      timeout_ms: 30_000,
+      // Native recovery of an overloaded model only runs with >30s left.
+      timeout_ms: 60_000,
     });
     await vi.advanceTimersByTimeAsync(900);
     const response = await resultPromise;

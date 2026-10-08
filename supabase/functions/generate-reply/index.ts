@@ -710,11 +710,23 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
     let replyChunksText = chunksText;
     let appliedRetrievalQuery = brainQuery;
     let decisionGraphPromise: Promise<any> | null = null;
+    let rapportPoolPromise: Promise<[any, any]> | null = null;
     if (activeThreadType === "friend") {
       const decisionQuery = buildFriendDecisionSearchQuery(analysisJson, message, existingFriendProfile);
       appliedRetrievalQuery = decisionQuery;
-      // Graph walk only needs the query: run it alongside the search, not after.
+      // Graph walk and the rapport pool only need the query/stage: run them alongside the search.
       decisionGraphPromise = traverseSalesKnowledgeGraph(supabase, user.id, decisionQuery);
+      rapportPoolPromise = Promise.all([
+        supabase.from("sales_decisions").select("selected_sales_brain_id")
+          .eq("user_id", user.id).eq("thread_type", "friend")
+          .order("created_at", { ascending: false }).limit(10),
+        friendStageResult.stage === "intent"
+          ? supabase.rpc("search_sales_knowledge", {
+            search_query: "rapport OR trust OR curiosity OR storytelling OR connection OR listening OR relate OR empathy",
+            p_user_id: user.id, match_count: 30,
+          })
+          : Promise.resolve({ data: [] }),
+      ]);
       const [decisionEmbedding, decisionLexical] = await Promise.all([
         generateEmbedding(decisionQuery, supabase, user.id),
         retrieveFriendLexicalKnowledge(supabase, user.id, activeThreadType, kbModeMap, message, analysisJson),
@@ -850,18 +862,8 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
       : "Expert mode does not use the Friend journey.";
     // Early rapport replies apply rapport/story lessons, not closing scripts, and
     // rotate away from lessons locked on the last 10 Friend replies.
-    if (activeThreadType === "friend") {
-      const [{ data: recentDecisions }, rapportHits] = await Promise.all([
-        supabase.from("sales_decisions").select("selected_sales_brain_id")
-          .eq("user_id", user.id).eq("thread_type", "friend")
-          .order("created_at", { ascending: false }).limit(10),
-        friendStageResult.stage === "intent"
-          ? supabase.rpc("search_sales_knowledge", {
-            search_query: "rapport OR trust OR curiosity OR storytelling OR connection OR listening OR relate OR empathy",
-            p_user_id: user.id, match_count: 30,
-          })
-          : Promise.resolve({ data: [] }),
-      ]);
+    if (activeThreadType === "friend" && rapportPoolPromise) {
+      const [{ data: recentDecisions }, rapportHits] = await rapportPoolPromise;
       const recentUse: Record<string, number> = {};
       for (const row of recentDecisions || []) {
         if (row.selected_sales_brain_id) recentUse[row.selected_sales_brain_id] = (recentUse[row.selected_sales_brain_id] || 0) + 1;

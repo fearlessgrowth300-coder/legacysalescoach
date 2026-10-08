@@ -435,9 +435,12 @@ export async function userChat(
           // model, but never silently switch to another provider/account.
           if (res.status === 429 || res.status === 503 || res.status === 404) {
             console.warn(`[user-ai] model ${currentModel} returned ${res.status}; trying Gemini fallback`);
-            if (target.provider === "gemini" && res.status === 503 && !nativeRecoveryAttemptedModels.has(currentModel)) {
+            // An overloaded model rarely recovers in seconds: only retry it via the
+            // native route when plenty of time remains, else move to the next model.
+            if (target.provider === "gemini" && res.status === 503 && !nativeRecoveryAttemptedModels.has(currentModel)
+              && deadline - Date.now() > 30_000) {
               nativeRecoveryAttemptedModels.add(currentModel);
-              const nativeBudgetMs = Math.min(18_000, deadline - Date.now() - 1_000);
+              const nativeBudgetMs = Math.min(10_000, deadline - Date.now() - 1_000);
               if (nativeBudgetMs > 5_000) {
                 try {
                   const nativeResponse = await tryGeminiNativeChat(target, opts, currentModel, nativeBudgetMs);
