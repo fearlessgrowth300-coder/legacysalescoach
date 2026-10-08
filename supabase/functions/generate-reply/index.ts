@@ -659,6 +659,7 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
         temperature: 0.2,
         response_format: { type: "json_object" },
         reasoning_effort: chat.provider === "gemini" ? "low" : undefined,
+        hedge: activeThreadType === "friend",
         timeout_ms: activeThreadType === "friend" ? 28000 : 12000,
       });
       mark("analysis");
@@ -1131,6 +1132,7 @@ ${winningPatternsText.substring(0, 2000)}`;
         // Gemini 503s/timeouts (2026-10-08 08:19, 14:01).
         reasoning_effort: chat.provider === "gemini" ? "low" : undefined,
         attempt_timeout_ms: 25000,
+        hedge: activeThreadType === "friend",
         // The grounded Friend prompt contains the prospect ledger, workspace
         // profile, source evidence, graph path and reference moments. Twenty
         // two seconds was causing valid Gemini generations to be aborted and

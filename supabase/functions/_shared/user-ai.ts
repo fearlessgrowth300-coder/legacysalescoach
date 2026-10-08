@@ -226,6 +226,10 @@ export type SimpleChatOpts = {
   timeout_ms?: number;
   /** Per-model HTTP budget; defaults to 18s so short Friend requests stay responsive. */
   attempt_timeout_ms?: number;
+  /** Gemini: ask several models in parallel and keep the first answer. */
+  hedge?: boolean;
+  /** Use only `model`, no fallback chain (used by hedged calls). */
+  single_model?: boolean;
   /** Gemini OpenAI-compatible thinking level; omitted for other providers. */
   reasoning_effort?: "low" | "medium" | "high";
 };
@@ -359,7 +363,31 @@ export async function userChat(
   opts: SimpleChatOpts,
 ): Promise<Response> {
   if (!target.isAnthropic) {
-    const candidateModels = target.provider === "gemini"
+    // Hedged call: ask the 3 least-busy Gemini models at once, keep the first
+    // usable answer. When Google is overloaded each model can take 15-30s or 503,
+    // so trying them one after another ran out of time (2026-10-08).
+    // ponytail: losing calls run to completion and spend quota; abort them if that matters.
+    if (opts.hedge && target.provider === "gemini") {
+      const models = orderByAvailability([
+        normalizeGeminiModel(opts.model), "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash",
+      ].filter((m, i, arr) => arr.indexOf(m) === i)).slice(0, 3);
+      return await new Promise<Response>((resolve) => {
+        let pending = models.length;
+        let done = false;
+        let fallback: Response | null = null;
+        for (const model of models) {
+          userChat(target, { ...opts, hedge: false, single_model: true, model }).then((res) => {
+            if (done) return;
+            if (res.ok) { done = true; resolve(res); return; }
+            if (!fallback || res.status === 429) fallback = res;
+            if (--pending === 0) resolve(fallback!);
+          }, () => { if (!done && --pending === 0) resolve(fallback || new Response("{}", { status: 504 })); });
+        }
+      });
+    }
+    const candidateModels = opts.single_model
+      ? [normalizeGeminiModel(opts.model)]
+      : target.provider === "gemini"
       ? orderByAvailability([
           normalizeGeminiModel(opts.model),
           normalizeGeminiModel(target.models.balanced),
