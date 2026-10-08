@@ -57,6 +57,12 @@ const PAGE_SIZE = 1000;
 const PRINCIPLE_SELECT = "id, principle_name, what_i_learned, how_to_apply, source_name, category, source_type, source_id, brain_type, relevance_score, power_level, exact_words_to_use, the_deep_why, when_to_use, common_mistake, knowledge_types, objection_types, hidden_causes, buying_stages, psychological_mechanisms, intended_outcomes, techniques, contraindications, language_patterns, extraction_confidence, evidence_mode";
 const CHUNK_SELECT = "id, content, category, source_type, trigger_phrases, source_id, brain_type, relevance_score, chunk_kind, chunk_index, locator, metadata";
 
+/** Google's own words for a failed call ("quota exceeded", "model overloaded", ...). */
+async function providerErrorText(response: Response): Promise<string> {
+  const text = await response.text().catch(() => "");
+  return text.replace(/\s+/g, " ").slice(0, 300);
+}
+
 function keepHeadAndLatest(text: string, maxLength: number, headLength = 2000): string {
   if (!text || text.length <= maxLength) return text || "";
   const safeHead = Math.min(headLength, Math.floor(maxLength / 3));
@@ -157,6 +163,7 @@ serve(async (req) => {
   const mark = (step: string) => { timings[step] = Date.now() - startedAt; };
   const budgetMs = (cap: number, until = 80_000) => Math.max(0, Math.min(cap, until - (Date.now() - startedAt)));
   const background: Promise<unknown>[] = [];
+  let analysisFailure = "";
   try {
     const { prospectId, message: rawMessage, threadType, styleModifier, screenshotPath, screenshotContext: rawScreenshotContext } = await req.json();
     const activeThreadType: "friend" | "expert" = threadType === "expert" ? "expert" : "friend";
@@ -655,7 +662,7 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
         timeout_ms: activeThreadType === "friend" ? 28000 : 12000,
       });
       mark("analysis");
-      if (!analysisResponse.ok) throw new Error(`Analysis AI error: ${analysisResponse.status}`);
+      if (!analysisResponse.ok) throw new Error(`Analysis AI error: ${analysisResponse.status} ${await providerErrorText(analysisResponse)}`);
       const analysisData = await analysisResponse.json();
       const analysisRaw = analysisData.choices?.[0]?.message?.content || "";
       if (!analysisRaw.trim()) throw new Error("Analysis AI returned no usable content");
@@ -664,6 +671,7 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
     } catch (analysisError) {
       if (activeThreadType !== "friend") throw analysisError;
       console.warn("[generate-reply] Friend analysis used deterministic fallback", analysisError);
+      analysisFailure = analysisError instanceof Error ? analysisError.message : String(analysisError);
     }
 
     if (activeThreadType === "friend") {
@@ -1131,7 +1139,7 @@ ${winningPatternsText.substring(0, 2000)}`;
         timeout_ms: Math.max(15000, budgetMs(30000, 92_000)),
       });
       mark("reply");
-      if (!replyResponse.ok) throw new Error(`Reply AI error: ${replyResponse.status}`);
+      if (!replyResponse.ok) throw new Error(`Reply AI error: ${replyResponse.status} ${await providerErrorText(replyResponse)}`);
       const replyData = await replyResponse.json();
       const replyRaw = replyData.choices?.[0]?.message?.content || "";
       if (!replyRaw.trim()) throw new Error("Reply AI returned no usable content");
@@ -1488,6 +1496,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           fallback_reason: replyJson.qualityValidation?.fallbackReason || null,
           fallback_variant_count: replyJson.qualityValidation?.fallbackVariantCount || 0,
           timings_ms: { ...timings, total: Date.now() - startedAt },
+          analysis_failure: analysisFailure || null,
         },
         modelProvider: chat.provider,
         modelName: chat.models.balanced,
