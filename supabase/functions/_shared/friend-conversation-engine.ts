@@ -647,8 +647,8 @@ export function holdSalesQuestionOnFirstReply(
   const salesProbe = result.earliest_missing_checkpoint === "commercial_result"
     || /commercial[- ]result/i.test(String(result.knowledge_need || "") + String(result.discovery_question_type || ""));
   if (inboundCount !== 1 || !salesProbe) return result;
-  const action = "respond warmly to what they shared and relate with one short line from Brianna's Approved True Stories; save any results or sales question for a later turn";
-  return { ...result, next_best_action: action, next_objective: action, reply_act: "relate", question_needed: false, discovery_question_type: null, knowledge_need: "rapport" };
+  const action = "respond warmly to what they shared, relate with one short line from Brianna's Approved True Stories, and end with one light curious question about what they shared; save any results or sales question for a later turn";
+  return { ...result, next_best_action: action, next_objective: action, reply_act: "relate", question_needed: true, discovery_question_type: "light friend question", knowledge_need: "rapport" };
 }
 
 /** Answer the buyer's actual question before resuming any discovery checkpoint. */
@@ -919,9 +919,6 @@ export function deterministicFriendQualityIssues(
   const prospectIsDisengaging = recentInbound.some((turn) => /\b(?:not interested|no thanks|don't contact|do not contact|leave me alone|stop|not buying)\b/i.test(turn))
     || (recentInbound.length >= 2 && recentInbound.every((turn) => normalized(turn).split(" ").length <= 3));
   const prospectAskedQuestion = latestInbound.includes("?");
-  if (message.includes("?") && recentOutbound.length === 2 && recentOutbound.every((turn) => turn.includes("?")) && !prospectAskedQuestion && !/\b(?:how|what|why|can you|could you|tell me)\b/i.test(String(analysis?.latest_question || ""))) {
-    issues.push("creates a predictable consecutive-question chain");
-  }
   if (prospectIsDisengaging && /\b(?:expert|mentor|offer|program|course|price|buy|link|team|sales)\b/i.test(message)) {
     issues.push("pushes commercial context while the prospect is disengaging or declining");
   }
@@ -943,7 +940,7 @@ export function deterministicFriendQualityIssues(
 // identical probe lines went to up to 14 people, and "no" signals were pushed past).
 
 /** Issues that deserve one AI rewrite but must never swap a valid reply for the generic fallback. */
-export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question", "doesn't share a real Brianna detail", "reacts only, a dead end", "asks about sales too early",
+export const FRIEND_SOFT_ISSUE_PREFIXES = ["reuses a line", "asks again right after", "too long for", "doesn't return the prospect's question", "doesn't share a real Brianna detail", "doesn't end with a question", "asks about sales too early",
   // Knowledge-application bookkeeping (lesson notes, cited names, anchoring):
   // worth a rewrite, but never worth swapping a lesson-based reply for the
   // knowledge-free generic fallback.
@@ -1015,6 +1012,9 @@ export function sentLineSet(outboundElsewhere: string[]): Set<string> {
   return lines;
 }
 
+/** The last sentence is a question (trailing emoji/punctuation allowed). */
+export const endsWithQuestion = (message: string) => /\?[^\p{L}\p{N}]*$/u.test(String(message || "").trim());
+
 export function friendHygieneIssues(
   message: string,
   conversation: FriendConversationMessage[],
@@ -1023,16 +1023,11 @@ export function friendHygieneIssues(
   const issues: string[] = [];
   const reused = String(message || "").split(/(?<=[.!?])\s+/).map(normalizeLine).find((line) => line.length >= 35 && sentLines.has(line));
   if (reused) issues.push(`reuses a line already sent to other prospects ("${reused.slice(0, 80)}"); write it fresh for this person`);
-  const lastOutbound = [...conversation].reverse().find((turn) => turn.direction === "outbound" && String(turn.content || "").trim())?.content || "";
-  const prospectAskedUs = String([...conversation].reverse().find((turn) => turn.direction === "inbound")?.content || "").includes("?");
-  if (message.includes("?") && String(lastOutbound).includes("?") && !prospectAskedUs) {
-    issues.push("asks again right after our last question; share something from Brianna's approved stories or react to what they said instead");
-  }
-  // No question allowed, so a bare reaction ("so relatable!") is a dead end
-  // (2026-10-05 Katie). Give them something of Brianna's to reply to.
+  // Owner rule (2026-10-08): every reply ends with one light question so they
+  // reply back. A reply without one ("so relatable!") is a dead end.
   const latestTurn = [...conversation].reverse().find((turn) => turn.direction === "inbound" || turn.direction === "outbound");
-  if (latestTurn?.direction === "inbound" && !message.includes("?") && String(lastOutbound).includes("?") && !prospectAskedUs && !HARD_DECLINE.test(String(latestTurn.content || "")) && !sharesOwnDetail(message)) {
-    issues.push("reacts only, a dead end: add one short concrete line from Brianna's Approved True Stories that relates to what they just said, so they have something to reply to");
+  if (latestTurn?.direction === "inbound" && !HARD_DECLINE.test(String(latestTurn.content || "")) && !endsWithQuestion(message)) {
+    issues.push("doesn't end with a question: end with one light, curious friend question about what they just shared (not a sales question) so they reply");
   }
   const recentInbound = conversation.filter((turn) => turn.direction === "inbound").slice(-3).map((turn) => String(turn.content || ""));
   const latestInbound = recentInbound[recentInbound.length - 1] || "";

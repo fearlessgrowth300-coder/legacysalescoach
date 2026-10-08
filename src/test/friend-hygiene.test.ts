@@ -22,10 +22,11 @@ describe("Friend conversation hygiene", () => {
     expect(friendHygieneIssues("Oh nice, how did you get into it?", [], sent).some((i) => i.startsWith("reuses"))).toBe(false);
   });
 
-  it("blocks back-to-back questions", () => {
+  it("wants every reply to end with a question, even right after ours (owner rule 2026-10-08)", () => {
     const convo = [{ direction: "outbound", content: "How long have you been at it?" }, { direction: "inbound", content: "About a year now, slowly growing my page" }];
-    expect(friendHygieneIssues("That's awesome! What got you started?", convo).some((i) => i.startsWith("asks again"))).toBe(true);
-    expect(friendHygieneIssues("A year is solid, I remember how slow the start felt for me too 😅", convo).some((i) => i.startsWith("asks again"))).toBe(false);
+    expect(friendHygieneIssues("That's awesome! What got you started? 😊", convo).some((i) => i.startsWith("doesn't end with a question"))).toBe(false);
+    expect(friendHygieneIssues("A year is solid, I remember how slow the start felt for me too 😅", convo).some((i) => i.startsWith("doesn't end with a question"))).toBe(true);
+    expect(friendHygieneIssues("Got it, take care.", [{ direction: "inbound", content: "Not interested, stop messaging me" }]).some((i) => i.startsWith("doesn't end"))).toBe(false);
   });
 
   it("flags a wall of text answering a short message", () => {
@@ -85,9 +86,9 @@ describe("Friend conversation hygiene", () => {
       { direction: "inbound", content: "I have had to make a few adjustments and use my time wisely. How is everything going for you?" },
     ];
     const reply = "Doing good! Juggling it around my 9-5 took me a while too 😅 What are you working on right now?";
-    expect(friendHygieneIssues(reply, convo).some((i) => i.startsWith("asks again"))).toBe(false);
+    expect(friendHygieneIssues(reply, convo).some((i) => i.startsWith("doesn't end"))).toBe(false);
     const noQuestionFromThem = [convo[0], { direction: "inbound", content: "About a year now." }];
-    expect(friendHygieneIssues(reply, noQuestionFromThem).some((i) => i.startsWith("asks again"))).toBe(true);
+    expect(friendHygieneIssues(reply, noQuestionFromThem).some((i) => i.startsWith("doesn't end"))).toBe(false);
   });
 
   it("asks for a question back when the prospect asked us one and no reply does (2026-10-05 Amanda replies)", () => {
@@ -125,16 +126,16 @@ describe("Friend conversation hygiene", () => {
     expect(out[0].message).toBe(withDetail);
   });
 
-  it("flags a reaction-only reply after the prospect answered our question (2026-10-05 06:08 Katie)", () => {
+  it("flags a reply with no closing question (2026-10-08 Katie: three good replies, none asked anything)", () => {
     const convo = [
       { direction: "outbound", content: "How has building a neurospicy-friendly setup been going for you so far?" },
       { direction: "inbound", content: "Trial and error, but I make the business work around my brain now. I keep things sooo much simpler." },
     ];
-    const dead = "so relatable \u{1F90D} giving yourself grace is half the battle.";
-    expect(friendHygieneIssues(dead, convo).some((i) => i.startsWith("reacts only, a dead end"))).toBe(true);
-    expect(isSoftFriendIssue("reacts only, a dead end: x")).toBe(true);
-    const shared = "so relatable \u{1F90D} things only changed for me when I stopped trying to do everything and stuck to one system.";
-    expect(friendHygieneIssues(shared, convo).some((i) => i.startsWith("reacts only"))).toBe(false);
+    const dead = "That's honestly such a healthy way to look at it. Dropping the guilt and keeping one simple system made such a difference for me too.";
+    expect(friendHygieneIssues(dead, convo).some((i) => i.startsWith("doesn't end with a question"))).toBe(true);
+    expect(isSoftFriendIssue("doesn't end with a question: x")).toBe(true);
+    const asks = "Same for me, one simple system changed everything \u{1F90D} What does a low-energy day look like for you?";
+    expect(friendHygieneIssues(asks, convo).some((i) => i.startsWith("doesn't end"))).toBe(false);
   });
 
   it("rotates away from the lesson locked on recent replies", () => {

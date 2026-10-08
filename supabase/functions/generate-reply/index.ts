@@ -659,7 +659,9 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
         temperature: 0.2,
         response_format: { type: "json_object" },
         reasoning_effort: chat.provider === "gemini" ? "low" : undefined,
-        timeout_ms: activeThreadType === "friend" ? 28000 : 12000,
+        // Friend analysis reads the whole chat and sets the stage: give 3.7 time
+        // to answer (and retry once) instead of falling back to defaults.
+        timeout_ms: activeThreadType === "friend" ? 40000 : 12000,
       });
       mark("analysis");
       if (!analysisResponse.ok) throw new Error(`Analysis AI error: ${analysisResponse.status} ${await providerErrorText(analysisResponse)}`);
@@ -984,8 +986,8 @@ FRAMEWORK SELECTION:
 - When the contract says Required=false, use one primary framework only when it helps the chosen reply_act.
 - Add a second technique only when it materially improves the reply.
 - Never stack frameworks merely to sound sophisticated.
-- A natural peer response may use no formal framework. One message has one objective and at most one optional question.
-- Do not ask a question if your previous message already asked one: instead react briefly AND share one short concrete line from Brianna's Approved True Stories that relates to what they said (a bare reaction is a dead end). Exception: when the prospect asked you a question, answer it and you may ask one light question back.
+- A natural peer response may use no formal framework. One message has one objective and exactly one question, at the end.
+- EVERY variant ENDS with exactly one light, curious friend question about what they just shared, so they reply back (never a sales or results question early on). Before it, react to their words and, when it fits, share one short concrete line from Brianna's Approved True Stories.
 ${String([...history].reverse().find((turn: any) => turn.direction === "inbound")?.content || "").includes("?") ? "- THE PROSPECT ASKED YOU A QUESTION. The PRIMARY variant MUST: answer it, add one short concrete detail from Brianna's Approved True Stories (\"doing great, thanks\" alone is NOT a detail), and END with one light friend question back (not a sales question)."+"\n" : ""}- Every reply quietly applies the locked Sales Brain lesson (from the owner's books, PDFs and video transcripts) in Brianna's friend voice - it shapes what she says, it is never named or taught. When it fits, include one short real detail from Brianna's own story so it feels two-way.
 - Keep it about as long as the prospect's last message (never a wall of text). Write every line fresh; never reuse stock probe lines.
 - A stated objection (has a mentor, is new, wants to try alone first, is afraid or burned, says they are fine, has no funds) is NOT a refusal: handle it honestly, one step at a time, using Brianna's real story and the retrieved objection-handling lessons. Never argue, never push past the same objection twice. Only an explicit refusal (not interested, stop messaging me, leave me alone) ends the pitch.${friendObjections(history.filter((turn: any) => turn.direction === "inbound").slice(-3).map((turn: any) => String(turn.content || ""))).length ? `\n- THIS PROSPECT'S OBJECTIONS AND HOW TO HANDLE THEM:\n${friendObjections(history.filter((turn: any) => turn.direction === "inbound").slice(-3).map((turn: any) => String(turn.content || ""))).map((o) => `  - ${o.objection}: ${o.approach}`).join("\n")}` : ""}
@@ -1002,7 +1004,7 @@ REPLY-ACT RULES:
 - ask_permission: ask whether they want to hear what helped.
 - refer: make the approved expert handoff only after permission or an explicit request.
 - stop: acknowledge and end without a question.
-Do not turn relate, share_story, validate, answer, observe or reframe into a question merely to keep the conversation moving.
+relate, share_story, validate, answer, observe and reframe still finish with one light friend question about what they shared (only "stop" ends without one).
 ${objectionInstruction}
 ${spinInstruction}
 
@@ -1241,7 +1243,7 @@ ${winningPatternsText.substring(0, 2000)}`;
           const repairResponse = await userChat(chat, {
             model: chat.models.fast,
             messages: [
-              { role: "system", content: "Return ONLY valid JSON with exactly three objects in variants. Rewrite each Friend reply so it is short, natural, grounded in the stated prospect fact, applies the selected lesson, asks at most one question (none if our previous message asked one), does not repeat a previous question or reuse a stock line, stays about as long as the prospect's message, handles any stated objection honestly instead of pushing past it, and drops the pitch only after an explicit refusal. Any personal detail must come from approved_true_stories. Do not add claims, pressure, or a pitch." },
+              { role: "system", content: "Return ONLY valid JSON with exactly three objects in variants. Rewrite each Friend reply so it is short, natural, grounded in the stated prospect fact, applies the selected lesson, ends with exactly one light, curious friend question about what they shared (not a sales question), does not repeat a previous question or reuse a stock line, stays about as long as the prospect's message, handles any stated objection honestly instead of pushing past it, and drops the pitch only after an explicit refusal. Any personal detail must come from approved_true_stories. Do not add claims, pressure, or a pitch." },
               { role: "user", content: JSON.stringify({ stage: friendStageResult.stage, checkpoint: friendStageResult.checkpoint, prospect_fact: friendKnowledgeContract?.prospectFact, selected_principle: friendKnowledgeContract?.principleName, selected_source: friendKnowledgeContract?.sourceName, selected_lesson: friendKnowledgeContract?.lesson || friendKnowledgeContract?.howToApply, latest_message: message, approved_true_stories: approvedStories, issues: candidateIssues, drafts: candidateVariants }) },
             ],
             temperature: 0.25,

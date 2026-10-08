@@ -107,7 +107,8 @@ describe("Friend conversation engine", () => {
   it("holds the sales-results question on the first reply only (2026-10-08 Katie)", () => {
     const analysis = { earliest_missing_checkpoint: "commercial_result", reply_act: "probe", question_needed: true };
     const first = holdSalesQuestionOnFirstReply(analysis, 1);
-    expect(first.question_needed).toBe(false);
+    expect(first.question_needed).toBe(true);
+    expect(first.next_best_action).toMatch(/light curious question/);
     expect(first.reply_act).toBe("relate");
     expect(first.next_best_action).toMatch(/Approved True Stories/);
     expect(holdSalesQuestionOnFirstReply(analysis, 2)).toEqual(analysis);
