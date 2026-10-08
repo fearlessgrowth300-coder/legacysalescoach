@@ -61,6 +61,9 @@ export function quotaResumeAt(blockedAt: string): Date {
 }
 
 async function startNextQueuedExtraction(db: any, serviceKey: string) {
+  // Owner switch (2026-10-08): keep the lessons already extracted, start nothing
+  // new and retry nothing. Resume with `supabase secrets unset EXTRACTION_QUEUE_PAUSED`.
+  if (Deno.env.get("EXTRACTION_QUEUE_PAUSED") === "1") return { queue: "paused_by_owner" };
   // Free AI quota exhausted: don't burn the rest of the queue on guaranteed
   // failures. Wait for the reset, then put the quota-blocked items back in line.
   const { data: blocked } = await db.from("knowledge_base_items").select("id, book_brief")
