@@ -360,7 +360,8 @@ export async function userChat(
     let rateLimitResponse: Response | null = null;
     const nativeRecoveryAttemptedModels = new Set<string>();
     let sawEmptyCompletion = false;
-    const totalTimeoutMs = Math.max(5_000, opts.timeout_ms || 60_000);
+    // `??` not `||`: a caller out of budget passes 0, which must mean 5s, not 60s.
+    const totalTimeoutMs = Math.max(5_000, opts.timeout_ms ?? 60_000);
     const deadline = Date.now() + totalTimeoutMs;
 
     for (const currentModel of candidateModels) {

@@ -155,7 +155,7 @@ serve(async (req) => {
   const startedAt = Date.now();
   const timings: Record<string, number> = {};
   const mark = (step: string) => { timings[step] = Date.now() - startedAt; };
-  const budgetMs = (cap: number) => Math.max(0, Math.min(cap, 80_000 - (Date.now() - startedAt)));
+  const budgetMs = (cap: number, until = 80_000) => Math.max(0, Math.min(cap, until - (Date.now() - startedAt)));
   const background: Promise<unknown>[] = [];
   try {
     const { prospectId, message: rawMessage, threadType, styleModifier, screenshotPath, screenshotContext: rawScreenshotContext } = await req.json();
@@ -709,9 +709,12 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
     let replyPrinciplesText = principlesText;
     let replyChunksText = chunksText;
     let appliedRetrievalQuery = brainQuery;
+    let decisionGraphPromise: Promise<any> | null = null;
     if (activeThreadType === "friend") {
       const decisionQuery = buildFriendDecisionSearchQuery(analysisJson, message, existingFriendProfile);
       appliedRetrievalQuery = decisionQuery;
+      // Graph walk only needs the query: run it alongside the search, not after.
+      decisionGraphPromise = traverseSalesKnowledgeGraph(supabase, user.id, decisionQuery);
       const [decisionEmbedding, decisionLexical] = await Promise.all([
         generateEmbedding(decisionQuery, supabase, user.id),
         retrieveFriendLexicalKnowledge(supabase, user.id, activeThreadType, kbModeMap, message, analysisJson),
@@ -778,15 +781,17 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
               return `• (Source: ${src}) [${c.category || "general"}]: ${(c.content || "").substring(0, 700)}`;
             }).join("\n")
           : "No knowledge passage is necessary for this reply.";
+      mark("decision_search");
     }
 
     // Outcome-aware ranking augments relevance; it never replaces it. New
     // strategies receive a neutral prior, while repeated failures for this
     // exact prospect are penalized and verified positive outcomes add weight.
     let strategyPerformance: any[] = [];
-    const decisionGraphTraversal = activeThreadType === "friend"
-      ? await traverseSalesKnowledgeGraph(supabase, user.id, appliedRetrievalQuery)
+    const decisionGraphTraversal = decisionGraphPromise
+      ? await decisionGraphPromise
       : { text: "(Friend decision graph not used)", paths: [] as Array<Record<string, unknown>>, candidateSalesBrainIds: [] as string[] };
+    mark("graph_walk");
     if (decisionGraphTraversal.candidateSalesBrainIds.length > 0) {
       const graphIds = new Set(decisionGraphTraversal.candidateSalesBrainIds);
       const graphCandidates = mergedPrinciples.filter((principle: any) => graphIds.has(principle.id)).map((principle: any) => ({
@@ -837,6 +842,7 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
         paths: [...decisionGraphTraversal.paths, ...selectedGraphContext.paths],
         nodeByPrinciple: selectedGraphContext.nodeByPrinciple,
       };
+      mark("outcome_rank");
     }
 
     const friendStageDirective = activeThreadType === "friend"
@@ -864,6 +870,7 @@ LATEST PROSPECT MESSAGE:\n${message || "No inbound prospect message was found."}
         .filter((hit: any) => hit.kind === "principle" && hit.record?.source_type === "sales_principle")
         .map((hit: any) => hit.record).slice(0, 8);
       replyTopPrinciples = rankFriendPrinciplesForStage(mergeByIdPriority(replyTopPrinciples, rapportPrinciples), friendStageResult.stage, recentUse);
+      mark("rapport_pool");
     }
     const lockedReplyPrinciple = activeThreadType === "friend" ? replyTopPrinciples[0] || null : null;
     const lockedReplySource = lockedReplyPrinciple
@@ -1114,7 +1121,8 @@ ${winningPatternsText.substring(0, 2000)}`;
         // profile, source evidence, graph path and reference moments. Twenty
         // two seconds was causing valid Gemini generations to be aborted and
         // replaced by a generic deterministic question.
-        timeout_ms: budgetMs(30000),
+        // The main reply may use time up to ~92s; backups only get what's left of 80s.
+        timeout_ms: Math.max(15000, budgetMs(30000, 92_000)),
       });
       mark("reply");
       if (!replyResponse.ok) throw new Error(`Reply AI error: ${replyResponse.status}`);
@@ -1136,6 +1144,7 @@ ${winningPatternsText.substring(0, 2000)}`;
       if (activeThreadType !== "friend") throw replyError;
       const primaryFailure = replyError instanceof Error ? replyError.message : "Friend reply generation failed";
       try {
+        if (budgetMs(18000) < 6000) throw new Error("no time left for a recovery attempt");
         const compactFacts = JSON.stringify({
           latest_prospect_message: message,
           stage: friendStageResult.stage,
