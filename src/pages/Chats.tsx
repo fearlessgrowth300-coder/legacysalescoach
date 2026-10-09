@@ -61,6 +61,11 @@ type ProcessedScreenshot = {
   analysis: ScreenshotAnalysis | null;
 };
 
+// Say why backups are shown: Google busy vs. the AI's replies failing our checks.
+const fallbackNotice = (reason?: string | null) =>
+  /AI error|recovery|provider|timeout|503|429/i.test(String(reason || ""))
+    ? "Google's AI didn't answer in time (it's busy). These are backup replies; try again in a minute."
+    : `The AI's replies didn't pass the quality checks${reason ? ` (${String(reason).slice(0, 120)})` : ""}, so backups are shown. Try again.`;
 const SCREENSHOT_TRANSCRIPT_MARKER = "--- SCREENSHOT TRANSCRIPT ---";
 
 const invokeConversationAi = (
@@ -1097,7 +1102,7 @@ export default function Chats() {
       if (data.prospectType) setProspectType(data.prospectType);
       if (data.analysis) setConversationAnalysis(data.analysis);
       if (data.qualityValidation?.fallbackApplied) {
-        toast.warning("The AI provider did not return a reply. These are conversation-based backups; a Sales Brain lesson was not applied.", { duration: 7000 });
+        toast.warning(fallbackNotice(data.qualityValidation.fallbackReason), { duration: 7000 });
       } else if (data.brainRetrieval && data.brainRetrieval.chunksRetrieved > 0) {
         const br = data.brainRetrieval;
         const sourceList = (br.sources || []).filter((s: string) => s !== "unknown").join(", ") || "brain";
@@ -1259,7 +1264,7 @@ export default function Chats() {
       if (data.prospectType) setProspectType(data.prospectType);
       if (data.analysis) setConversationAnalysis(data.analysis);
       if (data.qualityValidation?.fallbackApplied) {
-        toast.warning("The AI provider did not return a reply. These are conversation-based backups; a Sales Brain lesson was not applied.", { duration: 7000 });
+        toast.warning(fallbackNotice(data.qualityValidation.fallbackReason), { duration: 7000 });
       } else if (data.brainRetrieval && data.brainRetrieval.chunksRetrieved > 0) {
         const br = data.brainRetrieval;
         const sourceList = (br.sources || []).filter((s: string) => s !== "unknown").join(", ") || "brain";
@@ -2065,7 +2070,7 @@ export default function Chats() {
                 {suggestions.some((suggestion) => /conversation[_ -]grounded[_ -]recovery/i.test(suggestion.frameworkUsed || "")) && (
                   <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200">
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    The AI provider did not return a reply. These are conversation-based backups, not replies applying the selected Sales Brain source.
+                    These are backup replies, not ones applying the selected Sales Brain lesson.
                   </div>
                 )}
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">

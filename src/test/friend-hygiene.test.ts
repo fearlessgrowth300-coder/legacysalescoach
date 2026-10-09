@@ -10,6 +10,7 @@ import {
   rankOpenerPrinciples,
   sentLineSet,
   sharesOwnDetail,
+  keepOneQuestion,
 } from "../../supabase/functions/_shared/friend-conversation-engine";
 
 // Lines and replies taken from the real Friend conversations reviewed on 2026-10-04.
@@ -124,6 +125,14 @@ describe("Friend conversation hygiene", () => {
     expect(friendReciprocityIssue([replies[0], withDetail], convo)).toBeNull();
     const out = promoteReciprocalVariant(replies.map((message, i) => ({ variant: ["primary", "alternative", "casual"][i], message })).slice(0, 2).concat({ variant: "casual", message: withDetail }), convo);
     expect(out[0].message).toBe(withDetail);
+  });
+
+  it("keeps only the last question so a good reply isn't swapped for the canned backup (2026-10-09)", () => {
+    const two = "Love that! How long did that take you? Same for me, simplifying changed everything. What does your week look like now? 😊";
+    const one = keepOneQuestion(two);
+    expect((one.match(/\?/g) || []).length).toBe(1);
+    expect(one).toBe("Love that! Same for me, simplifying changed everything. What does your week look like now? 😊");
+    expect(keepOneQuestion("Just one? ok")).toBe("Just one? ok");
   });
 
   it("flags a reply with no closing question (2026-10-08 Katie: three good replies, none asked anything)", () => {

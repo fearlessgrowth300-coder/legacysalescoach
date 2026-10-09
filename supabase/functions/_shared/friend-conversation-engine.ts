@@ -1012,6 +1012,19 @@ export function sentLineSet(outboundElsewhere: string[]): Set<string> {
   return lines;
 }
 
+/**
+ * Owner rule: one question, at the end. The model often adds a closing question
+ * on top of one mid-message, and "more than one question" then swapped a good
+ * reply for the canned fallback (2026-10-09). Keep only the last question.
+ */
+export function keepOneQuestion(message: string): string {
+  const text = String(message || "");
+  if ((text.match(/\?/g) || []).length <= 1) return text;
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const lastQuestion = sentences.map((s) => s.includes("?")).lastIndexOf(true);
+  return sentences.filter((s, i) => !s.includes("?") || i === lastQuestion).join(" ").trim();
+}
+
 /** The last sentence is a question (trailing emoji/punctuation allowed). */
 export const endsWithQuestion = (message: string) => /\?[^\p{L}\p{N}]*$/u.test(String(message || "").trim());
 

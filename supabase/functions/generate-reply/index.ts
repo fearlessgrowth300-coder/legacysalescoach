@@ -44,6 +44,7 @@ import {
   friendReciprocityIssue,
   promoteReciprocalVariant,
   holdSalesQuestionOnFirstReply,
+  keepOneQuestion,
 } from "../_shared/friend-conversation-engine.ts";
 
 
@@ -1214,7 +1215,10 @@ ${winningPatternsText.substring(0, 2000)}`;
     // local check can trigger one compact AI repair below.
     if (activeThreadType === "friend") {
       const originalVariants = (Array.isArray(replyJson.variants) ? replyJson.variants : [])
-        .map((variant: any) => hydrateFriendKnowledgeApplication(variant, friendKnowledgeContract));
+        .map((variant: any) => hydrateFriendKnowledgeApplication(
+          variant && typeof variant === "object" ? { ...variant, message: keepOneQuestion(variant.message) } : variant,
+          friendKnowledgeContract,
+        ));
       let repairedVariants: any[] = originalVariants;
       let validationFailure = replyGenerationFailure || (originalVariants.length !== 3
         ? "Reply generator returned an incomplete Friend variant set" : "");
@@ -1266,7 +1270,10 @@ ${winningPatternsText.substring(0, 2000)}`;
           const repairMatch = repairContent.match(/\{[\s\S]*\}/);
           const repairJson = JSON.parse(repairMatch ? repairMatch[0] : repairContent);
           const repaired = (Array.isArray(repairJson.variants) ? repairJson.variants : [])
-            .map((variant: any) => hydrateFriendKnowledgeApplication(variant, friendKnowledgeContract));
+            .map((variant: any) => hydrateFriendKnowledgeApplication(
+              variant && typeof variant === "object" ? { ...variant, message: keepOneQuestion(variant.message) } : variant,
+              friendKnowledgeContract,
+            ));
           if (repaired.length !== 3) throw new Error("Compact Friend repair returned an incomplete variant set");
           selected = withReciprocity(selectBestFriendCandidates(candidateVariants, repaired, issuesForVariant));
           if (selected.issues.flat().length < candidateIssuesByIndex.flat().length) {

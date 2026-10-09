@@ -40,6 +40,7 @@ import {
   hydrateFriendKnowledgeApplication,
   prioritizeFriendDirectQuestion,
   holdSalesQuestionOnFirstReply,
+  keepOneQuestion,
   selectBestFriendCandidates,
   friendStageToDatabase,
   selectRelevantConversationPassages,
@@ -2072,7 +2073,10 @@ ${jsonFormat}
       });
       const finalFriendKnowledgeContractText = formatFriendKnowledgeApplicationContract(finalFriendKnowledgeContract);
       const originalSuggestions = (Array.isArray(parsed.suggestions) ? parsed.suggestions : [])
-        .map((suggestion: any) => hydrateFriendKnowledgeApplication(suggestion, finalFriendKnowledgeContract));
+        .map((suggestion: any) => hydrateFriendKnowledgeApplication(
+          suggestion && typeof suggestion === "object" ? { ...suggestion, text: keepOneQuestion(suggestion.text) } : suggestion,
+          finalFriendKnowledgeContract,
+        ));
       const deterministicIssues = originalSuggestions.flatMap((suggestion: any, index: number) =>
         deterministicFriendQualityIssues(suggestion?.text || "", finalFriendStageResult.stage, combinedFriendLearning || parsed.prospectLearning || {}, speakerMessages, suggestion, finalFriendKnowledgeContract)
           .map((issue) => `suggestion ${index + 1}: ${issue}`)
