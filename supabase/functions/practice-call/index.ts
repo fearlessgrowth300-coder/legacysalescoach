@@ -91,7 +91,8 @@ serve(async (req) => {
           status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      const persona = String(customScenario?.persona || "You are a busy prospect. Be realistic.").slice(0, 1000);
+      // 2400: room for the optional hidden story (frustration + objections).
+      const persona = String(customScenario?.persona || "You are a busy prospect. Be realistic.").slice(0, 2400);
       const difficulty = String(customScenario?.difficulty || "Medium");
       const patience = difficulty === "Hard" ? "very little patience: two weak answers and you hang up"
         : difficulty === "Easy" ? "fairly patient: you give them several chances before hanging up"
@@ -173,7 +174,7 @@ How to behave:
         id: "custom",
         name: (customScenario?.name || "Custom Scenario").substring(0, 100),
         description: (customScenario?.description || "").substring(0, 1000),
-        prospectPersona: (customScenario?.persona || "You are a potential prospect. Be realistic and push back naturally.").substring(0, 1000),
+        prospectPersona: (customScenario?.persona || "You are a potential prospect. Be realistic and push back naturally.").substring(0, 2400),
       };
 
       // ── RAG: retrieve the principles MOST RELEVANT to this scenario + the

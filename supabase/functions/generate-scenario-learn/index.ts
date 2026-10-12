@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { searchPlaybook } from "../_shared/playbook-search.ts";
 
 
 const corsHeaders = {
@@ -39,20 +40,19 @@ serve(async (req) => {
     }
 
 
-    // Fetch user's Brain knowledge
-    const [brainRes, chunksRes, companyRes] = await Promise.all([
-      supabase.from("sales_brain").select("principle_name, what_i_learned, how_to_apply, category, source_name").eq("user_id", user.id).limit(50),
-      supabase.from("knowledge_chunks").select("content, category").eq("user_id", user.id).limit(30),
+    // The lessons from the user's own books/videos that fit THIS scenario (was:
+    // the first 50 rows in the table — effectively random).
+    const [playbook, companyRes] = await Promise.all([
+      searchPlaybook(supabase, user.id,
+        `Sales practice scenario "${scenarioName}": ${scenarioDescription}. Prospect: ${prospectName}, ${prospectRole}. Personality: ${prospectPersonality}. ` +
+        `Objectives: ${(objectives || []).join(", ")}. How to open with a hostile or busy prospect, discover hidden pain, handle objections and close.`, 10),
       supabase.from("company_profiles").select("*").eq("user_id", user.id).maybeSingle(),
     ]);
 
-    const brainContext = brainRes.data?.length
-      ? `\n\nUser's Sales Brain Knowledge:\n${brainRes.data.map(b => `- [${b.category}] ${b.principle_name}: ${b.what_i_learned} → Apply: ${b.how_to_apply} (Source: ${b.source_name})`).join("\n").substring(0, 4000)}`
+    const brainContext = playbook.text
+      ? `\n\nTHE USER'S OWN PLAYBOOK — lessons from their books/videos that fit this scenario (build the guide on THESE, name each principle and its source):\n${playbook.text}`
       : "";
-
-    const chunkContext = chunksRes.data?.length
-      ? `\n\nUser's Knowledge Chunks:\n${chunksRes.data.map(c => `- [${c.category}]: ${c.content}`).join("\n").substring(0, 2000)}`
-      : "";
+    const chunkContext = "";
 
     const companyContext = companyRes.data
       ? `\n\nUser's Company: ${companyRes.data.company_name || "Not set"}. Sells: ${companyRes.data.what_selling || "Not set"}. Target: ${companyRes.data.target_audience || "Not set"}. Pain points: ${companyRes.data.pain_points || "Not set"}.`

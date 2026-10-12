@@ -308,6 +308,9 @@ export default function PracticeCall() {
   // Realistic voice practice (Gemini Live) + in-call coaching
   const liveVoiceRef = useRef<{ stop: () => void } | null>(null);
   const voiceStartingRef = useRef(false);
+  const [hiddenStory, setHiddenStory] = useState(true);
+  const hiddenStoryRef = useRef(true);
+  useEffect(() => { hiddenStoryRef.current = hiddenStory; }, [hiddenStory]);
   const voiceTranscriptRef = useRef<Array<{ role: string; text: string; timestamp: string }>>([]);
   const [lifelinesLeft, setLifelinesLeft] = useState(3);
   const [lifelineTip, setLifelineTip] = useState<string | null>(null);
@@ -402,6 +405,14 @@ export default function PracticeCall() {
     return businessContext || undefined;
   }, [companyProfile, businessContext]);
 
+  // Prospect persona. With the hidden story ON, the prospect also knows their real
+  // frustration + objections and reveals them only to good questions (toggle on
+  // the scenario screen, read through a ref so running calls use the current value).
+  const personaFor = (s: RichScenario) => {
+    const base = `You are ${s.prospectName}, ${s.prospectRole} at ${s.prospectCompany}. Personality: ${s.prospectPersonality}`;
+    if (!hiddenStoryRef.current || !s.expectedObjections?.length) return base;
+    return `${base}\nHIDDEN STORY — your real situation. Never volunteer it. Reveal it one piece at a time, ONLY when the caller asks a good, specific question about you, your work or your frustrations; vague or pitchy questions get nothing. Once a real frustration is uncovered and they connect their offer to it, you can warm up. Your situation and the objections you raise: ${s.expectedObjections.join(" | ")}`;
+  };
   const speakText = useCallback((text: string, gender: ProspectGender = "male"): Promise<void> => {
     return new Promise((resolve) => {
       if (!('speechSynthesis' in window)) { resolve(); return; }
@@ -479,7 +490,7 @@ export default function PracticeCall() {
           customScenario: {
             name: scenario.name,
             description: scenario.description,
-            persona: `You are ${scenario.prospectName}, ${scenario.prospectRole} at ${scenario.prospectCompany}. Personality: ${scenario.prospectPersonality}`,
+            persona: personaFor(scenario),
           },
         },
       });
@@ -543,7 +554,7 @@ export default function PracticeCall() {
         customScenario: {
           name: scenario.name,
           description: scenario.description,
-          persona: `You are ${scenario.prospectName}, ${scenario.prospectRole} at ${scenario.prospectCompany}. Personality: ${scenario.prospectPersonality}`,
+          persona: personaFor(scenario),
           difficulty: scenario.difficulty,
           gender: scenario.prospectGender,
         },
@@ -690,7 +701,7 @@ export default function PracticeCall() {
             customScenario: {
               name: selectedScenario.name,
               description: selectedScenario.description,
-              persona: `You are ${selectedScenario.prospectName}, ${selectedScenario.prospectRole} at ${selectedScenario.prospectCompany}. Personality: ${selectedScenario.prospectPersonality}`,
+              persona: personaFor(selectedScenario),
             },
           },
         });
@@ -939,7 +950,7 @@ export default function PracticeCall() {
             customScenario: {
               name: selectedScenario.name,
               description: selectedScenario.description,
-              persona: `You are ${selectedScenario.prospectName}, ${selectedScenario.prospectRole} at ${selectedScenario.prospectCompany}. Personality: ${selectedScenario.prospectPersonality}`,
+              persona: personaFor(selectedScenario),
             },
           },
         });
@@ -990,7 +1001,7 @@ export default function PracticeCall() {
           customScenario: selectedScenario ? {
             name: selectedScenario.name,
             description: selectedScenario.description,
-            persona: `You are ${selectedScenario.prospectName}, ${selectedScenario.prospectRole} at ${selectedScenario.prospectCompany}. Personality: ${selectedScenario.prospectPersonality}`,
+            persona: personaFor(selectedScenario),
           } : undefined,
         },
       });
@@ -1614,6 +1625,17 @@ export default function PracticeCall() {
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">Tap to start voice practice</p>
+                  {selectedScenario.expectedObjections?.length > 0 && (
+                    <label className="flex items-start gap-2 text-left text-xs cursor-pointer rounded-lg border p-2 w-full">
+                      <input type="checkbox" className="mt-0.5" checked={hiddenStory} onChange={(e) => setHiddenStory(e.target.checked)} />
+                      <span>
+                        <b>Hidden story {hiddenStory ? "ON" : "OFF"}</b><br />
+                        {hiddenStory
+                          ? `${selectedScenario.prospectName} has a real frustration and objections — ${selectedScenario.prospectGender === "female" ? "she" : "he"} only reveals them if you ask good questions.`
+                          : `${selectedScenario.prospectName} has no hidden story — just ${selectedScenario.prospectGender === "female" ? "her" : "his"} personality.`}
+                      </span>
+                    </label>
+                  )}
                 </div>
                 <div className="h-5 flex items-center justify-center">
                   <div className="w-28 h-1 bg-foreground/20 rounded-full" />

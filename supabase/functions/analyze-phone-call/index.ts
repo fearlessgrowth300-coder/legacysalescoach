@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { resolveUserChatTarget, userChat, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { searchPlaybook } from "../_shared/playbook-search.ts";
 
 
 const corsHeaders = {
@@ -52,11 +53,21 @@ serve(async (req) => {
       return `[${i}] ${speaker}: "${t.text}"`;
     }).join("\n");
 
+    // Coach from the user's own books/videos: lessons that fit what happened on this call.
+    const salespersonLines = transcript.filter((t: any) => t.role === "user").map((t: any) => t.text).join(" ").slice(0, 1200);
+    const prospectLines = transcript.filter((t: any) => t.role !== "user").map((t: any) => t.text).join(" ").slice(0, 800);
+    const playbook = await searchPlaybook(supabase, user.id,
+      `Sales call "${scenarioName || "practice"}" with ${prospectName || "a prospect"}, ${prospectRole || ""}. Prospect said: ${prospectLines}. Salesperson said: ${salespersonLines}. Opening, discovery, objection handling, closing.`, 8);
+
     const systemPrompt = `You are an expert sales coach analyzing a practice sales call transcript. The salesperson was practicing with an AI prospect.
 
 SCENARIO: "${scenarioName || "Practice Call"}"
 PROSPECT: ${prospectName || "Prospect"}, ${prospectRole || "Decision Maker"} at ${prospectCompany || "Company"}
-
+${playbook.text ? `
+THE SALESPERSON'S OWN PLAYBOOK — lessons from their own books/videos that fit this call:
+${playbook.text}
+Coach with THESE: in each section's feedback and in focusAreas, when a lesson fits, name the exact principle and its source and show how they should have used it on this call. Never invent principles that are not listed.
+` : ""}
 Analyze the transcript and return a JSON object with this EXACT structure. Be specific, reference actual quotes from the transcript, and give actionable coaching.
 
 {
