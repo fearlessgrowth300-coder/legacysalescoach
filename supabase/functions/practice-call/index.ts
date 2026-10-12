@@ -1,12 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-import { resolveUserChatTarget, userChat, resolveUserEmbedTarget, userEmbed, NoUserAiKeyError } from "../_shared/user-ai.ts";
+import { getUserAiKey, resolveUserChatTarget, userChat, resolveUserEmbedTarget, userEmbed, NoUserAiKeyError } from "../_shared/user-ai.ts";
 import { BRAIN_PERSONA } from "../_shared/persona.ts";
 
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
-  const isAllowed = origin.endsWith(".lovable.app") || origin.startsWith("http://localhost:");
+  const isAllowed = origin.endsWith(".vercel.app") || origin.endsWith(".lovable.app") || origin.startsWith("http://localhost:");
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : "https://legacysalescoach.lovable.app",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
@@ -80,6 +80,66 @@ serve(async (req) => {
       return new Response(JSON.stringify({ scenarios: SCENARIOS }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // Realistic voice: a Gemini Live session (speech in/out, ~1 s replies). The
+    // browser gets a short-lived single-use token, never the user's API key.
+    if (action === "live_setup") {
+      const found = await getUserAiKey(supabase, user.id);
+      if (found?.provider !== "gemini") {
+        return new Response(JSON.stringify({ error: "Realistic voice needs a Google Gemini key in Settings." }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const persona = String(customScenario?.persona || "You are a busy prospect. Be realistic.").slice(0, 1000);
+      const difficulty = String(customScenario?.difficulty || "Medium");
+      const patience = difficulty === "Hard" ? "very little patience: two weak answers and you hang up"
+        : difficulty === "Easy" ? "fairly patient: you give them several chances before hanging up"
+        : "normal patience: if they keep failing to give you a reason to stay, you hang up";
+      const systemInstruction = `You are on a real phone call. You ARE the prospect described below — never a coach, never an AI, never break character.
+${persona}
+Scenario: ${String(customScenario?.name || "Sales call").slice(0, 100)} — ${String(customScenario?.description || "").slice(0, 600)}
+${businessContext ? `The caller's business (what they might pitch you): ${String(businessContext).slice(0, 800)}` : ""}
+
+How to behave:
+- Talk like a real person on the phone: short, natural sentences, react to their tone. Interrupt if they ramble.
+- Don't make it easy. Push back with real objections. Warm up only when they ask good questions, understand your situation, and show value for YOU.
+- You have ${patience}.
+- Never hang up because of silence or a pause — people take a second to talk. Only hang up after the caller has actually spoken to you at least twice and still given you no reason to stay.
+- To hang up, say a short goodbye line out loud first, then call the end_call tool. Also call end_call if they say goodbye, or if you agree to a clear next step and the call naturally ends.`;
+      const voiceName = customScenario?.gender === "female" ? "Kore" : "Charon";
+      const now = Date.now();
+      const tokenRes = await fetch("https://generativelanguage.googleapis.com/v1alpha/auth_tokens", {
+        method: "POST",
+        headers: { "x-goog-api-key": found.key, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          uses: 1,
+          expireTime: new Date(now + 30 * 60_000).toISOString(),
+          newSessionExpireTime: new Date(now + 2 * 60_000).toISOString(),
+        }),
+      });
+      const tokenJson = await tokenRes.json().catch(() => ({}));
+      if (!tokenRes.ok || !tokenJson?.name) {
+        return new Response(JSON.stringify({ error: `Google refused the voice session (${tokenRes.status}).` }), {
+          status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        wsUrl: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(tokenJson.name)}`,
+        setup: {
+          // 3.8-live: tested to hang up after weak answers (3.1-flash-live never did).
+          model: "models/gemini-3.8-live",
+          generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } } },
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          tools: [{ functionDeclarations: [{
+            name: "end_call",
+            description: "Hang up the phone and end the call.",
+            parameters: { type: "OBJECT", properties: { reason: { type: "STRING", description: "Why you ended the call, in one short sentence." } }, required: ["reason"] },
+          }] }],
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+        },
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     if (action === "start" || action === "respond") {

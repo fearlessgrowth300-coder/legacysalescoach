@@ -85,10 +85,34 @@ serve(async (req) => {
     }
 
 
-    const { transcript, businessContext, mode } = await req.json();
+    const { transcript, businessContext, mode, objectives = [] } = await req.json();
 
     if (!transcript || transcript.length === 0) {
       return new Response(JSON.stringify({ suggestions: [] }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Practice-call progress: current call stage + which objectives are already
+    // achieved. Small and fast (no library search) — runs after every turn.
+    if (mode === "progress") {
+      const lines = transcript.map((t: any) => `${t.speaker || t.role}: "${t.text}"`).join("\n").slice(-8000);
+      const res = await userChat(chat, {
+        model: chat.models.fast,
+        messages: [
+          { role: "system", content: `You judge a sales practice call. Return JSON {"stage":"rapport|discovery|objection|close","objectivesMet":[<0-based indexes of objectives the SALESPERSON has clearly achieved so far>]}. Be strict: only count an objective when the salesperson actually did it.\nObjectives:\n${(objectives as string[]).map((o, i) => `${i}. ${o}`).join("\n")}` },
+          { role: "user", content: lines },
+        ],
+        temperature: 0,
+        max_tokens: 200,
+        response_format: { type: "json_object" },
+        reasoning_effort: chat.provider === "gemini" ? "low" : undefined,
+        timeout_ms: 15000,
+      });
+      const raw = res.ok ? (await res.json()).choices?.[0]?.message?.content || "{}" : "{}";
+      let out: any = {};
+      try { out = JSON.parse(raw.replace(/```json\s*|```/g, "")); } catch { /* keep empty */ }
+      return new Response(JSON.stringify({ stage: out.stage || null, objectivesMet: Array.isArray(out.objectivesMet) ? out.objectivesMet : [] }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

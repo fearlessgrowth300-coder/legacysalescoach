@@ -19,6 +19,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { captureCallAudio, startTwoSidedCall, youTalkPercent, type TalkTime } from "@/lib/call-audio";
+import { startLiveVoice } from "@/lib/live-voice";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
 
 // ============================================
@@ -304,6 +305,15 @@ export default function PracticeCall() {
   const [liveTranscript, setLiveTranscript] = useState<Array<{ speaker: string; text: string; timestamp: string }>>([]);
   const [followupEmail, setFollowupEmail] = useState<{ subject: string; body: string } | null>(null);
   const [talkTime, setTalkTime] = useState<TalkTime | null>(null);
+  // Realistic voice practice (Gemini Live) + in-call coaching
+  const liveVoiceRef = useRef<{ stop: () => void } | null>(null);
+  const voiceTranscriptRef = useRef<Array<{ role: string; text: string; timestamp: string }>>([]);
+  const [lifelinesLeft, setLifelinesLeft] = useState(3);
+  const [lifelineTip, setLifelineTip] = useState<string | null>(null);
+  const [loadingLifeline, setLoadingLifeline] = useState(false);
+  const [callStage, setCallStage] = useState<string | null>(null);
+  const [objectivesMet, setObjectivesMet] = useState<number[]>([]);
+  const [hungUpReason, setHungUpReason] = useState<string | null>(null);
   const twoSidedStopRef = useRef<(() => void) | null>(null);
   const [loadingFollowup, setLoadingFollowup] = useState(false);
   const [liveCoaching, setLiveCoaching] = useState<LiveCoaching | null>(null);
@@ -518,9 +528,99 @@ export default function PracticeCall() {
     }
   }, [startListening, speakText, getBusinessContextString]);
 
+  useEffect(() => { voiceTranscriptRef.current = voiceTranscript; }, [voiceTranscript]);
+
+  const asCoachTranscript = (turns: Array<{ role: string; text: string; timestamp: string }>) =>
+    turns.map(t => ({ speaker: t.role === "user" ? "You" : "Prospect", text: t.text, timestamp: t.timestamp }));
+
+  // Realistic voice: Gemini Live. Returns false if it can't start (caller falls back to the old voice).
+  const startRealisticVoice = useCallback(async (scenario: RichScenario, sessionId: string): Promise<boolean> => {
+    const { data, error } = await supabase.functions.invoke("practice-call", {
+      body: {
+        action: "live_setup",
+        businessContext: getBusinessContextString(),
+        customScenario: {
+          name: scenario.name,
+          description: scenario.description,
+          persona: `You are ${scenario.prospectName}, ${scenario.prospectRole} at ${scenario.prospectCompany}. Personality: ${scenario.prospectPersonality}`,
+          difficulty: scenario.difficulty,
+          gender: scenario.prospectGender,
+        },
+      },
+    });
+    if (error || !data?.wsUrl) { console.warn("Realistic voice unavailable:", data?.error || error); return false; }
+
+    const finish = (reason: string | null) => {
+      liveVoiceRef.current?.stop();
+      liveVoiceRef.current = null;
+      if (callTimerRef.current) clearInterval(callTimerRef.current);
+      setIsSpeaking(false);
+      setHungUpReason(reason);
+      setCallState("voice_ended");
+      const turns = voiceTranscriptRef.current;
+      if (turns.length) analyzeVoiceCall(turns, sessionId);
+    };
+    try {
+      liveVoiceRef.current = await startLiveVoice({
+        wsUrl: data.wsUrl,
+        setup: data.setup,
+        onTurn: (turn) => setVoiceTranscript(prev => {
+          const next = [...prev, turn];
+          supabase.from("practice_call_sessions").update({ transcript: next, status: "in-progress" }).eq("id", sessionId).then(() => {});
+          return next;
+        }),
+        onHangUp: (reason) => { toast.info(`${scenario.prospectName} hung up.`, { duration: 6000 }); finish(reason); },
+        onSpeaking: setIsSpeaking,
+        onError: (m) => toast.error(m),
+      });
+    } catch (e) {
+      console.warn("Realistic voice failed to start:", e);
+      return false;
+    }
+    return true;
+  }, [getBusinessContextString]);
+
+  // After each prospect reply: update the live stage bar and tick off objectives.
+  useEffect(() => {
+    const last = voiceTranscript[voiceTranscript.length - 1];
+    if (callState !== "voice_connected" || !selectedScenario || last?.role !== "assistant" || voiceTranscript.length < 2) return;
+    supabase.functions.invoke("live-call-assist", {
+      body: { mode: "progress", transcript: asCoachTranscript(voiceTranscript), objectives: selectedScenario.objectives },
+    }).then(({ data }) => {
+      if (data?.stage) setCallStage(data.stage);
+      if (Array.isArray(data?.objectivesMet)) setObjectivesMet(prev => [...new Set([...prev, ...data.objectivesMet])]);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceTranscript.length, callState]);
+
+  // 💡 Lifeline: whisper the next line to say (3 per call).
+  const takeLifeline = useCallback(async () => {
+    if (lifelinesLeft <= 0 || loadingLifeline) return;
+    if (voiceTranscript.length === 0) { toast.info("Wait for the prospect to answer first."); return; }
+    setLoadingLifeline(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("live-call-assist", {
+        body: { mode: "coach", transcript: asCoachTranscript(voiceTranscript).slice(-10), businessContext: getBusinessContextString() },
+      });
+      const tip = data?.suggestions?.[0]?.text;
+      if (error || !tip) throw new Error("no tip");
+      setLifelineTip(tip);
+      setLifelinesLeft(n => n - 1);
+    } catch {
+      toast.error("Couldn't get a lifeline — try again.");
+    } finally {
+      setLoadingLifeline(false);
+    }
+  }, [lifelinesLeft, loadingLifeline, voiceTranscript, getBusinessContextString]);
+
   const startVoiceCall = useCallback(async () => {
     if (!selectedScenario || !user) return;
-    
+    setLifelinesLeft(3);
+    setLifelineTip(null);
+    setCallStage(null);
+    setObjectivesMet([]);
+    setHungUpReason(null);
+
     // Request mic permission
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -556,6 +656,14 @@ export default function PracticeCall() {
     }
 
     setVoiceSessionId(session.id);
+
+    // Realistic voice first; the old browser voice is the fallback.
+    if (await startRealisticVoice(selectedScenario, session.id)) {
+      setCallState("voice_connected");
+      callTimerRef.current = setInterval(() => setCallDuration(prev => prev + 1), 1000);
+      return;
+    }
+    toast.info("Realistic voice unavailable — using the basic voice.");
 
     // Simulate ringing for 2s then connect
     setTimeout(async () => {
@@ -601,10 +709,12 @@ export default function PracticeCall() {
         setCallState("scenario_detail");
       }
     }, 2000);
-  }, [selectedScenario, user, speakText, voiceConversationLoop, getBusinessContextString]);
+  }, [selectedScenario, user, speakText, voiceConversationLoop, getBusinessContextString, startRealisticVoice]);
 
   const endVoiceCall = useCallback(() => {
     // Stop everything
+    liveVoiceRef.current?.stop();
+    liveVoiceRef.current = null;
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch {}
     }
@@ -614,9 +724,10 @@ export default function PracticeCall() {
     setIsSpeaking(false);
     setCallState("voice_ended");
 
-    // Trigger analysis
-    if (voiceTranscript.length > 0 && voiceSessionId) {
-      analyzeVoiceCall(voiceTranscript, voiceSessionId);
+    // Trigger analysis (ref: the live engine may have just flushed the last turn)
+    const turns = voiceTranscriptRef.current.length ? voiceTranscriptRef.current : voiceTranscript;
+    if (turns.length > 0 && voiceSessionId) {
+      analyzeVoiceCall(turns, voiceSessionId);
     }
   }, [voiceTranscript, voiceSessionId]);
 
@@ -1746,7 +1857,17 @@ export default function PracticeCall() {
                       </span>
                     )}
                   </div>
-                  <div className="pt-4">
+                  {lifelineTip && (
+                    <div className="rounded-xl bg-foreground text-background text-left text-xs p-3 w-full">
+                      <p className="font-semibold mb-1">💡 Say this:</p>
+                      <p>"{lifelineTip}"</p>
+                      <button className="mt-2 underline opacity-70" onClick={() => setLifelineTip(null)}>Got it</button>
+                    </div>
+                  )}
+                  <div className="pt-2 flex items-center gap-4">
+                    <Button variant="outline" className="h-12 rounded-full px-4 text-xs" disabled={lifelinesLeft <= 0 || loadingLifeline} onClick={takeLifeline}>
+                      {loadingLifeline ? <Loader2 className="h-4 w-4 animate-spin" /> : <>💡 {lifelinesLeft} left</>}
+                    </Button>
                     <Button size="lg" variant="destructive" className="h-16 w-16 rounded-full" onClick={endVoiceCall}>
                       <PhoneOff className="h-7 w-7" />
                     </Button>
@@ -1761,6 +1882,39 @@ export default function PracticeCall() {
 
           {/* Live Transcript */}
           <div className="lg:col-span-3">
+            {/* Live coaching: where the call is + objectives ticked off as you hit them */}
+            <Card className="mb-4">
+              <CardContent className="py-4 space-y-3">
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground mb-2">CALL STAGE</p>
+                  <div className="grid grid-cols-4 gap-1">
+                    {["rapport", "discovery", "objection", "close"].map((s, i, all) => {
+                      const reached = callStage ? i <= all.indexOf(callStage) : i === 0;
+                      return (
+                        <div key={s} className="text-center">
+                          <div className={`h-1.5 rounded-full ${reached ? "bg-primary" : "bg-muted"}`} />
+                          <p className={`text-[11px] mt-1 capitalize ${callStage === s || (!callStage && i === 0) ? "font-semibold" : "text-muted-foreground"}`}>{s}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                {selectedScenario.objectives?.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground mb-1">OBJECTIVES</p>
+                    <ul className="space-y-1">
+                      {selectedScenario.objectives.map((o, i) => (
+                        <li key={i} className={`text-sm flex items-center gap-2 ${objectivesMet.includes(i) ? "text-emerald-600" : "text-muted-foreground"}`}>
+                          {objectivesMet.includes(i) ? <CheckCircle2 className="h-4 w-4" /> : <span className="h-4 w-4 rounded-full border inline-block" />}
+                          {o}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">Lifelines used: {3 - lifelinesLeft} of 3</p>
+              </CardContent>
+            </Card>
             <Card>
               <CardContent className="py-4">
                 <h3 className="font-bold text-sm mb-3 flex items-center gap-2">
@@ -1831,6 +1985,13 @@ export default function PracticeCall() {
         <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
           🎯 {selectedScenario?.name} — Results
         </h1>
+
+        {(hungUpReason || lifelinesLeft < 3) && (
+          <div className="mb-6 rounded-lg border p-3 text-sm space-y-1">
+            {hungUpReason && <p>📵 <b>{selectedScenario?.prospectName} hung up:</b> {hungUpReason}</p>}
+            <p className="text-muted-foreground">💡 Lifelines used: {3 - lifelinesLeft} of 3</p>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 mb-8">
           {/* Phone mockup */}
