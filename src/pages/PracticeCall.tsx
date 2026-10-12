@@ -307,6 +307,7 @@ export default function PracticeCall() {
   const [talkTime, setTalkTime] = useState<TalkTime | null>(null);
   // Realistic voice practice (Gemini Live) + in-call coaching
   const liveVoiceRef = useRef<{ stop: () => void } | null>(null);
+  const voiceStartingRef = useRef(false);
   const voiceTranscriptRef = useRef<Array<{ role: string; text: string; timestamp: string }>>([]);
   const [lifelinesLeft, setLifelinesLeft] = useState(3);
   const [lifelineTip, setLifelineTip] = useState<string | null>(null);
@@ -615,6 +616,11 @@ export default function PracticeCall() {
 
   const startVoiceCall = useCallback(async () => {
     if (!selectedScenario || !user) return;
+    // One call at a time: a double-tap on the green button started two calls
+    // (two Jordans talking over each other, every line twice) — 2026-10-12.
+    if (voiceStartingRef.current || liveVoiceRef.current) return;
+    voiceStartingRef.current = true;
+    setTimeout(() => { voiceStartingRef.current = false; }, 4000);
     setLifelinesLeft(3);
     setLifelineTip(null);
     setCallStage(null);

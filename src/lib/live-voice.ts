@@ -85,7 +85,14 @@ export async function startLiveVoice(opts: LiveVoiceOptions): Promise<{ stop: ()
   let hangUpReason: string | null = null;
 
   const flush = (role: "user" | "assistant") => {
-    const text = (role === "user" ? userText : modelText).replace(/\s+/g, " ").trim();
+    let text = (role === "user" ? userText : modelText).replace(/\s+/g, " ").trim();
+    // The model sometimes *says* the hang-up command instead of calling the tool
+    // ("We're done here. <context><action>end_call</action><reason>…</reason>").
+    if (role === "assistant" && /end_call/.test(text)) {
+      hangUpReason = hangUpReason ?? (text.match(/<reason>([\s\S]*?)<\/reason>/)?.[1]?.trim() || "The prospect hung up.");
+      replyGenerated = true;
+    }
+    if (role === "assistant") text = text.replace(/<[a-z_]+>[\s\S]*$/i, "").replace(/\bend_call\b.*$/i, "").trim();
     if (role === "user") userText = ""; else modelText = "";
     if (text) opts.onTurn({ role, text, timestamp: new Date().toISOString() });
   };
@@ -180,7 +187,7 @@ export async function startLiveVoice(opts: LiveVoiceOptions): Promise<{ stop: ()
       }
       for (const part of sc.modelTurn?.parts || []) if (part.inlineData?.data) playPcm(part.inlineData.data);
       if (sc.generationComplete || sc.turnComplete) { replyGenerated = true; pump(); finishReplyIfDone(); }
-      if (sc.turnComplete) flush("assistant");
+      if (sc.turnComplete) { flush("assistant"); finishReplyIfDone(); } // flush may detect a spoken hang-up
     }
     for (const call of msg.toolCall?.functionCalls || []) {
       if (call.name === "end_call") {

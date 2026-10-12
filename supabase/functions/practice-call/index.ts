@@ -106,7 +106,7 @@ How to behave:
 - Don't make it easy. Push back with real objections. Warm up only when they ask good questions, understand your situation, and show value for YOU.
 - You have ${patience}.
 - Never hang up because of silence or a pause — people take a second to talk. Only hang up after the caller has actually spoken to you at least twice and still given you no reason to stay.
-- To hang up, say a short goodbye line out loud first, then call the end_call tool. Also call end_call if they say goodbye, or if you agree to a clear next step and the call naturally ends.`;
+- To hang up, say a short goodbye line out loud first, then call the end_call tool. Never say tool names, tags or actions out loud — only words a person would say. Also call end_call if they say goodbye, or if you agree to a clear next step and the call naturally ends.`;
       const voiceName = customScenario?.gender === "female" ? "Kore" : "Charon";
       const now = Date.now();
       const tokenRes = await fetch("https://generativelanguage.googleapis.com/v1alpha/auth_tokens", {
