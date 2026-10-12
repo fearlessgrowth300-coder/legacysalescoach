@@ -25,7 +25,8 @@ serve(async (req) => {
     // A few seconds of compressed audio is ~50-200 KB; refuse anything big.
     if (bytes.byteLength > 5 * 1024 * 1024) return json({ error: "Audio chunk too large" }, 413);
     const mime = req.headers.get("content-type") || "audio/webm";
-    const text = await transcribeAudioBytes(bytes, mime, mime.includes("ogg") ? "chunk.ogg" : "chunk.webm");
+    // LOCAL_WHISPER_LIVE_URL = fast base.en server (~1s) kept just for live calls; falls back to the main one.
+    const text = await transcribeAudioBytes(bytes, mime, mime.includes("ogg") ? "chunk.ogg" : "chunk.webm", 20_000, Deno.env.get("LOCAL_WHISPER_LIVE_URL") || undefined);
     // Whisper writes these for silence/noise; they are not speech.
     return json({ text: /^\s*[\[(].*[\])]\s*$/.test(text) ? "" : text });
   } catch (error) {

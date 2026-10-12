@@ -54,8 +54,8 @@ export async function transcribeVideoUrl(videoUrl: string): Promise<string> {
 }
 
 /** Send audio/video bytes to the Whisper server (it converts any format with ffmpeg); "" when unavailable. */
-export async function transcribeAudioBytes(bytes: ArrayBuffer, mime: string, filename: string, timeoutMs = 30_000): Promise<string> {
-  const endpoint = (globalThis as any).Deno?.env?.get("LOCAL_WHISPER_URL");
+export async function transcribeAudioBytes(bytes: ArrayBuffer, mime: string, filename: string, timeoutMs = 30_000, endpointOverride?: string): Promise<string> {
+  const endpoint = endpointOverride || (globalThis as any).Deno?.env?.get("LOCAL_WHISPER_URL");
   const token = (globalThis as any).Deno?.env?.get("LOCAL_EMBED_TOKEN") || "";
   if (!endpoint) return "";
   const form = new FormData();

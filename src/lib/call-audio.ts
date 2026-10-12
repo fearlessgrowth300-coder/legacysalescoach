@@ -10,8 +10,11 @@ export type TalkTime = { youMs: number; themMs: number };
 // Loudness (RMS) above this counts as talking. Calibration knob: raise it if
 // background noise counts as talking, lower it if quiet speech is missed.
 const SPEAKING_RMS = 0.02;
-const TICK_MS = 200;
-const CHUNK_MS = 6000;
+const TICK_MS = 100;
+// Send the prospect's words as soon as they pause (not on a fixed timer):
+// a pause this long ends the chunk; a chunk never runs longer than MAX_CHUNK_MS.
+const PAUSE_MS = 700;
+const MAX_CHUNK_MS = 8000;
 
 function levelMeter(ctx: AudioContext, stream: MediaStream): () => number {
   const analyser = ctx.createAnalyser();
@@ -57,37 +60,55 @@ export function startTwoSidedCall(opts: {
   const callAudioOnly = new MediaStream(opts.call.getAudioTracks());
   const talk: TalkTime = { youMs: 0, themMs: 0 };
   let prospectSpokeInChunk = false;
+  let silentMs = 0;
+  let chunkMs = 0;
   let stopped = false;
-
-  const tick = setInterval(() => {
-    const you = micLevel();
-    const them = callLevel();
-    // Both "talking" usually means the prospect leaking into your mic (speakers): louder side wins.
-    if (them > SPEAKING_RMS && them >= you) { talk.themMs += TICK_MS; prospectSpokeInChunk = true; }
-    else if (you > SPEAKING_RMS) talk.youMs += TICK_MS;
-    opts.onTalk({ ...talk });
-  }, TICK_MS);
+  let recorder: { rec: MediaRecorder; hadSpeech: boolean } | null = null;
 
   // A fresh recorder per chunk so every chunk is a complete, decodable file.
   const recordChunk = () => {
     if (stopped) return;
-    const recorder = new MediaRecorder(callAudioOnly);
+    const rec = new MediaRecorder(callAudioOnly);
+    const chunk = { rec, hadSpeech: false };
     const parts: Blob[] = [];
     const startedAt = new Date();
-    prospectSpokeInChunk = false;
-    recorder.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
-    recorder.onstop = () => {
-      if (prospectSpokeInChunk && parts.length) opts.onProspectAudio(new Blob(parts, { type: recorder.mimeType || "audio/webm" }), startedAt);
-      recordChunk();
+    rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
+    rec.onstop = () => {
+      if (chunk.hadSpeech && parts.length) opts.onProspectAudio(new Blob(parts, { type: rec.mimeType || "audio/webm" }), startedAt);
     };
-    recorder.start();
-    setTimeout(() => recorder.state !== "inactive" && recorder.stop(), CHUNK_MS);
+    prospectSpokeInChunk = false;
+    silentMs = 0;
+    chunkMs = 0;
+    rec.start();
+    recorder = chunk;
   };
+  const cutChunk = () => {
+    const done = recorder;
+    if (done) done.hadSpeech = prospectSpokeInChunk;
+    recordChunk(); // start the next one first so no words are lost
+    if (done && done.rec.state !== "inactive") done.rec.stop();
+  };
+
+  const tick = setInterval(() => {
+    const you = micLevel();
+    const them = callLevel();
+    chunkMs += TICK_MS;
+    // Both "talking" usually means the prospect leaking into your mic (speakers): louder side wins.
+    if (them > SPEAKING_RMS && them >= you) { talk.themMs += TICK_MS; prospectSpokeInChunk = true; silentMs = 0; }
+    else {
+      silentMs += TICK_MS;
+      if (you > SPEAKING_RMS) talk.youMs += TICK_MS;
+    }
+    opts.onTalk({ ...talk });
+    if (prospectSpokeInChunk && (silentMs >= PAUSE_MS || chunkMs >= MAX_CHUNK_MS)) cutChunk();
+    else if (!prospectSpokeInChunk && chunkMs >= MAX_CHUNK_MS) cutChunk(); // drop long silence
+  }, TICK_MS);
   recordChunk();
 
   return () => {
     stopped = true;
     clearInterval(tick);
+    if (recorder) { recorder.hadSpeech = prospectSpokeInChunk; if (recorder.rec.state !== "inactive") recorder.rec.stop(); }
     ctx.close().catch(() => {});
     opts.call.getTracks().forEach((t) => t.stop());
     opts.mic.getTracks().forEach((t) => t.stop());
