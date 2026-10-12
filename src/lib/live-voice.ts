@@ -20,12 +20,16 @@ export type LiveVoiceOptions = {
 // AudioWorklet: mic float32 at the device rate -> 16 kHz PCM16, posted in ~100 ms blocks.
 const MIC_WORKLET = `
 class Pcm16 extends AudioWorkletProcessor {
-  constructor() { super(); this.buf = []; this.ratio = sampleRate / 16000; this.pos = 0; }
+  constructor() { super(); this.buf = []; this.ratio = sampleRate / 16000; this.acc = 0; this.n = 0; this.need = this.ratio; }
   process(inputs) {
     const ch = inputs[0][0];
     if (ch) {
-      for (; this.pos < ch.length; this.pos += this.ratio) this.buf.push(ch[Math.floor(this.pos)]);
-      this.pos -= ch.length;
+      // Average each window of input samples (a simple low-pass) instead of
+      // dropping samples, which aliased the voice and hurt speech recognition.
+      for (let i = 0; i < ch.length; i++) {
+        this.acc += ch[i]; this.n++;
+        if (this.n >= this.need) { this.buf.push(this.acc / this.n); this.acc = 0; this.need += this.ratio - this.n; this.n = 0; }
+      }
       if (this.buf.length >= 1600) {
         const out = new Int16Array(this.buf.length);
         for (let i = 0; i < this.buf.length; i++) out[i] = Math.max(-1, Math.min(1, this.buf[i])) * 0x7fff;
@@ -46,8 +50,9 @@ registerProcessor("pcm16", Pcm16);`;
 // lower it if your interruptions aren't heard.
 const BARGE_IN_RMS = 0.12;
 const ECHO_TAIL_S = 0.35;
-// Small buffer before a reply starts so words don't stutter on a slow network.
-const JITTER_S = 0.2;
+// Seconds of voice to collect before playing (and when refilling mid-reply).
+// Calibration knob: raise if it still stutters, lower for snappier replies.
+const START_BUFFER_S = 1.2;
 
 const rms = (pcm: Int16Array) => {
   let sum = 0;
@@ -85,39 +90,70 @@ export async function startLiveVoice(opts: LiveVoiceOptions): Promise<{ stop: ()
     if (text) opts.onTurn({ role, text, timestamp: new Date().toISOString() });
   };
 
+  // Playback with a jitter buffer. Google sometimes streams the voice up to
+  // ~2.5 s behind real time (measured 2026-10-12); playing chunks as they come
+  // starved the player between words ("one word, cut, next word"). So: hold
+  // audio until START_BUFFER_S is queued (or the reply is fully generated),
+  // and if the queue runs dry mid-reply, pause and refill instead of stuttering.
+  const pending: AudioBuffer[] = [];
+  let pendingS = 0;
+  let started = false; // currently playing (vs. buffering) this reply
+  let replyGenerated = false; // server finished sending this reply
+  let prospectTurn = false; // from first audio of a reply until it has finished playing
+
   const stopPlayback = () => {
     playing.forEach((s) => { try { s.stop(); } catch { /* already stopped */ } });
     playing.clear();
+    pending.length = 0;
+    pendingS = 0;
+    started = false;
+    prospectTurn = false;
     playAt = 0;
     opts.onSpeaking?.(false);
   };
 
+  const finishReplyIfDone = () => {
+    if (playing.size > 0 || pending.length > 0) return;
+    if (!replyGenerated) { started = false; return; } // starved mid-reply: refill before continuing
+    started = false;
+    prospectTurn = false;
+    opts.onSpeaking?.(false);
+    // Hang up only after the goodbye has finished playing.
+    if (hangUpReason !== null) { const r = hangUpReason; hangUpReason = null; opts.onHangUp(r); }
+  };
+
+  const pump = () => {
+    if (!started && (pendingS >= START_BUFFER_S || (replyGenerated && pending.length > 0))) started = true;
+    if (!started) return;
+    while (pending.length) {
+      const buf = pending.shift()!;
+      pendingS -= buf.duration;
+      const src = outCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(outCtx.destination);
+      playAt = Math.max(playAt, outCtx.currentTime + 0.05);
+      src.start(playAt);
+      playAt += buf.duration;
+      playing.add(src);
+      src.onended = () => { playing.delete(src); finishReplyIfDone(); };
+    }
+    opts.onSpeaking?.(true);
+  };
+
   const playPcm = (b64: string) => {
+    if (!prospectTurn) { prospectTurn = true; replyGenerated = false; }
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     const pcm = new Int16Array(bytes.buffer, 0, Math.floor(bytes.length / 2));
     const buf = outCtx.createBuffer(1, pcm.length, 24000);
     const ch = buf.getChannelData(0);
     for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 0x8000;
-    const src = outCtx.createBufferSource();
-    src.buffer = buf;
-    src.connect(outCtx.destination);
-    playAt = playing.size === 0 ? Math.max(playAt, outCtx.currentTime + JITTER_S) : Math.max(playAt, outCtx.currentTime);
-    src.start(playAt);
-    playAt += buf.duration;
-    playing.add(src);
-    opts.onSpeaking?.(true);
-    src.onended = () => {
-      playing.delete(src);
-      if (playing.size === 0) {
-        opts.onSpeaking?.(false);
-        // Hang up only after the goodbye has finished playing.
-        if (hangUpReason !== null) { const r = hangUpReason; hangUpReason = null; opts.onHangUp(r); }
-      }
-    };
+    pending.push(buf);
+    pendingS += buf.duration;
+    pump();
   };
 
   worklet.port.onmessage = (e) => {
-    const prospectTalking = playing.size > 0 || outCtx.currentTime < playAt + ECHO_TAIL_S;
+    const prospectTalking = prospectTurn || outCtx.currentTime < playAt + ECHO_TAIL_S;
     if (prospectTalking && rms(new Int16Array(e.data)) < BARGE_IN_RMS) return; // echo, not you
     if (ready && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ realtimeInput: { audio: { data: toBase64(e.data), mimeType: "audio/pcm;rate=16000" } } }));
@@ -143,6 +179,7 @@ export async function startLiveVoice(opts: LiveVoiceOptions): Promise<{ stop: ()
         modelText += sc.outputTranscription.text;
       }
       for (const part of sc.modelTurn?.parts || []) if (part.inlineData?.data) playPcm(part.inlineData.data);
+      if (sc.generationComplete || sc.turnComplete) { replyGenerated = true; pump(); finishReplyIfDone(); }
       if (sc.turnComplete) flush("assistant");
     }
     for (const call of msg.toolCall?.functionCalls || []) {
@@ -151,7 +188,9 @@ export async function startLiveVoice(opts: LiveVoiceOptions): Promise<{ stop: ()
         flush("assistant");
         ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: call.id, name: call.name, response: { ok: true } }] } }));
         hangUpReason = String(call.args?.reason || "The prospect hung up.");
-        if (playing.size === 0) { const r = hangUpReason; hangUpReason = null; opts.onHangUp(r); }
+        replyGenerated = true;
+        pump();
+        if (playing.size === 0 && pending.length === 0) { const r = hangUpReason; hangUpReason = null; opts.onHangUp(r); }
       }
     }
     if (msg.error) opts.onError?.(msg.error.message || "Live voice error");
