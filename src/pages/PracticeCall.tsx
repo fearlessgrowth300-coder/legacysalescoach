@@ -301,6 +301,8 @@ export default function PracticeCall() {
 
   // Live call assist state
   const [liveTranscript, setLiveTranscript] = useState<Array<{ speaker: string; text: string; timestamp: string }>>([]);
+  const [followupEmail, setFollowupEmail] = useState<{ subject: string; body: string } | null>(null);
+  const [loadingFollowup, setLoadingFollowup] = useState(false);
   const [liveCoaching, setLiveCoaching] = useState<LiveCoaching | null>(null);
   const [liveListening, setLiveListening] = useState(false);
   const [loadingCoaching, setLoadingCoaching] = useState(false);
@@ -654,6 +656,7 @@ export default function PracticeCall() {
     setCallState("live_assist");
     setLiveTranscript([]);
     setLiveCoaching(null);
+    setFollowupEmail(null);
     setLiveListening(true);
 
     // Start continuous recognition
@@ -704,31 +707,47 @@ export default function PracticeCall() {
     setCallState("idle");
   }, []);
 
-  // Fetch coaching when transcript updates
+  // mode: one-tap button ("coach" | "question" | "objection" | "close"), or none for auto coaching.
+  const requestCoaching = useCallback(async (mode?: string) => {
+    if (liveTranscript.length === 0) { if (mode) toast.info("Nothing heard yet — start talking first."); return; }
+    setLoadingCoaching(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("live-call-assist", {
+        body: { transcript: liveTranscript.slice(-10), businessContext: getBusinessContextString(), mode },
+      });
+      if (error || data?.error) throw new Error(data?.error || error?.message);
+      setLiveCoaching(data);
+    } catch (e) {
+      console.error("Coaching fetch error:", e);
+      if (mode) toast.error("Couldn't get coaching — try again.");
+    } finally {
+      setLoadingCoaching(false);
+    }
+  }, [liveTranscript, getBusinessContextString]);
+
+  const writeFollowupEmail = useCallback(async () => {
+    if (liveTranscript.length === 0) { toast.info("No call transcript yet."); return; }
+    setLoadingFollowup(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("live-call-assist", {
+        body: { transcript: liveTranscript, businessContext: getBusinessContextString(), mode: "followup" },
+      });
+      if (error || data?.error || !data?.body) throw new Error(data?.error || error?.message || "No email returned");
+      setFollowupEmail({ subject: data.subject || "Following up", body: data.body });
+    } catch (e: any) {
+      toast.error(e.message || "Couldn't write the email — try again.");
+    } finally {
+      setLoadingFollowup(false);
+    }
+  }, [liveTranscript, getBusinessContextString]);
+
+  // Auto coaching: every 3 new transcript lines.
   useEffect(() => {
     if (callState !== "live_assist" || liveTranscript.length === 0) return;
-    // Debounce: only fetch every 3 entries or every 10 seconds
     if (liveTranscript.length % 3 !== 0) return;
-
-    const fetchCoaching = async () => {
-      setLoadingCoaching(true);
-      try {
-        const { data, error } = await supabase.functions.invoke("live-call-assist", {
-          body: {
-            transcript: liveTranscript.slice(-10),
-            businessContext: getBusinessContextString(),
-          },
-        });
-        if (error) throw error;
-        setLiveCoaching(data);
-      } catch (e) {
-        console.error("Coaching fetch error:", e);
-      } finally {
-        setLoadingCoaching(false);
-      }
-    };
-    fetchCoaching();
-  }, [liveTranscript, callState, getBusinessContextString]);
+    requestCoaching();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveTranscript.length, callState]);
 
   // ============================================
   // TEXT PRACTICE LOGIC (kept from original)
@@ -965,6 +984,19 @@ export default function PracticeCall() {
                 AI Coaching
                 {loadingCoaching && <Loader2 className="h-3 w-3 animate-spin" />}
               </h3>
+              {/* One tap: ask for exactly the help you need right now */}
+              <div className="grid grid-cols-4 gap-2 mb-3">
+                {[
+                  { mode: "coach", label: "💬 Coach" },
+                  { mode: "question", label: "🔍 Question" },
+                  { mode: "objection", label: "🛡️ Objection" },
+                  { mode: "close", label: "🏁 Close" },
+                ].map((b) => (
+                  <Button key={b.mode} size="sm" variant="outline" className="text-xs px-1" disabled={loadingCoaching} onClick={() => requestCoaching(b.mode)}>
+                    {b.label}
+                  </Button>
+                ))}
+              </div>
               {liveCoaching ? (
                 <div className="space-y-3">
                   <div className="bg-muted/50 rounded-lg p-3">
@@ -1005,6 +1037,29 @@ export default function PracticeCall() {
                   <Sparkles className="h-8 w-8 mx-auto text-muted-foreground/50 mb-2" />
                   <p className="text-sm text-muted-foreground">Coaching suggestions will appear as the conversation progresses.</p>
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Follow-up email from the call transcript */}
+          <Card>
+            <CardContent className="py-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-bold text-sm">✉️ Follow-up email</h3>
+                <Button size="sm" variant="outline" disabled={loadingFollowup || liveTranscript.length === 0} onClick={writeFollowupEmail}>
+                  {loadingFollowup ? <Loader2 className="h-3 w-3 animate-spin" /> : followupEmail ? "Rewrite" : "Write it"}
+                </Button>
+              </div>
+              {followupEmail ? (
+                <div className="space-y-2 text-sm">
+                  <p><span className="text-muted-foreground">Subject:</span> {followupEmail.subject}</p>
+                  <p className="whitespace-pre-wrap bg-muted/50 rounded p-2">{followupEmail.body}</p>
+                  <Button size="sm" onClick={() => { navigator.clipboard.writeText(`Subject: ${followupEmail.subject}\n\n${followupEmail.body}`); toast.success("Email copied"); }}>
+                    Copy email
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">When the call ends, tap "Write it" before you press End — the AI writes the follow-up from what was said.</p>
               )}
             </CardContent>
           </Card>

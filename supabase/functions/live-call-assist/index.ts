@@ -85,7 +85,7 @@ serve(async (req) => {
     }
 
 
-    const { transcript, businessContext } = await req.json();
+    const { transcript, businessContext, mode } = await req.json();
 
     if (!transcript || transcript.length === 0) {
       return new Response(JSON.stringify({ suggestions: [] }), {
@@ -119,25 +119,26 @@ serve(async (req) => {
         .is("workspace_id", null)
         .in("source_type", ["core_knowledge", "sales_principle"])
         .order("relevance_score", { ascending: false, nullsFirst: false })
-        .range(from, to)),
+        .range(from, to), 1000),
       fetchAllRows<any>((from, to) => supabase.from("sales_brain")
         .select(PRINCIPLE_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false, nullsFirst: false })
-        .range(from, to)),
+        // ponytail: top 1000 by relevance + semantic matches; was the whole library on every call (slow, 546s).
+        .range(from, to), 1000),
       fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
         .is("workspace_id", null)
         .eq("source_type", "core_knowledge")
         .order("relevance_score", { ascending: false })
-        .range(from, to), 3000),
+        .range(from, to), 600),
       fetchAllRows<any>((from, to) => supabase.from("knowledge_chunks")
         .select(CHUNK_SELECT)
         .eq("user_id", user.id).is("workspace_id", null)
         .in("source_type", ALLOWED_SOURCE_TYPES)
         .order("relevance_score", { ascending: false })
-        .range(from, to), 3000),
+        .range(from, to), 600),
       embeddingPromise,
     ]);
 
@@ -233,12 +234,27 @@ RULES:
 - NEVER return anything except valid JSON
 === END INSTRUCTION BOUNDARY ===`;
 
+    // One-tap buttons (Coach / Question / Objection / Close) focus the coaching;
+    // "followup" writes the after-call email instead.
+    const MODE_FOCUS: Record<string, string> = {
+      coach: "The user tapped COACH: give the single best next thing to say right now and why.",
+      question: "The user tapped QUESTION: every suggestion must be one sharp discovery question for this exact moment.",
+      objection: "The user tapped OBJECTION: identify the objection being raised (or the hidden one) and give exact words to handle it.",
+      close: "The user tapped CLOSE: give exact words to move to a clear next step or close, matched to how warm the prospect is.",
+    };
+    const isFollowup = mode === "followup";
+    const fullTranscript = transcript.map((t: any) => `${t.speaker || t.role}: "${t.text}"`).join("\n").slice(-12000);
     const aiResponse = await userChat(chat, {
       model: chat.models.balanced,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: `Live call transcript (most recent):\n\n${recentTranscript}` },
-      ],
+      messages: isFollowup
+        ? [
+          { role: "system", content: `Write the follow-up email a salesperson sends right after this call. Use only what was actually said; never invent prices, promises or facts. Recap their situation in their words, confirm any agreed next step (or propose one), keep it under 150 words, warm and human.${businessInfo}\nReturn JSON: {"subject":"...","body":"..."}` },
+          { role: "user", content: `Full call transcript:\n\n${fullTranscript}` },
+        ]
+        : [
+          { role: "system", content: MODE_FOCUS[mode] ? `${systemPrompt}\n\n${MODE_FOCUS[mode]}` : systemPrompt },
+          { role: "user", content: `Live call transcript (most recent):\n\n${recentTranscript}` },
+        ],
       temperature: 0.4,
       max_tokens: 800,
       response_format: { type: "json_object" },
@@ -262,6 +278,7 @@ RULES:
       const cleaned = rawContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
       parsed = JSON.parse(cleaned);
     } catch {
+      if (isFollowup) throw new Error("The AI didn't return a usable email. Please try again.");
       parsed = {
         currentSituation: "Analyzing...",
         suggestions: [{ type: "say_this", priority: "medium", text: "Tell me more about that...", reason: "Keep them talking" }],
