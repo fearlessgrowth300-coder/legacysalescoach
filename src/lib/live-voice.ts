@@ -38,6 +38,23 @@ class Pcm16 extends AudioWorkletProcessor {
 }
 registerProcessor("pcm16", Pcm16);`;
 
+// Echo guard (2026-10-12: on speakers the prospect's own voice reached the mic,
+// Google took it as you talking and cut him off every few words; it even
+// transcribed his voice as "your" Spanish line). While he is talking, the mic is
+// only sent if you are clearly louder than the echo (a real interruption).
+// Calibration knobs: raise BARGE_IN_RMS if he still gets cut off on speakers,
+// lower it if your interruptions aren't heard.
+const BARGE_IN_RMS = 0.12;
+const ECHO_TAIL_S = 0.35;
+// Small buffer before a reply starts so words don't stutter on a slow network.
+const JITTER_S = 0.2;
+
+const rms = (pcm: Int16Array) => {
+  let sum = 0;
+  for (let i = 0; i < pcm.length; i++) sum += (pcm[i] / 0x8000) ** 2;
+  return Math.sqrt(sum / Math.max(1, pcm.length));
+};
+
 const toBase64 = (buf: ArrayBuffer) => {
   let s = "";
   const bytes = new Uint8Array(buf);
@@ -84,7 +101,7 @@ export async function startLiveVoice(opts: LiveVoiceOptions): Promise<{ stop: ()
     const src = outCtx.createBufferSource();
     src.buffer = buf;
     src.connect(outCtx.destination);
-    playAt = Math.max(playAt, outCtx.currentTime);
+    playAt = playing.size === 0 ? Math.max(playAt, outCtx.currentTime + JITTER_S) : Math.max(playAt, outCtx.currentTime);
     src.start(playAt);
     playAt += buf.duration;
     playing.add(src);
@@ -100,6 +117,8 @@ export async function startLiveVoice(opts: LiveVoiceOptions): Promise<{ stop: ()
   };
 
   worklet.port.onmessage = (e) => {
+    const prospectTalking = playing.size > 0 || outCtx.currentTime < playAt + ECHO_TAIL_S;
+    if (prospectTalking && rms(new Int16Array(e.data)) < BARGE_IN_RMS) return; // echo, not you
     if (ready && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ realtimeInput: { audio: { data: toBase64(e.data), mimeType: "audio/pcm;rate=16000" } } }));
     }

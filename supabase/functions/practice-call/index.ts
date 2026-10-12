@@ -129,7 +129,9 @@ How to behave:
         setup: {
           // 3.8-live: tested to hang up after weak answers (3.1-flash-live never did).
           model: "models/gemini-3.8-live",
-          generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } } },
+          generationConfig: { responseModalities: ["AUDIO"], speechConfig: { languageCode: "en-US", voiceConfig: { prebuiltVoiceConfig: { voiceName } } } },
+          // Less jumpy turn-taking: noise/echo shouldn't count as the caller starting to talk.
+          realtimeInputConfig: { automaticActivityDetection: { startOfSpeechSensitivity: "START_SENSITIVITY_LOW", endOfSpeechSensitivity: "END_SENSITIVITY_LOW", silenceDurationMs: 600 } },
           systemInstruction: { parts: [{ text: systemInstruction }] },
           tools: [{ functionDeclarations: [{
             name: "end_call",
