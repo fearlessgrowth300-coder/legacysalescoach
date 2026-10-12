@@ -26,6 +26,14 @@ export async function searchPlaybook(supabase: any, userId: string, query: strin
       picked.push(p);
       if (picked.length >= limit) break;
     }
+    // Variety only when there's a choice: if the best matches all come from one
+    // book (e.g. "Way of the Wolf" for the Wolf scenario), fill up with them
+    // instead of returning just 2 lessons.
+    for (const id of ids) {
+      if (picked.length >= limit) break;
+      const p: any = byId.get(id);
+      if (p && !picked.includes(p)) picked.push(p);
+    }
     const text = picked.map((p, i) =>
       `${i + 1}. ${p.principle_name} (from "${p.source_name}", ${p.category}): ${(p.what_i_learned || "").slice(0, 240)}` +
       (p.exact_words_to_use ? ` | Exact words: ${String(p.exact_words_to_use).slice(0, 160)}` : "") +

@@ -83,6 +83,7 @@ export async function startLiveVoice(opts: LiveVoiceOptions): Promise<{ stop: ()
   let userText = "";
   let modelText = "";
   let hangUpReason: string | null = null;
+  let hungUp = false; // goodbye already transcribed; ignore anything after it
 
   const flush = (role: "user" | "assistant") => {
     let text = (role === "user" ? userText : modelText).replace(/\s+/g, " ").trim();
@@ -93,6 +94,9 @@ export async function startLiveVoice(opts: LiveVoiceOptions): Promise<{ stop: ()
       replyGenerated = true;
     }
     if (role === "assistant") text = text.replace(/<[a-z_]+>[\s\S]*$/i, "").replace(/\bend_call\b.*$/i, "").trim();
+    // After the prospect hangs up the model sometimes narrates ("The user has…"): drop it.
+    if (role === "assistant" && hungUp) return;
+    if (role === "assistant" && hangUpReason !== null) hungUp = true;
     if (role === "user") userText = ""; else modelText = "";
     if (text) opts.onTurn({ role, text, timestamp: new Date().toISOString() });
   };
@@ -193,6 +197,7 @@ export async function startLiveVoice(opts: LiveVoiceOptions): Promise<{ stop: ()
       if (call.name === "end_call") {
         flush("user");
         flush("assistant");
+        hungUp = true;
         ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: call.id, name: call.name, response: { ok: true } }] } }));
         hangUpReason = String(call.args?.reason || "The prospect hung up.");
         replyGenerated = true;
