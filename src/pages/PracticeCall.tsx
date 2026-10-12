@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { captureCallAudio, startTwoSidedCall, youTalkPercent, type TalkTime } from "@/lib/call-audio";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
 
 // ============================================
@@ -302,6 +303,8 @@ export default function PracticeCall() {
   // Live call assist state
   const [liveTranscript, setLiveTranscript] = useState<Array<{ speaker: string; text: string; timestamp: string }>>([]);
   const [followupEmail, setFollowupEmail] = useState<{ subject: string; body: string } | null>(null);
+  const [talkTime, setTalkTime] = useState<TalkTime | null>(null);
+  const twoSidedStopRef = useRef<(() => void) | null>(null);
   const [loadingFollowup, setLoadingFollowup] = useState(false);
   const [liveCoaching, setLiveCoaching] = useState<LiveCoaching | null>(null);
   const [liveListening, setLiveListening] = useState(false);
@@ -644,19 +647,50 @@ export default function PracticeCall() {
   // ============================================
   // LIVE CALL ASSISTANCE LOGIC
   // ============================================
-  const startLiveAssist = useCallback(async () => {
+  // Prospect side of a computer call: Whisper on the server (browser speech only hears the mic).
+  const transcribeProspect = useCallback(async (audio: Blob, startedAt: Date) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach(t => t.stop());
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/transcribe-audio`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session?.access_token}`, apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, "Content-Type": audio.type },
+        body: audio,
+      });
+      const text = (await res.json())?.text?.trim();
+      if (!text) return;
+      setLiveTranscript(prev => [...prev, { speaker: "Prospect", text, timestamp: startedAt.toISOString() }]
+        .sort((a, b) => a.timestamp.localeCompare(b.timestamp)));
+    } catch (e) {
+      console.error("Prospect transcription error:", e);
+    }
+  }, []);
+
+  // withCallAudio: share the Zoom/Meet/Teams tab or screen so "You" and "Prospect" are told apart.
+  const startLiveAssist = useCallback(async (withCallAudio = false) => {
+    let mic: MediaStream;
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
       toast.error("Microphone access is required for live call assistance.");
       return;
     }
+    let call: MediaStream | null = null;
+    if (withCallAudio) {
+      call = await captureCallAudio();
+      if (!call) toast.warning("No call audio shared — pick the call's tab/screen and tick \"Share audio\". Continuing with your mic only.", { duration: 8000 });
+    }
+    if (call) {
+      twoSidedStopRef.current = startTwoSidedCall({ mic, call, onTalk: setTalkTime, onProspectAudio: transcribeProspect });
+    } else {
+      mic.getTracks().forEach(t => t.stop());
+    }
+    const twoSided = Boolean(call);
 
     setCallState("live_assist");
     setLiveTranscript([]);
     setLiveCoaching(null);
     setFollowupEmail(null);
+    setTalkTime(twoSided ? { youMs: 0, themMs: 0 } : null);
     setLiveListening(true);
 
     // Start continuous recognition
@@ -677,7 +711,7 @@ export default function PracticeCall() {
       if (lastResult.isFinal) {
         const text = lastResult[0].transcript.trim();
         if (text) {
-          setLiveTranscript(prev => [...prev, { speaker: "Call", text, timestamp: new Date().toISOString() }]);
+          setLiveTranscript(prev => [...prev, { speaker: twoSided ? "You" : "Call", text, timestamp: new Date().toISOString() }]);
         }
       }
     };
@@ -696,13 +730,15 @@ export default function PracticeCall() {
     };
 
     recognition.start();
-  }, []);
+  }, [transcribeProspect]);
 
   const stopLiveAssist = useCallback(() => {
     if (liveRecognitionRef.current) {
       try { liveRecognitionRef.current.abort(); } catch {}
       liveRecognitionRef.current = null;
     }
+    twoSidedStopRef.current?.();
+    twoSidedStopRef.current = null;
     setLiveListening(false);
     setCallState("idle");
   }, []);
@@ -955,6 +991,21 @@ export default function PracticeCall() {
                   </span>
                 )}
               </h3>
+              {talkTime && (() => {
+                const you = youTalkPercent(talkTime);
+                return (
+                  <div className="mb-3">
+                    <div className="flex justify-between text-xs mb-1">
+                      <span>You {you ?? 0}%</span>
+                      <span className={you !== null && (you < 40 || you > 60) ? "text-red-500" : "text-emerald-600"}>Ideal 40–60%</span>
+                      <span>Prospect {you === null ? 0 : 100 - you}%</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-muted overflow-hidden">
+                      <div className="h-full bg-primary transition-all" style={{ width: `${you ?? 0}%` }} />
+                    </div>
+                  </div>
+                );
+              })()}
               <ScrollArea className="h-[400px]">
                 <div className="space-y-2">
                   {liveTranscript.length === 0 ? (
@@ -964,8 +1015,11 @@ export default function PracticeCall() {
                     </div>
                   ) : (
                     liveTranscript.map((entry, i) => (
-                      <div key={i} className="bg-muted/50 rounded-lg p-3">
-                        <p className="text-xs text-muted-foreground mb-1">{new Date(entry.timestamp).toLocaleTimeString()}</p>
+                      <div key={i} className={`rounded-lg p-3 ${entry.speaker === "You" ? "bg-primary/10 ml-6" : entry.speaker === "Prospect" ? "bg-muted/70 mr-6" : "bg-muted/50"}`}>
+                        <p className="text-xs text-muted-foreground mb-1">
+                          {entry.speaker !== "Call" && <b className="mr-2">{entry.speaker}</b>}
+                          {new Date(entry.timestamp).toLocaleTimeString()}
+                        </p>
                         <p className="text-sm">{entry.text}</p>
                       </div>
                     ))
@@ -1157,11 +1211,17 @@ export default function PracticeCall() {
                   <Badge variant="outline" className="text-xs">🛡️ Objection Handlers</Badge>
                   <Badge variant="outline" className="text-xs">📊 Stage Detection</Badge>
                 </div>
-                <Button size="lg" className="mt-4" onClick={startLiveAssist}>
-                  <Radio className="h-5 w-5 mr-2" />Start Live Assistance
-                </Button>
-                <p className="text-xs text-muted-foreground">
-                  Start this before or during your sales call. Your mic will listen and provide coaching in real-time.
+                <div className="flex flex-col sm:flex-row gap-3 justify-center mt-4">
+                  <Button size="lg" onClick={() => startLiveAssist(true)}>
+                    <Radio className="h-5 w-5 mr-2" />Computer call (Zoom / Meet / Teams)
+                  </Button>
+                  <Button size="lg" variant="outline" onClick={() => startLiveAssist(false)}>
+                    <Phone className="h-5 w-5 mr-2" />Phone on speaker
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                  <b>Computer call:</b> pick the call's tab or screen and tick <b>"Share audio"</b> — the app then knows what <b>you</b> say vs. what the <b>prospect</b> says and shows your talk-to-listen ratio live. Wear headphones so the prospect isn't picked up by your mic.
+                  <br /><b>Phone on speaker:</b> one mic hears both of you, so speakers aren't separated.
                 </p>
               </CardContent>
             </Card>

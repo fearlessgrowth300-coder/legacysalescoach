@@ -46,18 +46,26 @@ export async function transcribeVideoUrl(videoUrl: string): Promise<string> {
     const bytes = await video.arrayBuffer();
     // Reels/TikToks are a few MB; refuse anything huge rather than exhaust edge memory.
     if (bytes.byteLength > 80 * 1024 * 1024) { console.warn("[video-transcript] video too large", bytes.byteLength); return ""; }
-    const form = new FormData();
-    form.append("file", new Blob([bytes], { type: "video/mp4" }), "video.mp4");
-    form.append("response_format", "text");
-    const response = await fetch(endpoint, {
-      method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form, signal: AbortSignal.timeout(140_000),
-    });
-    if (!response.ok) { console.warn("[video-transcript] whisper failed", response.status); return ""; }
-    return (await response.text()).replace(/\s+/g, " ").trim();
+    return await transcribeAudioBytes(bytes, "video/mp4", "video.mp4", 140_000);
   } catch (error) {
     console.warn("[video-transcript] transcription unavailable", error instanceof Error ? error.message : error);
     return "";
   }
+}
+
+/** Send audio/video bytes to the Whisper server (it converts any format with ffmpeg); "" when unavailable. */
+export async function transcribeAudioBytes(bytes: ArrayBuffer, mime: string, filename: string, timeoutMs = 30_000): Promise<string> {
+  const endpoint = (globalThis as any).Deno?.env?.get("LOCAL_WHISPER_URL");
+  const token = (globalThis as any).Deno?.env?.get("LOCAL_EMBED_TOKEN") || "";
+  if (!endpoint) return "";
+  const form = new FormData();
+  form.append("file", new Blob([bytes], { type: mime }), filename);
+  form.append("response_format", "text");
+  const response = await fetch(endpoint, {
+    method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form, signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) { console.warn("[video-transcript] whisper failed", response.status); return ""; }
+  return (await response.text()).replace(/\s+/g, " ").trim();
 }
 
 export async function fetchSubtitleText(url: string | null): Promise<string> {
