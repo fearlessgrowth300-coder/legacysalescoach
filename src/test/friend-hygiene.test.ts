@@ -11,6 +11,7 @@ import {
   sentLineSet,
   sharesOwnDetail,
   keepOneQuestion,
+  deterministicFriendQualityIssues,
 } from "../../supabase/functions/_shared/friend-conversation-engine";
 
 // Lines and replies taken from the real Friend conversations reviewed on 2026-10-04.
@@ -125,6 +126,14 @@ describe("Friend conversation hygiene", () => {
     expect(friendReciprocityIssue([replies[0], withDetail], convo)).toBeNull();
     const out = promoteReciprocalVariant(replies.map((message, i) => ({ variant: ["primary", "alternative", "casual"][i], message })).slice(0, 2).concat({ variant: "casual", message: withDetail }), convo);
     expect(out[0].message).toBe(withDetail);
+  });
+
+  it("doesn't read 'stop worrying' as declining (2026-10-12 Katie: all replies went to the canned backup)", () => {
+    const convo = [{ direction: "inbound", content: "Oh honestly 100%!! I think once you stop worrying about what everyone else is doing, you actually start enjoying building your own business so much more! I've been making sales from my own digital products." }];
+    const reply = "Love that, and congrats on the sales! What's been your best-selling product so far?";
+    expect(deterministicFriendQualityIssues(reply, "intent", {}, convo).some((i) => i.startsWith("pushes commercial context"))).toBe(false);
+    const declined = [{ direction: "inbound", content: "Please stop messaging me, not interested." }];
+    expect(deterministicFriendQualityIssues("Our team can help your sales.", "intent", {}, declined).some((i) => i.startsWith("pushes commercial context"))).toBe(true);
   });
 
   it("keeps only the last question so a good reply isn't swapped for the canned backup (2026-10-09)", () => {

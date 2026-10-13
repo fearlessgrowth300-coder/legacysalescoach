@@ -916,7 +916,9 @@ export function deterministicFriendQualityIssues(
     .filter((turn) => turn.direction === "inbound" && Boolean(String(turn.content || "").trim()))
     .slice(-2)
     .map((turn) => String(turn.content || ""));
-  const prospectIsDisengaging = recentInbound.some((turn) => /\b(?:not interested|no thanks|don't contact|do not contact|leave me alone|stop|not buying)\b/i.test(turn))
+  // HARD_DECLINE, not a bare "stop": "once you stop worrying about…" (Katie,
+  // 2026-10-12) read as declining and sent every reply to the canned backup.
+  const prospectIsDisengaging = recentInbound.some((turn) => HARD_DECLINE.test(turn))
     || (recentInbound.length >= 2 && recentInbound.every((turn) => normalized(turn).split(" ").length <= 3));
   const prospectAskedQuestion = latestInbound.includes("?");
   if (prospectIsDisengaging && /\b(?:expert|mentor|offer|program|course|price|buy|link|team|sales)\b/i.test(message)) {
